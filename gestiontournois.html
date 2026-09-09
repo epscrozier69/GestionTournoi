@@ -1,0 +1,833 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EPS Gestion des tournois</title>
+<style>
+  :root{
+    --c1:#2563eb; --c2:#7c3aed; --c3:#db2777; --c4:#ea580c; --c5:#dc2626;
+    --c6:#0891b2; --c7:#4f46e5; --c8:#b45309; --c9:#e11d48; --c10:#0ea5e9;
+    --bg:#f1f5f9; --panel:#ffffff; --ink:#0f172a; --muted:#64748b; --line:#e2e8f0;
+    --ok:#16a34a; --warn:#d97706; --bad:#dc2626;
+    --radius:14px;
+    --shadow:0 4px 16px rgba(15,23,42,.08);
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:'Segoe UI',system-ui,-apple-system,Roboto,Arial,sans-serif;background:var(--bg);color:var(--ink);}
+  header{
+    background:linear-gradient(120deg,var(--c1),var(--c2) 60%,var(--c3));
+    color:#fff;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;
+    box-shadow:var(--shadow);position:sticky;top:0;z-index:50;
+  }
+  header h1{margin:0;font-size:1.3rem;font-weight:700;}
+  header .sub{font-size:.78rem;opacity:.9;}
+
+  nav.tabs{
+    display:flex;gap:6px;padding:10px 16px;background:#e9edf5;flex-wrap:wrap;position:sticky;top:62px;z-index:40;
+    box-shadow:inset 0 -1px 0 var(--line);
+  }
+  nav.tabs button{
+    border:none;background:#fff;color:var(--muted);padding:8px 16px;border-radius:999px;cursor:pointer;
+    font-weight:600;font-size:.85rem;box-shadow:0 1px 3px rgba(0,0,0,.06);transition:.15s;
+  }
+  nav.tabs button:hover{color:var(--ink);}
+  nav.tabs button.active{background:var(--c1);color:#fff;box-shadow:0 3px 10px rgba(37,99,235,.35);}
+
+  main{padding:14px;max-width:1500px;margin:0 auto;}
+  .panel{display:none;}
+  .panel.active{display:block;animation:fadeIn .2s ease;}
+  @keyframes fadeIn{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:none;}}
+
+  .card{background:var(--panel);border-radius:var(--radius);box-shadow:var(--shadow);padding:14px;margin-bottom:14px;}
+  .card h3{margin:0 0 12px;font-size:1rem;display:flex;align-items:center;gap:8px;}
+  .toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px;}
+  .btn{
+    border:none;border-radius:9px;padding:10px 16px;font-weight:600;font-size:.85rem;cursor:pointer;color:#fff;
+    background:var(--c1);box-shadow:0 2px 6px rgba(37,99,235,.3);transition:.15s;
+  }
+  .btn:hover{filter:brightness(1.08);transform:translateY(-1px);}
+  .btn:disabled{opacity:.6;cursor:default;transform:none;}
+  .btn.secondary{background:var(--c6);}
+  .btn.danger{background:var(--c5);}
+  .btn.ghost{background:#fff;color:var(--ink);border:1px solid var(--line);box-shadow:none;}
+  .btn.small{padding:5px 10px;font-size:.75rem;}
+
+  .empty-state{padding:30px;text-align:center;color:var(--muted);font-size:.9rem;}
+
+  /* Général table */
+  .table-wrap{overflow-x:auto;border-radius:12px;border:1px solid var(--line);}
+  table{border-collapse:collapse;width:100%;font-size:.82rem;}
+  thead th{color:#fff;padding:8px 10px;text-align:left;white-space:nowrap;cursor:pointer;user-select:none;font-weight:600;}
+  thead th .arrow{font-size:.68rem;opacity:.85;margin-left:3px;}
+  thead tr.filters th{background:#f8fafc;padding:5px 6px;cursor:default;}
+  thead tr.filters input, thead tr.filters select{
+    width:100%;padding:4px 5px;border:1px solid var(--line);border-radius:5px;font-size:.75rem;color:var(--ink);background:#fff;
+  }
+  tbody td{padding:6px 10px;border-bottom:1px solid var(--line);white-space:nowrap;}
+  tbody tr:nth-child(odd){background:#ffffff;}
+  tbody tr:nth-child(even){background:#eef1f6;}
+  tbody tr:hover{background:#dbeafe;}
+  .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:.7rem;font-weight:700;color:#fff;white-space:nowrap;}
+  .badge.sexeF{background:var(--c3);}
+  .badge.sexeG{background:var(--c1);}
+  .badge.empty{background:#cbd5e1;color:#475569;}
+
+  /* Config */
+  .config-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:14px;}
+  .field label{display:block;font-size:.78rem;font-weight:600;color:var(--muted);margin-bottom:4px;}
+  .field select, .field input{
+    width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;font-size:.85rem;background:#fff;
+  }
+  .hint{font-size:.7rem;color:var(--muted);margin-top:3px;}
+
+  /* Teams / Poules grids */
+  .teams-grid, .poules-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-bottom:14px;}
+  .team-card, .poule-card{
+    border:2px solid var(--line);border-radius:12px;padding:10px;background:#f8fafc;
+  }
+  .poule-card h4, .team-card .team-name{
+    margin:0 0 8px;font-size:.9rem;font-weight:700;color:var(--ink);
+  }
+  .team-card .team-name{
+    width:100%;border:1px solid var(--line);border-radius:7px;padding:5px 7px;background:#fff;
+  }
+  .team-card ul, .poule-card ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px;}
+  .team-card li, .poule-card li{
+    display:flex;justify-content:space-between;align-items:center;gap:6px;font-size:.8rem;
+    background:#fff;border-radius:7px;padding:5px 7px;border:1px solid var(--line);
+  }
+  .team-card li select, .poule-card li select{
+    font-size:.68rem;padding:2px 4px;border:1px solid var(--line);border-radius:5px;max-width:110px;
+  }
+
+  /* Match schedule */
+  .match-table td, .match-table th{white-space:nowrap;}
+  .tour-badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:.7rem;font-weight:700;color:#fff;background:var(--c7);}
+  .table-badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:.7rem;font-weight:700;color:#fff;background:var(--c4);}
+  .poule-tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:.7rem;font-weight:700;color:#fff;background:var(--c2);}
+
+  .chip-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;}
+  .chip{border-radius:10px;padding:6px 10px;color:#fff;font-size:.72rem;box-shadow:var(--shadow);text-align:center;}
+  .chip b{display:block;font-size:1rem;}
+
+  /* Modal (import) */
+  .overlay{
+    position:fixed;inset:0;background:rgba(15,23,42,.55);display:none;align-items:center;justify-content:center;
+    padding:14px;z-index:100;
+  }
+  .overlay.show{display:flex;}
+  .modal{
+    background:#fff;border-radius:16px;max-width:560px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.35);
+    overflow:hidden;display:flex;flex-direction:column;max-height:90vh;
+  }
+  .modal-header{background:linear-gradient(120deg,var(--c1),var(--c7));color:#fff;padding:12px 18px;display:flex;justify-content:space-between;align-items:center;flex:0 0 auto;}
+  .modal-header h2{margin:0;font-size:1.05rem;}
+  .modal-header .close{background:transparent;border:none;color:#fff;font-size:1.4rem;cursor:pointer;line-height:1;}
+  .modal-body{padding:16px 18px;overflow-y:auto;flex:1 1 auto;min-height:0;}
+  .modal-footer{padding:12px 18px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:10px;flex:0 0 auto;}
+  .class-checklist{display:flex;flex-direction:column;gap:8px;}
+  .class-check{
+    display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:8px;padding:8px 10px;cursor:pointer;font-size:.88rem;
+  }
+  .class-check input{width:16px;height:16px;}
+  .muted{color:var(--muted);font-size:.78rem;}
+
+  @media (max-width:700px){
+    header{padding:10px 14px;}
+    header h1{font-size:1.05rem;}
+    main{padding:10px;}
+    nav.tabs{top:56px;padding:8px 10px;}
+    .config-grid{grid-template-columns:1fr 1fr;}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>EPS Gestion des tournois</h1>
+    <div class="sub">Poules et calendriers de matchs par classe et par activité</div>
+  </div>
+</header>
+
+<nav class="tabs" id="tabsNav"></nav>
+
+<main>
+  <div class="panel active" id="panel-general"></div>
+</main>
+
+<!-- Modal import -->
+<div class="overlay" id="importOverlay">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>📥 Importer des classes</h2>
+      <button class="close" id="importClose">&times;</button>
+    </div>
+    <div class="modal-body" id="importBody"></div>
+    <div class="modal-footer">
+      <button class="btn ghost" id="importCancel">Annuler</button>
+      <button class="btn" id="importConfirm">Importer la sélection</button>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+/* ---------------------------------------------------------- CONFIG ---- */
+const SHEET_ID = '1UpkwkrQ7L6BdOGIg2T1OSAHybTdLNp7jutEHqjyNqj8';
+const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&gid=0`;
+
+const ACTIVITIES = {
+  'Tennis de table': {icon:'🏓', type:'individuel', terrainLabel:'Tables', min:6, max:8, pouleMin:3, pouleMax:13},
+  'Badminton':       {icon:'🏸', type:'individuel', terrainLabel:'Terrains', min:7, max:9, pouleMin:3, pouleMax:13},
+  'Handball':        {icon:'🤾', type:'equipe', terrainLabel:'Terrains', min:1, max:1, pouleMin:3, pouleMax:6},
+  'Ultimate':        {icon:'🥏', type:'equipe', terrainLabel:'Terrains', min:1, max:3, pouleMin:3, pouleMax:6},
+  'Volley':          {icon:'🏐', type:'equipe', terrainLabel:'Terrains', min:3, max:9, pouleMin:3, pouleMax:6},
+};
+const PALETTE = ['#2563eb','#7c3aed','#db2777','#ea580c','#dc2626','#0891b2','#4f46e5','#b45309','#e11d48','#0ea5e9'];
+
+/* ------------------------------------------------------------ STATE --- */
+let STATE = {
+  students: [],          // {id, nomPrenom, classe, sexe}
+  classesImported: [],   // string[]
+  classConfig: {},       // classe -> {activite, type, terrains, taillePoule, joueursParEquipe}
+  teams: {},             // classe -> [{id, nom, memberIds:[]}]
+  poules: {},            // classe -> [{id, nom, members:[]}]  (studentId ou teamId selon le type)
+  matches: {},           // classe -> [{poule, tour, vague, table, a, b}]
+};
+let currentTab = 'general';
+const tableState = {};
+let stagingStudents = [];
+let stagingClasses = [];
+
+/* -------------------------------------------------------------- UTILS - */
+function slug(s){
+  return String(s || '')
+    .normalize('NFD').replace(/[̀-ͯ]/g,'')
+    .toLowerCase().replace(/[^a-z0-9]+/g,'');
+}
+function normalizeSexe(v){
+  const s = String(v || '').trim().toUpperCase();
+  if(s === 'F' || s === 'FILLE' || s === 'FEMININ' || s === 'FÉMININ') return 'F';
+  if(s === 'G' || s === 'M' || s === 'GARCON' || s === 'GARÇON' || s === 'MASCULIN') return 'G';
+  return s;
+}
+function sexeBadge(v){
+  if(v==='F') return '<span class="badge sexeF">F</span>';
+  if(v==='G') return '<span class="badge sexeG">G</span>';
+  return '<span class="badge empty">—</span>';
+}
+function shuffleArray(arr){
+  const a = arr.slice();
+  for(let i=a.length-1;i>0;i--){
+    const j = Math.floor(Math.random()*(i+1));
+    [a[i],a[j]] = [a[j],a[i]];
+  }
+  return a;
+}
+function clamp(v,min,max){ return Math.min(max, Math.max(min, v)); }
+
+function saveState(){
+  localStorage.setItem('gt_state', JSON.stringify(STATE));
+}
+function loadState(){
+  try{
+    const raw = localStorage.getItem('gt_state');
+    if(raw) STATE = Object.assign(STATE, JSON.parse(raw));
+  }catch(e){ /* garde l'état par défaut */ }
+}
+
+/* --------------------------------------------------------- CSV IMPORT - */
+function parseCSV(text){
+  const rows = [];
+  let row = [], field = '', inQuotes = false;
+  for(let i=0; i<text.length; i++){
+    const c = text[i];
+    if(inQuotes){
+      if(c === '"'){
+        if(text[i+1] === '"'){ field += '"'; i++; }
+        else inQuotes = false;
+      } else field += c;
+    } else {
+      if(c === '"') inQuotes = true;
+      else if(c === ','){ row.push(field); field=''; }
+      else if(c === '\n' || c === '\r'){
+        if(c === '\r' && text[i+1] === '\n') i++;
+        row.push(field); field='';
+        rows.push(row); row=[];
+      } else field += c;
+    }
+  }
+  if(field.length || row.length){ row.push(field); rows.push(row); }
+  return rows.filter(r => r.length>1 || (r[0]||'').trim()!=='');
+}
+
+async function fetchCollegeList(){
+  const res = await fetch(CSV_URL);
+  if(!res.ok) throw new Error('Impossible de charger le fichier (vérifiez qu\'il est partagé "Toute personne disposant du lien peut consulter").');
+  const text = await res.text();
+  const rows = parseCSV(text);
+  if(!rows.length) throw new Error('Fichier vide ou illisible.');
+  const headers = rows[0].map(h => String(h).trim().toLowerCase());
+  const idxNom = headers.indexOf('nom');
+  const idxPrenom = headers.indexOf('prénom') >= 0 ? headers.indexOf('prénom') : headers.indexOf('prenom');
+  const idxClasse = headers.indexOf('classe');
+  const idxSexe = headers.findIndex(h => h.indexOf('sexe') === 0);
+  if(idxNom < 0 || idxPrenom < 0 || idxClasse < 0){
+    throw new Error('Colonnes Nom / Prénom / Classe introuvables dans le fichier.');
+  }
+  const list = [];
+  for(let i=1; i<rows.length; i++){
+    const row = rows[i];
+    const nom = String(row[idxNom] || '').trim();
+    const prenom = String(row[idxPrenom] || '').trim();
+    const classe = String(row[idxClasse] || '').trim();
+    const sexe = idxSexe >= 0 ? normalizeSexe(row[idxSexe]) : '';
+    if(!nom || !prenom || !classe) continue;
+    const nomPrenom = nom.toUpperCase() + ' ' + prenom;
+    const id = slug(nomPrenom) + '_' + slug(classe);
+    list.push({ id, nomPrenom, classe, sexe });
+  }
+  return list;
+}
+
+async function openImportModal(){
+  const btn = document.getElementById('btnImport');
+  btn.disabled = true; btn.textContent = 'Chargement...';
+  try{
+    stagingStudents = await fetchCollegeList();
+    stagingClasses = [...new Set(stagingStudents.map(s=>s.classe))].sort((a,b)=>a.localeCompare(b,'fr'));
+    renderImportModal();
+    document.getElementById('importOverlay').classList.add('show');
+  }catch(err){
+    alert("Erreur lors de l'import : " + err.message);
+  }finally{
+    btn.disabled = false; btn.textContent = '📥 Importer depuis Google Sheet';
+  }
+}
+function renderImportModal(){
+  const body = document.getElementById('importBody');
+  if(!stagingClasses.length){
+    body.innerHTML = `<p class="muted">Aucune classe trouvée dans le fichier.</p>`;
+    return;
+  }
+  body.innerHTML = `
+    <p>Cochez les classes à importer (un onglet sera créé pour chacune) :</p>
+    <div class="class-checklist">
+      ${stagingClasses.map(c => `
+        <label class="class-check">
+          <input type="checkbox" value="${c}" ${STATE.classesImported.includes(c)?'checked':''}>
+          <span>${c}</span>
+          <span class="muted">(${stagingStudents.filter(s=>s.classe===c).length} élèves)</span>
+        </label>`).join('')}
+    </div>`;
+}
+function closeImportModal(){
+  document.getElementById('importOverlay').classList.remove('show');
+}
+function confirmImport(){
+  const checked = Array.from(document.querySelectorAll('#importBody input[type=checkbox]:checked')).map(i=>i.value);
+  if(!checked.length){ alert('Sélectionnez au moins une classe.'); return; }
+  const existingIds = new Set(STATE.students.map(s=>s.id));
+  let added = 0, updated = 0;
+  stagingStudents.filter(s => checked.includes(s.classe)).forEach(s=>{
+    const idx = STATE.students.findIndex(x=>x.id===s.id);
+    if(idx >= 0){ STATE.students[idx] = Object.assign({}, STATE.students[idx], s); updated++; }
+    else { STATE.students.push(s); added++; }
+  });
+  checked.forEach(c=>{ if(!STATE.classesImported.includes(c)) STATE.classesImported.push(c); });
+  saveState();
+  closeImportModal();
+  renderTabs();
+  renderAll();
+  alert(`Import terminé : ${added} élève(s) ajouté(s), ${updated} déjà présent(s) mis à jour.`);
+}
+
+/* ------------------------------------------------------- POULES / EQUIPES */
+function generateTeams(studentIds, joueursParEquipe){
+  const shuffled = shuffleArray(studentIds);
+  const teams = [];
+  let idx=0, n=1;
+  while(idx < shuffled.length){
+    teams.push({ id:'equipe'+n, nom:'Équipe '+n, memberIds: shuffled.slice(idx, idx+joueursParEquipe) });
+    idx += joueursParEquipe; n++;
+  }
+  return teams;
+}
+function generatePoules(ids, taillePoule){
+  const shuffled = shuffleArray(ids);
+  const poules = [];
+  let idx=0, n=1;
+  while(idx < shuffled.length){
+    poules.push({ id:'poule'+n, nom:'Poule '+n, members: shuffled.slice(idx, idx+taillePoule) });
+    idx += taillePoule; n++;
+  }
+  return poules;
+}
+function participantLabel(classe, id){
+  const cfg = STATE.classConfig[classe];
+  if(cfg && cfg.type === 'equipe'){
+    const t = (STATE.teams[classe]||[]).find(t=>t.id===id);
+    return t ? t.nom : id;
+  }
+  const s = STATE.students.find(s=>s.id===id);
+  return s ? s.nomPrenom : id;
+}
+function getPouleLabel(student){
+  const classe = student.classe;
+  const cfg = STATE.classConfig[classe];
+  const poules = STATE.poules[classe];
+  if(!cfg || !poules || !poules.length) return '';
+  if(cfg.type === 'individuel'){
+    const p = poules.find(p=>p.members.includes(student.id));
+    return p ? p.nom : '';
+  }
+  const team = (STATE.teams[classe]||[]).find(t=>t.memberIds.includes(student.id));
+  if(!team) return '';
+  const p = poules.find(p=>p.members.includes(team.id));
+  return p ? `${p.nom} (${team.nom})` : '';
+}
+
+function onGenererPoules(classe){
+  const activite = document.getElementById('cfgActivite').value;
+  if(!activite){ alert('Choisissez une activité.'); return; }
+  const act = ACTIVITIES[activite];
+  const terrains = clamp(parseInt(document.getElementById('cfgTerrains').value, 10) || act.min, act.min, act.max);
+  const taillePoule = clamp(parseInt(document.getElementById('cfgTaillePoule').value, 10) || act.pouleMin, act.pouleMin, act.pouleMax);
+
+  if((STATE.poules[classe]||[]).length){
+    if(!confirm('Cela régénère les poules et efface les placements/matchs actuels de cette classe. Continuer ?')) return;
+  }
+
+  const cfg = { activite, type:act.type, terrains, taillePoule };
+  const studentIds = STATE.students.filter(s=>s.classe===classe).map(s=>s.id);
+
+  if(act.type === 'equipe'){
+    const joueursParEquipe = clamp(parseInt(document.getElementById('cfgJoueursEquipe').value, 10) || 4, 2, 15);
+    cfg.joueursParEquipe = joueursParEquipe;
+    const teams = generateTeams(studentIds, joueursParEquipe);
+    STATE.teams[classe] = teams;
+    STATE.poules[classe] = generatePoules(teams.map(t=>t.id), taillePoule);
+  } else {
+    STATE.teams[classe] = [];
+    STATE.poules[classe] = generatePoules(studentIds, taillePoule);
+  }
+  STATE.classConfig[classe] = cfg;
+  STATE.matches[classe] = [];
+  saveState();
+  renderClassTab(classe);
+  renderGeneral();
+}
+
+function moveParticipant(classe, participantId, targetPouleId){
+  const poules = STATE.poules[classe] || [];
+  poules.forEach(p=>{ p.members = p.members.filter(id=>id!==participantId); });
+  const target = poules.find(p=>p.id===targetPouleId);
+  if(target) target.members.push(participantId);
+  STATE.matches[classe] = [];
+  saveState();
+  renderClassTab(classe);
+  renderGeneral();
+}
+function moveStudentTeam(classe, studentId, targetTeamId){
+  const teams = STATE.teams[classe] || [];
+  teams.forEach(t=>{ t.memberIds = t.memberIds.filter(id=>id!==studentId); });
+  const target = teams.find(t=>t.id===targetTeamId);
+  if(target) target.memberIds.push(studentId);
+  STATE.matches[classe] = [];
+  saveState();
+  renderClassTab(classe);
+  renderGeneral();
+}
+function renameTeam(classe, teamId, newName){
+  const t = (STATE.teams[classe]||[]).find(t=>t.id===teamId);
+  if(t){ t.nom = newName || t.nom; saveState(); renderGeneral(); }
+}
+
+/* ------------------------------------------------------------ MATCHES - */
+function roundRobinRounds(participants){
+  let list = participants.slice();
+  if(list.length < 2) return [];
+  if(list.length % 2 === 1) list.push(null);
+  const n = list.length;
+  const fixed = list[0];
+  let rest = list.slice(1);
+  const rounds = [];
+  for(let r=0; r<n-1; r++){
+    const arr = [fixed, ...rest];
+    const pairs = [];
+    for(let i=0; i<n/2; i++){
+      const a = arr[i], b = arr[n-1-i];
+      if(a!==null && b!==null) pairs.push([a,b]);
+    }
+    rounds.push(pairs);
+    rest.unshift(rest.pop());
+  }
+  return rounds;
+}
+
+function onGenererMatchs(classe){
+  const cfg = STATE.classConfig[classe];
+  const poules = STATE.poules[classe] || [];
+  if(!cfg || !poules.length){ alert("Générez d'abord les poules."); return; }
+  const pouleRounds = poules.map(p => roundRobinRounds(p.members));
+  const maxRounds = Math.max(0, ...pouleRounds.map(r=>r.length));
+  const matches = [];
+  for(let round=0; round<maxRounds; round++){
+    let counter = 0;
+    poules.forEach((p, pi)=>{
+      const pairs = pouleRounds[pi][round] || [];
+      pairs.forEach(([a,b])=>{
+        const table = (counter % cfg.terrains) + 1;
+        const vague = Math.floor(counter / cfg.terrains) + 1;
+        matches.push({ poule:p.nom, tour:round+1, vague, table, a, b });
+        counter++;
+      });
+    });
+  }
+  STATE.matches[classe] = matches;
+  saveState();
+  renderClassTab(classe);
+}
+
+/* --------------------------------------------------------- RENDERING -- */
+function renderTabs(){
+  const nav = document.getElementById('tabsNav');
+  const tabs = [{id:'general', label:'Général'}, ...STATE.classesImported.map(c=>({id:c, label:c}))];
+  nav.innerHTML = tabs.map(t=>`<button data-tab="${t.id}" class="${t.id===currentTab?'active':''}">${t.label}</button>`).join('');
+  nav.querySelectorAll('button').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      currentTab = btn.dataset.tab;
+      nav.querySelectorAll('button').forEach(b=>b.classList.toggle('active', b===btn));
+      document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+      let panel = document.getElementById('panel-'+slug(currentTab));
+      if(!panel){
+        panel = document.createElement('div');
+        panel.className = 'panel';
+        panel.id = 'panel-'+slug(currentTab);
+        document.querySelector('main').appendChild(panel);
+      }
+      panel.classList.add('active');
+      if(currentTab==='general') renderGeneral(); else renderClassTab(currentTab);
+    });
+  });
+  // s'assure que chaque classe importée a bien un panel dans le DOM
+  STATE.classesImported.forEach(c=>{
+    if(!document.getElementById('panel-'+slug(c))){
+      const panel = document.createElement('div');
+      panel.className = 'panel';
+      panel.id = 'panel-'+slug(c);
+      document.querySelector('main').appendChild(panel);
+    }
+  });
+}
+
+function renderAll(){
+  renderGeneral();
+  STATE.classesImported.forEach(c=>renderClassTab(c));
+}
+
+/* Générique : tableau triable/filtrable */
+function buildTable(tableId, columns, rows){
+  if(!tableState[tableId]) tableState[tableId] = {sortKey:'nomPrenom', sortDir:1, filters:{}};
+  const st = tableState[tableId];
+
+  let filtered = rows.filter(r=>{
+    return columns.every(col=>{
+      const f = st.filters[col.key];
+      if(!f) return true;
+      const val = String(col.getValue(r) ?? '').toLowerCase();
+      return val.includes(String(f).toLowerCase());
+    });
+  });
+
+  if(st.sortKey){
+    const col = columns.find(c=>c.key===st.sortKey);
+    if(col){
+      filtered.sort((a,b)=>{
+        const va = String(col.getValue(a) ?? '');
+        const vb = String(col.getValue(b) ?? '');
+        return va.localeCompare(vb, 'fr') * st.sortDir;
+      });
+    }
+  }
+
+  const headerCells = columns.map((col,i)=>{
+    const color = PALETTE[i % PALETTE.length];
+    const arrow = st.sortKey===col.key ? (st.sortDir===1?'▲':'▼') : '';
+    return `<th style="background:${color}" data-key="${col.key}">${col.label}<span class="arrow">${arrow}</span></th>`;
+  }).join('');
+
+  const filterCells = columns.map(col=>{
+    if(col.filterType==='select'){
+      const options = (col.filterOptions||[]).map(o=>`<option value="${o}" ${st.filters[col.key]===o?'selected':''}>${o}</option>`).join('');
+      return `<th><select data-filter-key="${col.key}"><option value="">Tous</option>${options}</select></th>`;
+    }
+    if(col.filterType===false) return `<th></th>`;
+    return `<th><input type="text" data-filter-key="${col.key}" value="${st.filters[col.key]||''}" placeholder="Filtrer..."></th>`;
+  }).join('');
+
+  const bodyRows = filtered.length ? filtered.map(row=>{
+    const cells = columns.map(col=>`<td>${col.render ? col.render(row) : (col.getValue(row) ?? '')}</td>`).join('');
+    return `<tr>${cells}</tr>`;
+  }).join('') : `<tr><td colspan="${columns.length}" class="empty-state">Aucun élève ne correspond.</td></tr>`;
+
+  const html = `
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>${headerCells}</tr>
+          <tr class="filters">${filterCells}</tr>
+        </thead>
+        <tbody>${bodyRows}</tbody>
+      </table>
+    </div>`;
+  return html;
+}
+function wireTable(container, tableId, columns, rerender){
+  const st = tableState[tableId];
+  container.querySelectorAll('thead th[data-key]').forEach(th=>{
+    th.addEventListener('click', ()=>{
+      const key = th.dataset.key;
+      if(st.sortKey===key) st.sortDir *= -1; else { st.sortKey = key; st.sortDir = 1; }
+      rerender();
+    });
+  });
+  container.querySelectorAll('[data-filter-key]').forEach(el=>{
+    el.addEventListener(el.tagName==='SELECT' ? 'change':'input', ()=>{
+      st.filters[el.dataset.filterKey] = el.value;
+      rerender();
+    });
+  });
+}
+
+/* ---- Général ---- */
+function renderGeneral(){
+  const panel = document.getElementById('panel-general');
+  if(!STATE.students.length){
+    panel.innerHTML = `
+      <div class="card">
+        <div class="toolbar">
+          <div></div>
+          <button class="btn" id="btnImport">📥 Importer depuis Google Sheet</button>
+        </div>
+        <div class="empty-state">Aucun élève importé pour l'instant. Cliquez sur "Importer depuis Google Sheet" pour commencer.</div>
+      </div>`;
+    document.getElementById('btnImport').addEventListener('click', openImportModal);
+    return;
+  }
+
+  const columns = [
+    {key:'nomPrenom', label:'Nom Prénom', getValue:r=>r.nomPrenom},
+    {key:'classe', label:'Classe', getValue:r=>r.classe, filterType:'select', filterOptions:STATE.classesImported},
+    {key:'sexe', label:'Sexe', getValue:r=>r.sexe, render:r=>sexeBadge(r.sexe), filterType:'select', filterOptions:['F','G']},
+    {key:'activite', label:'Activité', getValue:r=>(STATE.classConfig[r.classe]||{}).activite || '', filterType:'select', filterOptions:Object.keys(ACTIVITIES)},
+    {key:'poule', label:'Poule', getValue:r=>getPouleLabel(r)},
+  ];
+
+  const html = buildTable('general', columns, STATE.students);
+  panel.innerHTML = `
+    <div class="card">
+      <div class="toolbar">
+        <div></div>
+        <button class="btn" id="btnImport">📥 Importer depuis Google Sheet</button>
+      </div>
+      ${html}
+    </div>`;
+  wireTable(panel, 'general', columns, renderGeneral);
+  document.getElementById('btnImport').addEventListener('click', openImportModal);
+}
+
+/* ---- Onglet de classe ---- */
+function renderClassTab(classe){
+  const domId = 'panel-' + slug(classe);
+  let panel = document.getElementById(domId);
+  if(!panel){
+    panel = document.createElement('div');
+    panel.className = 'panel';
+    panel.id = domId;
+    document.querySelector('main').appendChild(panel);
+  }
+  const students = STATE.students.filter(s=>s.classe===classe);
+  const cfg = STATE.classConfig[classe] || {};
+  const act = ACTIVITIES[cfg.activite];
+  const filles = students.filter(s=>s.sexe==='F').length;
+  const garcons = students.filter(s=>s.sexe==='G').length;
+
+  let configFieldsHtml = '';
+  if(cfg.activite && act){
+    configFieldsHtml = `
+      <div class="field">
+        <label>${act.terrainLabel} disponibles</label>
+        <input type="number" id="cfgTerrains" min="${act.min}" max="${act.max}" value="${cfg.terrains || act.min}">
+        <div class="hint">de ${act.min} à ${act.max}</div>
+      </div>`;
+    if(act.type === 'equipe'){
+      configFieldsHtml += `
+        <div class="field">
+          <label>Joueurs par équipe</label>
+          <input type="number" id="cfgJoueursEquipe" min="2" max="15" value="${cfg.joueursParEquipe || 4}">
+        </div>
+        <div class="field">
+          <label>Équipes par poule</label>
+          <input type="number" id="cfgTaillePoule" min="${act.pouleMin}" max="${act.pouleMax}" value="${cfg.taillePoule || act.pouleMin}">
+          <div class="hint">de ${act.pouleMin} à ${act.pouleMax}</div>
+        </div>`;
+    } else {
+      configFieldsHtml += `
+        <div class="field">
+          <label>Joueurs par poule</label>
+          <input type="number" id="cfgTaillePoule" min="${act.pouleMin}" max="${act.pouleMax}" value="${cfg.taillePoule || act.pouleMin}">
+          <div class="hint">de ${act.pouleMin} à ${act.pouleMax}</div>
+        </div>`;
+    }
+  }
+
+  panel.innerHTML = `
+    <div class="chip-row">
+      <div class="chip" style="background:var(--c1)"><b>${students.length}</b>Élèves</div>
+      <div class="chip" style="background:var(--c3)"><b>${filles}</b>Filles</div>
+      <div class="chip" style="background:var(--c6)"><b>${garcons}</b>Garçons</div>
+    </div>
+
+    <div class="card">
+      <h3>⚙️ Configuration du tournoi</h3>
+      <div class="config-grid">
+        <div class="field">
+          <label>Activité</label>
+          <select id="cfgActivite">
+            <option value="">— Choisir —</option>
+            ${Object.keys(ACTIVITIES).map(a=>`<option value="${a}" ${cfg.activite===a?'selected':''}>${ACTIVITIES[a].icon} ${a}</option>`).join('')}
+          </select>
+        </div>
+        ${configFieldsHtml}
+      </div>
+      <button class="btn" id="btnGenererPoules">🎲 Générer les poules</button>
+    </div>
+
+    ${renderTeamsSection(classe)}
+    ${renderPoulesSection(classe)}
+    ${renderMatchesSection(classe)}
+  `;
+
+  document.getElementById('cfgActivite').addEventListener('change', ()=>{
+    const activite = document.getElementById('cfgActivite').value;
+    STATE.classConfig[classe] = Object.assign({}, STATE.classConfig[classe], {activite});
+    renderClassTab(classe);
+  });
+  document.getElementById('btnGenererPoules').addEventListener('click', ()=>onGenererPoules(classe));
+
+  panel.querySelectorAll('[data-move-student]').forEach(sel=>{
+    sel.addEventListener('change', ()=>moveStudentTeam(classe, sel.dataset.moveStudent, sel.value));
+  });
+  panel.querySelectorAll('[data-move-participant]').forEach(sel=>{
+    sel.addEventListener('change', ()=>moveParticipant(classe, sel.dataset.moveParticipant, sel.value));
+  });
+  panel.querySelectorAll('[data-team-name]').forEach(input=>{
+    input.addEventListener('change', ()=>renameTeam(classe, input.dataset.teamName, input.value.trim()));
+  });
+  const btnMatchs = document.getElementById('btnGenererMatchs');
+  if(btnMatchs) btnMatchs.addEventListener('click', ()=>onGenererMatchs(classe));
+}
+
+function renderTeamsSection(classe){
+  const cfg = STATE.classConfig[classe];
+  if(!cfg || cfg.type !== 'equipe') return '';
+  const teams = STATE.teams[classe] || [];
+  if(!teams.length) return '';
+  return `
+    <div class="card">
+      <h3>👥 Équipes</h3>
+      <div class="teams-grid">
+        ${teams.map(t=>`
+          <div class="team-card">
+            <input class="team-name" data-team-name="${t.id}" value="${t.nom}">
+            <ul>
+              ${t.memberIds.map(mid=>{
+                const student = STATE.students.find(s=>s.id===mid);
+                if(!student) return '';
+                return `<li>${student.nomPrenom}
+                  <select data-move-student="${mid}">
+                    ${teams.map(t2=>`<option value="${t2.id}" ${t2.id===t.id?'selected':''}>${t2.nom}</option>`).join('')}
+                  </select>
+                </li>`;
+              }).join('')}
+            </ul>
+          </div>`).join('')}
+      </div>
+    </div>`;
+}
+
+function renderPoulesSection(classe){
+  const poules = STATE.poules[classe] || [];
+  if(!poules.length) return '';
+  return `
+    <div class="card">
+      <h3>🏆 Poules</h3>
+      <div class="poules-grid">
+        ${poules.map(p=>`
+          <div class="poule-card">
+            <h4>${p.nom} (${p.members.length})</h4>
+            <ul>
+              ${p.members.map(mid=>`
+                <li>${participantLabel(classe, mid)}
+                  <select data-move-participant="${mid}">
+                    ${poules.map(p2=>`<option value="${p2.id}" ${p2.id===p.id?'selected':''}>${p2.nom}</option>`).join('')}
+                  </select>
+                </li>`).join('')}
+            </ul>
+          </div>`).join('')}
+      </div>
+      <button class="btn secondary" id="btnGenererMatchs">📅 Générer les matchs</button>
+    </div>`;
+}
+
+function renderMatchesSection(classe){
+  const matches = STATE.matches[classe] || [];
+  if(!matches.length) return '';
+  const sorted = matches.slice().sort((a,b)=> a.tour-b.tour || a.vague-b.vague || a.table-b.table);
+  const rows = sorted.map(m=>`
+    <tr>
+      <td><span class="tour-badge">Tour ${m.tour}${m.vague>1?' · Vague '+m.vague:''}</span></td>
+      <td><span class="table-badge">Table/Terrain ${m.table}</span></td>
+      <td><span class="poule-tag">${m.poule}</span></td>
+      <td>${participantLabel(classe, m.a)} <b>vs</b> ${participantLabel(classe, m.b)}</td>
+    </tr>`).join('');
+  return `
+    <div class="card">
+      <h3>📅 Calendrier des matchs</h3>
+      <div class="table-wrap">
+        <table class="match-table">
+          <thead><tr>
+            <th style="background:${PALETTE[6]}">Tour</th>
+            <th style="background:${PALETTE[3]}">Table/Terrain</th>
+            <th style="background:${PALETTE[1]}">Poule</th>
+            <th style="background:${PALETTE[0]}">Match</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+/* -------------------------------------------------------------- INIT -- */
+function wireGlobalEvents(){
+  document.getElementById('importClose').addEventListener('click', closeImportModal);
+  document.getElementById('importCancel').addEventListener('click', closeImportModal);
+  document.getElementById('importConfirm').addEventListener('click', confirmImport);
+  document.getElementById('importOverlay').addEventListener('click', (e)=>{
+    if(e.target.id==='importOverlay') closeImportModal();
+  });
+}
+
+document.addEventListener('DOMContentLoaded', ()=>{
+  loadState();
+  renderTabs();
+  wireGlobalEvents();
+  renderAll();
+});
+</script>
+</body>
+</html>

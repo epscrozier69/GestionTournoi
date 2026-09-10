@@ -55,7 +55,7 @@
 
   .empty-state{padding:30px;text-align:center;color:var(--muted);font-size:.9rem;}
 
-  /* Général table */
+  /* Tables générales */
   .table-wrap{overflow-x:auto;border-radius:12px;border:1px solid var(--line);}
   table{border-collapse:collapse;width:100%;font-size:.82rem;}
   thead th{color:#fff;padding:8px 10px;text-align:left;white-space:nowrap;cursor:pointer;user-select:none;font-weight:600;}
@@ -80,6 +80,7 @@
     width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;font-size:.85rem;background:#fff;
   }
   .hint{font-size:.7rem;color:var(--muted);margin-top:3px;}
+  .muted{color:var(--muted);font-size:.78rem;}
 
   /* Teams / Poules grids */
   .teams-grid, .poules-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-bottom:14px;}
@@ -111,27 +112,14 @@
   .chip{border-radius:10px;padding:6px 10px;color:#fff;font-size:.72rem;box-shadow:var(--shadow);text-align:center;}
   .chip b{display:block;font-size:1rem;}
 
-  /* Modal (import) */
-  .overlay{
-    position:fixed;inset:0;background:rgba(15,23,42,.55);display:none;align-items:center;justify-content:center;
-    padding:14px;z-index:100;
-  }
-  .overlay.show{display:flex;}
-  .modal{
-    background:#fff;border-radius:16px;max-width:560px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.35);
-    overflow:hidden;display:flex;flex-direction:column;max-height:90vh;
-  }
-  .modal-header{background:linear-gradient(120deg,var(--c1),var(--c7));color:#fff;padding:12px 18px;display:flex;justify-content:space-between;align-items:center;flex:0 0 auto;}
-  .modal-header h2{margin:0;font-size:1.05rem;}
-  .modal-header .close{background:transparent;border:none;color:#fff;font-size:1.4rem;cursor:pointer;line-height:1;}
-  .modal-body{padding:16px 18px;overflow-y:auto;flex:1 1 auto;min-height:0;}
-  .modal-footer{padding:12px 18px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:10px;flex:0 0 auto;}
-  .class-checklist{display:flex;flex-direction:column;gap:8px;}
-  .class-check{
-    display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:8px;padding:8px 10px;cursor:pointer;font-size:.88rem;
-  }
-  .class-check input{width:16px;height:16px;}
-  .muted{color:var(--muted);font-size:.78rem;}
+  /* Tournoi défis */
+  .defis-table th, .defis-table td{text-align:center;}
+  .defis-name{text-align:left !important;display:flex;align-items:center;gap:8px;white-space:nowrap;}
+  .defis-row{cursor:pointer;}
+  .defis-row:hover{background:#dbeafe;}
+  .defis-cell{width:26px;font-weight:800;color:var(--ok);}
+  .defis-undo{opacity:.6;}
+  .defis-undo:hover{opacity:1;}
 
   @media (max-width:700px){
     header{padding:10px 14px;}
@@ -147,7 +135,7 @@
 <header>
   <div>
     <h1>EPS Gestion des tournois</h1>
-    <div class="sub">Poules et calendriers de matchs par classe et par activité</div>
+    <div class="sub">Poules, défis et calendriers de matchs par activité</div>
   </div>
 </header>
 
@@ -155,22 +143,12 @@
 
 <main>
   <div class="panel active" id="panel-general"></div>
+  <div class="panel" id="panel-tennisdetable"></div>
+  <div class="panel" id="panel-badminton"></div>
+  <div class="panel" id="panel-handball"></div>
+  <div class="panel" id="panel-ultimate"></div>
+  <div class="panel" id="panel-volley"></div>
 </main>
-
-<!-- Modal import -->
-<div class="overlay" id="importOverlay">
-  <div class="modal">
-    <div class="modal-header">
-      <h2>📥 Importer des classes</h2>
-      <button class="close" id="importClose">&times;</button>
-    </div>
-    <div class="modal-body" id="importBody"></div>
-    <div class="modal-footer">
-      <button class="btn ghost" id="importCancel">Annuler</button>
-      <button class="btn" id="importConfirm">Importer la sélection</button>
-    </div>
-  </div>
-</div>
 
 <script>
 'use strict';
@@ -180,27 +158,50 @@ const SHEET_ID = '1UpkwkrQ7L6BdOGIg2T1OSAHybTdLNp7jutEHqjyNqj8';
 const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&gid=0`;
 
 const ACTIVITIES = {
-  'Tennis de table': {icon:'🏓', type:'individuel', terrainLabel:'Tables', min:6, max:8, pouleMin:3, pouleMax:13},
-  'Badminton':       {icon:'🏸', type:'individuel', terrainLabel:'Terrains', min:7, max:9, pouleMin:3, pouleMax:13},
-  'Handball':        {icon:'🤾', type:'equipe', terrainLabel:'Terrains', min:1, max:1, pouleMin:3, pouleMax:6},
-  'Ultimate':        {icon:'🥏', type:'equipe', terrainLabel:'Terrains', min:1, max:3, pouleMin:3, pouleMax:6},
-  'Volley':          {icon:'🏐', type:'equipe', terrainLabel:'Terrains', min:3, max:9, pouleMin:3, pouleMax:6},
+  'Tennis de table': {
+    icon:'🏓', type:'individuel', terrainLabel:'Tables', defisAllowed:true,
+    pouleMin:3, pouleMax:4, pouleTerrainMin:6, pouleTerrainMax:8,
+    defisTerrainMin:6, defisTerrainMax:8,
+  },
+  'Badminton': {
+    icon:'🏸', type:'individuel', terrainLabel:'Terrains', defisAllowed:true,
+    pouleMin:3, pouleMax:4, pouleTerrainMin:6, pouleTerrainMax:13,
+    defisTerrainMin:6, defisTerrainMax:8,
+  },
+  'Handball': {
+    icon:'🤾', type:'equipe', terrainLabel:'Terrains', defisAllowed:false,
+    pouleMin:3, pouleMax:6, pouleTerrainMin:1, pouleTerrainMax:1,
+  },
+  'Ultimate': {
+    icon:'🥏', type:'equipe', terrainLabel:'Terrains', defisAllowed:false,
+    pouleMin:3, pouleMax:6, pouleTerrainMin:1, pouleTerrainMax:3,
+  },
+  'Volley': {
+    icon:'🏐', type:'equipe', terrainLabel:'Terrains', defisAllowed:false,
+    pouleMin:3, pouleMax:12, pouleTerrainMin:3, pouleTerrainMax:9,
+  },
 };
 const PALETTE = ['#2563eb','#7c3aed','#db2777','#ea580c','#dc2626','#0891b2','#4f46e5','#b45309','#e11d48','#0ea5e9'];
 
 /* ------------------------------------------------------------ STATE --- */
+function defaultActivityData(){
+  return {
+    classe:'', seanceNumero:1, tournamentType:'', config:{}, defisTerrains:0, teams:[], poules:[], matches:[],
+    defisHasard:{ wins:{} },
+    defisClassement:{ wins:{}, currentRound:[], byes:[], roundNumber:0 },
+  };
+}
 let STATE = {
-  students: [],          // {id, nomPrenom, classe, sexe}
-  classesImported: [],   // string[]
-  classConfig: {},       // classe -> {activite, type, terrains, taillePoule, joueursParEquipe}
-  teams: {},             // classe -> [{id, nom, memberIds:[]}]
-  poules: {},            // classe -> [{id, nom, members:[]}]  (studentId ou teamId selon le type)
-  matches: {},           // classe -> [{poule, tour, vague, table, a, b}]
+  allStudents: [],     // {id, nomPrenom, classe, sexe} — toute la liste chargée depuis le Sheet
+  activityData: {},    // activité -> {classe, tournamentType, config, teams, poules, matches, defis}
 };
+function ensureActivityData(){
+  Object.keys(ACTIVITIES).forEach(a=>{
+    if(!STATE.activityData[a]) STATE.activityData[a] = defaultActivityData();
+  });
+}
 let currentTab = 'general';
 const tableState = {};
-let stagingStudents = [];
-let stagingClasses = [];
 
 /* -------------------------------------------------------------- UTILS - */
 function slug(s){
@@ -237,6 +238,7 @@ function loadState(){
     const raw = localStorage.getItem('gt_state');
     if(raw) STATE = Object.assign(STATE, JSON.parse(raw));
   }catch(e){ /* garde l'état par défaut */ }
+  ensureActivityData();
 }
 
 /* --------------------------------------------------------- CSV IMPORT - */
@@ -293,56 +295,19 @@ async function fetchCollegeList(){
   return list;
 }
 
-async function openImportModal(){
-  const btn = document.getElementById('btnImport');
-  btn.disabled = true; btn.textContent = 'Chargement...';
+async function onChargerListe(){
+  const btn = document.getElementById('btnChargerListe');
+  if(btn){ btn.disabled = true; btn.textContent = 'Chargement...'; }
   try{
-    stagingStudents = await fetchCollegeList();
-    stagingClasses = [...new Set(stagingStudents.map(s=>s.classe))].sort((a,b)=>a.localeCompare(b,'fr'));
-    renderImportModal();
-    document.getElementById('importOverlay').classList.add('show');
+    STATE.allStudents = await fetchCollegeList();
+    saveState();
+    renderAll();
   }catch(err){
     alert("Erreur lors de l'import : " + err.message);
   }finally{
-    btn.disabled = false; btn.textContent = '📥 Importer depuis Google Sheet';
+    const b = document.getElementById('btnChargerListe');
+    if(b) b.disabled = false;
   }
-}
-function renderImportModal(){
-  const body = document.getElementById('importBody');
-  if(!stagingClasses.length){
-    body.innerHTML = `<p class="muted">Aucune classe trouvée dans le fichier.</p>`;
-    return;
-  }
-  body.innerHTML = `
-    <p>Cochez les classes à importer (un onglet sera créé pour chacune) :</p>
-    <div class="class-checklist">
-      ${stagingClasses.map(c => `
-        <label class="class-check">
-          <input type="checkbox" value="${c}" ${STATE.classesImported.includes(c)?'checked':''}>
-          <span>${c}</span>
-          <span class="muted">(${stagingStudents.filter(s=>s.classe===c).length} élèves)</span>
-        </label>`).join('')}
-    </div>`;
-}
-function closeImportModal(){
-  document.getElementById('importOverlay').classList.remove('show');
-}
-function confirmImport(){
-  const checked = Array.from(document.querySelectorAll('#importBody input[type=checkbox]:checked')).map(i=>i.value);
-  if(!checked.length){ alert('Sélectionnez au moins une classe.'); return; }
-  const existingIds = new Set(STATE.students.map(s=>s.id));
-  let added = 0, updated = 0;
-  stagingStudents.filter(s => checked.includes(s.classe)).forEach(s=>{
-    const idx = STATE.students.findIndex(x=>x.id===s.id);
-    if(idx >= 0){ STATE.students[idx] = Object.assign({}, STATE.students[idx], s); updated++; }
-    else { STATE.students.push(s); added++; }
-  });
-  checked.forEach(c=>{ if(!STATE.classesImported.includes(c)) STATE.classesImported.push(c); });
-  saveState();
-  closeImportModal();
-  renderTabs();
-  renderAll();
-  alert(`Import terminé : ${added} élève(s) ajouté(s), ${updated} déjà présent(s) mis à jour.`);
 }
 
 /* ------------------------------------------------------- POULES / EQUIPES */
@@ -366,83 +331,107 @@ function generatePoules(ids, taillePoule){
   }
   return poules;
 }
-function participantLabel(classe, id){
-  const cfg = STATE.classConfig[classe];
-  if(cfg && cfg.type === 'equipe'){
-    const t = (STATE.teams[classe]||[]).find(t=>t.id===id);
+function participantLabel(activite, id){
+  const act = ACTIVITIES[activite];
+  const data = STATE.activityData[activite];
+  if(act.type === 'equipe'){
+    const t = data.teams.find(t=>t.id===id);
     return t ? t.nom : id;
   }
-  const s = STATE.students.find(s=>s.id===id);
+  const s = STATE.allStudents.find(s=>s.id===id);
   return s ? s.nomPrenom : id;
 }
-function getPouleLabel(student){
-  const classe = student.classe;
-  const cfg = STATE.classConfig[classe];
-  const poules = STATE.poules[classe];
-  if(!cfg || !poules || !poules.length) return '';
-  if(cfg.type === 'individuel'){
-    const p = poules.find(p=>p.members.includes(student.id));
-    return p ? p.nom : '';
+function getPouleLabelFor(activite, student){
+  const data = STATE.activityData[activite];
+  const act = ACTIVITIES[activite];
+  if(!data) return '';
+  if(data.tournamentType === 'poule'){
+    if(!data.poules.length) return '';
+    if(act.type === 'individuel'){
+      const p = data.poules.find(p=>p.members.includes(student.id));
+      return p ? p.nom : '';
+    }
+    const team = data.teams.find(t=>t.memberIds.includes(student.id));
+    if(!team) return '';
+    const p = data.poules.find(p=>p.members.includes(team.id));
+    return p ? `${p.nom} (${team.nom})` : '';
   }
-  const team = (STATE.teams[classe]||[]).find(t=>t.memberIds.includes(student.id));
-  if(!team) return '';
-  const p = poules.find(p=>p.members.includes(team.id));
-  return p ? `${p.nom} (${team.nom})` : '';
+  if(data.tournamentType === 'defisHasard'){
+    const w = data.defisHasard.wins[student.id] || 0;
+    return `Défis hasard — ${w} victoire${w>1?'s':''}`;
+  }
+  if(data.tournamentType === 'defisClassement'){
+    const w = data.defisClassement.wins[student.id] || 0;
+    return `Défis classement — ${w} victoire${w>1?'s':''}`;
+  }
+  return '';
+}
+function getStudentAssignment(student){
+  for(const activite of Object.keys(ACTIVITIES)){
+    const data = STATE.activityData[activite];
+    if(data && data.classe === student.classe){
+      return { activite, poule: getPouleLabelFor(activite, student) };
+    }
+  }
+  return { activite:'', poule:'' };
+}
+function getActiveStudents(){
+  const activeClasses = new Set(Object.values(STATE.activityData).map(d=>d.classe).filter(Boolean));
+  return STATE.allStudents.filter(s=>activeClasses.has(s.classe));
 }
 
-function onGenererPoules(classe){
-  const activite = document.getElementById('cfgActivite').value;
-  if(!activite){ alert('Choisissez une activité.'); return; }
+function onGenererPoules(activite){
+  const data = STATE.activityData[activite];
   const act = ACTIVITIES[activite];
-  const terrains = clamp(parseInt(document.getElementById('cfgTerrains').value, 10) || act.min, act.min, act.max);
+  if(!data.classe){ alert("Choisissez d'abord une classe."); return; }
+  const terrains = clamp(parseInt(document.getElementById('cfgTerrains').value, 10) || act.pouleTerrainMin, act.pouleTerrainMin, act.pouleTerrainMax);
   const taillePoule = clamp(parseInt(document.getElementById('cfgTaillePoule').value, 10) || act.pouleMin, act.pouleMin, act.pouleMax);
 
-  if((STATE.poules[classe]||[]).length){
-    if(!confirm('Cela régénère les poules et efface les placements/matchs actuels de cette classe. Continuer ?')) return;
+  if(data.poules.length){
+    if(!confirm('Cela régénère les poules et efface les placements/matchs actuels. Continuer ?')) return;
   }
 
-  const cfg = { activite, type:act.type, terrains, taillePoule };
-  const studentIds = STATE.students.filter(s=>s.classe===classe).map(s=>s.id);
+  const studentIds = STATE.allStudents.filter(s=>s.classe===data.classe).map(s=>s.id);
 
   if(act.type === 'equipe'){
     const joueursParEquipe = clamp(parseInt(document.getElementById('cfgJoueursEquipe').value, 10) || 4, 2, 15);
-    cfg.joueursParEquipe = joueursParEquipe;
-    const teams = generateTeams(studentIds, joueursParEquipe);
-    STATE.teams[classe] = teams;
-    STATE.poules[classe] = generatePoules(teams.map(t=>t.id), taillePoule);
+    data.config = { terrains, taillePoule, joueursParEquipe };
+    data.teams = generateTeams(studentIds, joueursParEquipe);
+    data.poules = generatePoules(data.teams.map(t=>t.id), taillePoule);
   } else {
-    STATE.teams[classe] = [];
-    STATE.poules[classe] = generatePoules(studentIds, taillePoule);
+    data.config = { terrains, taillePoule };
+    data.teams = [];
+    data.poules = generatePoules(studentIds, taillePoule);
   }
-  STATE.classConfig[classe] = cfg;
-  STATE.matches[classe] = [];
+  data.matches = [];
   saveState();
-  renderClassTab(classe);
+  renderActivityTab(activite);
   renderGeneral();
 }
 
-function moveParticipant(classe, participantId, targetPouleId){
-  const poules = STATE.poules[classe] || [];
-  poules.forEach(p=>{ p.members = p.members.filter(id=>id!==participantId); });
-  const target = poules.find(p=>p.id===targetPouleId);
+function moveParticipant(activite, participantId, targetPouleId){
+  const data = STATE.activityData[activite];
+  data.poules.forEach(p=>{ p.members = p.members.filter(id=>id!==participantId); });
+  const target = data.poules.find(p=>p.id===targetPouleId);
   if(target) target.members.push(participantId);
-  STATE.matches[classe] = [];
+  data.matches = [];
   saveState();
-  renderClassTab(classe);
+  renderActivityTab(activite);
   renderGeneral();
 }
-function moveStudentTeam(classe, studentId, targetTeamId){
-  const teams = STATE.teams[classe] || [];
-  teams.forEach(t=>{ t.memberIds = t.memberIds.filter(id=>id!==studentId); });
-  const target = teams.find(t=>t.id===targetTeamId);
+function moveStudentTeam(activite, studentId, targetTeamId){
+  const data = STATE.activityData[activite];
+  data.teams.forEach(t=>{ t.memberIds = t.memberIds.filter(id=>id!==studentId); });
+  const target = data.teams.find(t=>t.id===targetTeamId);
   if(target) target.memberIds.push(studentId);
-  STATE.matches[classe] = [];
+  data.matches = [];
   saveState();
-  renderClassTab(classe);
+  renderActivityTab(activite);
   renderGeneral();
 }
-function renameTeam(classe, teamId, newName){
-  const t = (STATE.teams[classe]||[]).find(t=>t.id===teamId);
+function renameTeam(activite, teamId, newName){
+  const data = STATE.activityData[activite];
+  const t = data.teams.find(t=>t.id===teamId);
   if(t){ t.nom = newName || t.nom; saveState(); renderGeneral(); }
 }
 
@@ -468,65 +457,138 @@ function roundRobinRounds(participants){
   return rounds;
 }
 
-function onGenererMatchs(classe){
-  const cfg = STATE.classConfig[classe];
-  const poules = STATE.poules[classe] || [];
-  if(!cfg || !poules.length){ alert("Générez d'abord les poules."); return; }
-  const pouleRounds = poules.map(p => roundRobinRounds(p.members));
+function onGenererMatchs(activite){
+  const data = STATE.activityData[activite];
+  if(!data.poules.length){ alert("Générez d'abord les poules."); return; }
+  const pouleRounds = data.poules.map(p => roundRobinRounds(p.members));
   const maxRounds = Math.max(0, ...pouleRounds.map(r=>r.length));
   const matches = [];
   for(let round=0; round<maxRounds; round++){
     let counter = 0;
-    poules.forEach((p, pi)=>{
+    data.poules.forEach((p, pi)=>{
       const pairs = pouleRounds[pi][round] || [];
       pairs.forEach(([a,b])=>{
-        const table = (counter % cfg.terrains) + 1;
-        const vague = Math.floor(counter / cfg.terrains) + 1;
+        const table = (counter % data.config.terrains) + 1;
+        const vague = Math.floor(counter / data.config.terrains) + 1;
         matches.push({ poule:p.nom, tour:round+1, vague, table, a, b });
         counter++;
       });
     });
   }
-  STATE.matches[classe] = matches;
+  data.matches = matches;
   saveState();
-  renderClassTab(classe);
+  renderActivityTab(activite);
+}
+
+/* ------------------------------------------------------- DEFIS HASARD - */
+function addWin(activite, studentId){
+  const data = STATE.activityData[activite];
+  data.defisHasard.wins[studentId] = (data.defisHasard.wins[studentId]||0) + 1;
+  saveState();
+  renderActivityTab(activite);
+  renderGeneral();
+}
+function undoWin(activite, studentId){
+  const data = STATE.activityData[activite];
+  const cur = data.defisHasard.wins[studentId]||0;
+  if(cur>0) data.defisHasard.wins[studentId] = cur - 1;
+  saveState();
+  renderActivityTab(activite);
+  renderGeneral();
+}
+function resetDefisHasard(activite){
+  if(!confirm('Remettre à zéro le compteur de victoires (nouvelle séance) ?')) return;
+  const data = STATE.activityData[activite];
+  data.defisHasard.wins = {};
+  data.seanceNumero = (data.seanceNumero||1) + 1;
+  saveState();
+  renderActivityTab(activite);
+  renderGeneral();
+}
+
+/* --------------------------------------------------- DEFIS CLASSEMENT - */
+// Apparie les élèves ayant le même nombre de victoires. Le surplus impair
+// d'un groupe est reporté sur le groupe de victoires immédiatement supérieur ;
+// s'il en reste un tout seul à la fin, il est exempté ce tour (bye).
+function genererTourClassement(activite){
+  const data = STATE.activityData[activite];
+  const dc = data.defisClassement;
+  if(dc.currentRound.some(m=>!m.winner)){
+    if(!confirm('Certains matchs du tour actuel n\'ont pas de vainqueur enregistré. Générer un nouveau tour quand même ?')) return;
+  }
+  const students = STATE.allStudents.filter(s=>s.classe===data.classe).map(s=>s.id);
+  const groups = {};
+  students.forEach(id=>{
+    const w = dc.wins[id]||0;
+    (groups[w] = groups[w]||[]).push(id);
+  });
+  const sortedKeys = Object.keys(groups).map(Number).sort((a,b)=>a-b);
+  let leftover = null;
+  const pairs = [];
+  sortedKeys.forEach(k=>{
+    let pool = shuffleArray(groups[k]);
+    if(leftover){ pool = [leftover, ...pool]; leftover = null; }
+    while(pool.length>=2){ pairs.push([pool.shift(), pool.shift()]); }
+    if(pool.length===1){ leftover = pool[0]; }
+  });
+  dc.byes = leftover ? [leftover] : [];
+  dc.currentRound = pairs.map(([a,b])=>({a,b,winner:null}));
+  dc.roundNumber = (dc.roundNumber||0) + 1;
+  saveState();
+  renderActivityTab(activite);
+}
+function enregistrerVainqueur(activite, matchIndex, winnerId){
+  const data = STATE.activityData[activite];
+  const dc = data.defisClassement;
+  const match = dc.currentRound[matchIndex];
+  if(!match) return;
+  if(match.winner === winnerId){
+    match.winner = null; // reclique sur le même = annule
+  } else {
+    if(match.winner) dc.wins[match.winner] = Math.max(0, (dc.wins[match.winner]||0) - 1);
+    match.winner = winnerId;
+    dc.wins[winnerId] = (dc.wins[winnerId]||0) + 1;
+  }
+  saveState();
+  renderActivityTab(activite);
+  renderGeneral();
+}
+function resetClassement(activite){
+  if(!confirm('Remettre à zéro le classement et les tours (nouvelle séance) ?')) return;
+  const data = STATE.activityData[activite];
+  data.defisClassement = { wins:{}, currentRound:[], byes:[], roundNumber:0 };
+  data.seanceNumero = (data.seanceNumero||1) + 1;
+  saveState();
+  renderActivityTab(activite);
+  renderGeneral();
+}
+function setSeanceNumero(activite, valeur){
+  const n = parseInt(valeur, 10);
+  STATE.activityData[activite].seanceNumero = (n && n>0) ? n : 1;
+  saveState();
+  renderActivityTab(activite);
 }
 
 /* --------------------------------------------------------- RENDERING -- */
 function renderTabs(){
   const nav = document.getElementById('tabsNav');
-  const tabs = [{id:'general', label:'Général'}, ...STATE.classesImported.map(c=>({id:c, label:c}))];
-  nav.innerHTML = tabs.map(t=>`<button data-tab="${t.id}" class="${t.id===currentTab?'active':''}">${t.label}</button>`).join('');
+  const tabs = [{id:'general', label:'Général', icon:''}, ...Object.keys(ACTIVITIES).map(a=>({id:a, label:a, icon:ACTIVITIES[a].icon}))];
+  nav.innerHTML = tabs.map(t=>`<button data-tab="${t.id}" class="${t.id===currentTab?'active':''}">${t.icon?t.icon+' ':''}${t.label}</button>`).join('');
   nav.querySelectorAll('button').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       currentTab = btn.dataset.tab;
       nav.querySelectorAll('button').forEach(b=>b.classList.toggle('active', b===btn));
       document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
-      let panel = document.getElementById('panel-'+slug(currentTab));
-      if(!panel){
-        panel = document.createElement('div');
-        panel.className = 'panel';
-        panel.id = 'panel-'+slug(currentTab);
-        document.querySelector('main').appendChild(panel);
-      }
-      panel.classList.add('active');
-      if(currentTab==='general') renderGeneral(); else renderClassTab(currentTab);
+      const panel = document.getElementById('panel-'+slug(currentTab));
+      if(panel) panel.classList.add('active');
+      if(currentTab==='general') renderGeneral(); else renderActivityTab(currentTab);
     });
-  });
-  // s'assure que chaque classe importée a bien un panel dans le DOM
-  STATE.classesImported.forEach(c=>{
-    if(!document.getElementById('panel-'+slug(c))){
-      const panel = document.createElement('div');
-      panel.className = 'panel';
-      panel.id = 'panel-'+slug(c);
-      document.querySelector('main').appendChild(panel);
-    }
   });
 }
 
 function renderAll(){
   renderGeneral();
-  STATE.classesImported.forEach(c=>renderClassTab(c));
+  Object.keys(ACTIVITIES).forEach(a=>renderActivityTab(a));
 }
 
 /* Générique : tableau triable/filtrable */
@@ -574,7 +636,7 @@ function buildTable(tableId, columns, rows){
     return `<tr>${cells}</tr>`;
   }).join('') : `<tr><td colspan="${columns.length}" class="empty-state">Aucun élève ne correspond.</td></tr>`;
 
-  const html = `
+  return `
     <div class="table-wrap">
       <table>
         <thead>
@@ -584,7 +646,6 @@ function buildTable(tableId, columns, rows){
         <tbody>${bodyRows}</tbody>
       </table>
     </div>`;
-  return html;
 }
 function wireTable(container, tableId, columns, rerender){
   const st = tableState[tableId];
@@ -606,151 +667,253 @@ function wireTable(container, tableId, columns, rerender){
 /* ---- Général ---- */
 function renderGeneral(){
   const panel = document.getElementById('panel-general');
-  if(!STATE.students.length){
+  const activeStudents = getActiveStudents();
+  const loadBtn = `<button class="btn" id="btnChargerListe">📥 ${STATE.allStudents.length?'Recharger':'Charger'} la liste des élèves du collège</button>`;
+
+  if(!STATE.allStudents.length){
     panel.innerHTML = `
       <div class="card">
-        <div class="toolbar">
-          <div></div>
-          <button class="btn" id="btnImport">📥 Importer depuis Google Sheet</button>
-        </div>
-        <div class="empty-state">Aucun élève importé pour l'instant. Cliquez sur "Importer depuis Google Sheet" pour commencer.</div>
+        <div class="toolbar"><div></div>${loadBtn}</div>
+        <div class="empty-state">Aucune liste chargée. Cliquez sur le bouton pour récupérer les élèves du collège, puis choisissez une classe dans chaque onglet d'activité.</div>
       </div>`;
-    document.getElementById('btnImport').addEventListener('click', openImportModal);
+    document.getElementById('btnChargerListe').addEventListener('click', onChargerListe);
+    return;
+  }
+
+  if(!activeStudents.length){
+    panel.innerHTML = `
+      <div class="card">
+        <div class="toolbar"><div class="muted">${STATE.allStudents.length} élève(s) disponible(s) dans ${new Set(STATE.allStudents.map(s=>s.classe)).size} classe(s)</div>${loadBtn}</div>
+        <div class="empty-state">Aucune classe encore choisie. Rendez-vous dans un onglet d'activité pour en sélectionner une.</div>
+      </div>`;
+    document.getElementById('btnChargerListe').addEventListener('click', onChargerListe);
     return;
   }
 
   const columns = [
     {key:'nomPrenom', label:'Nom Prénom', getValue:r=>r.nomPrenom},
-    {key:'classe', label:'Classe', getValue:r=>r.classe, filterType:'select', filterOptions:STATE.classesImported},
+    {key:'classe', label:'Classe', getValue:r=>r.classe, filterType:'select', filterOptions:[...new Set(activeStudents.map(s=>s.classe))].sort((a,b)=>a.localeCompare(b,'fr'))},
     {key:'sexe', label:'Sexe', getValue:r=>r.sexe, render:r=>sexeBadge(r.sexe), filterType:'select', filterOptions:['F','G']},
-    {key:'activite', label:'Activité', getValue:r=>(STATE.classConfig[r.classe]||{}).activite || '', filterType:'select', filterOptions:Object.keys(ACTIVITIES)},
-    {key:'poule', label:'Poule', getValue:r=>getPouleLabel(r)},
+    {key:'activite', label:'Activité', getValue:r=>getStudentAssignment(r).activite, filterType:'select', filterOptions:Object.keys(ACTIVITIES)},
+    {key:'poule', label:'Poule', getValue:r=>getStudentAssignment(r).poule},
   ];
 
-  const html = buildTable('general', columns, STATE.students);
+  const html = buildTable('general', columns, activeStudents);
   panel.innerHTML = `
     <div class="card">
-      <div class="toolbar">
-        <div></div>
-        <button class="btn" id="btnImport">📥 Importer depuis Google Sheet</button>
-      </div>
+      <div class="toolbar"><div class="muted">${STATE.allStudents.length} élève(s) chargé(s) au total</div>${loadBtn}</div>
       ${html}
     </div>`;
   wireTable(panel, 'general', columns, renderGeneral);
-  document.getElementById('btnImport').addEventListener('click', openImportModal);
+  document.getElementById('btnChargerListe').addEventListener('click', onChargerListe);
 }
 
-/* ---- Onglet de classe ---- */
-function renderClassTab(classe){
-  const domId = 'panel-' + slug(classe);
-  let panel = document.getElementById(domId);
-  if(!panel){
-    panel = document.createElement('div');
-    panel.className = 'panel';
-    panel.id = domId;
-    document.querySelector('main').appendChild(panel);
-  }
-  const students = STATE.students.filter(s=>s.classe===classe);
-  const cfg = STATE.classConfig[classe] || {};
-  const act = ACTIVITIES[cfg.activite];
-  const filles = students.filter(s=>s.sexe==='F').length;
-  const garcons = students.filter(s=>s.sexe==='G').length;
+/* ---- Onglet d'activité ---- */
+function renderActivityTab(activite){
+  const panel = document.getElementById('panel-'+slug(activite));
+  if(!panel) return;
+  const act = ACTIVITIES[activite];
+  const data = STATE.activityData[activite];
+  const classesDisponibles = [...new Set(STATE.allStudents.map(s=>s.classe))].sort((a,b)=>a.localeCompare(b,'fr'));
 
-  let configFieldsHtml = '';
-  if(cfg.activite && act){
-    configFieldsHtml = `
-      <div class="field">
-        <label>${act.terrainLabel} disponibles</label>
-        <input type="number" id="cfgTerrains" min="${act.min}" max="${act.max}" value="${cfg.terrains || act.min}">
-        <div class="hint">de ${act.min} à ${act.max}</div>
-      </div>`;
-    if(act.type === 'equipe'){
-      configFieldsHtml += `
+  let html = `
+    <div class="card">
+      <h3>${act.icon} ${activite}</h3>
+      <div class="config-grid">
         <div class="field">
-          <label>Joueurs par équipe</label>
-          <input type="number" id="cfgJoueursEquipe" min="2" max="15" value="${cfg.joueursParEquipe || 4}">
+          <label>Classe</label>
+          <select id="selectClasse" ${!classesDisponibles.length?'disabled':''}>
+            <option value="">— Choisir —</option>
+            ${classesDisponibles.map(c=>`<option value="${c}" ${data.classe===c?'selected':''}>${c}</option>`).join('')}
+          </select>
         </div>
-        <div class="field">
-          <label>Équipes par poule</label>
-          <input type="number" id="cfgTaillePoule" min="${act.pouleMin}" max="${act.pouleMax}" value="${cfg.taillePoule || act.pouleMin}">
-          <div class="hint">de ${act.pouleMin} à ${act.pouleMax}</div>
+      </div>
+      <button class="btn" id="btnImporterClasse" ${!classesDisponibles.length?'disabled':''}>Charger cette classe</button>
+      ${!classesDisponibles.length ? '<div class="hint">Chargez d\'abord la liste des élèves depuis l\'onglet Général.</div>' : ''}
+    </div>`;
+
+  if(data.classe){
+    const students = STATE.allStudents.filter(s=>s.classe===data.classe);
+    const filles = students.filter(s=>s.sexe==='F').length;
+    const garcons = students.filter(s=>s.sexe==='G').length;
+
+    html += `
+      <div class="chip-row">
+        <div class="chip" style="background:var(--c1)"><b>${students.length}</b>Élèves</div>
+        <div class="chip" style="background:var(--c3)"><b>${filles}</b>Filles</div>
+        <div class="chip" style="background:var(--c6)"><b>${garcons}</b>Garçons</div>
+      </div>`;
+
+    if(!act.defisAllowed && !data.tournamentType){
+      data.tournamentType = 'poule';
+      saveState();
+    }
+
+    html += `
+      <div class="card">
+        <div class="config-grid">
+          <div class="field" style="max-width:160px;">
+            <label>Numéro de séance</label>
+            <input type="number" id="inputSeance" min="1" value="${data.seanceNumero||1}">
+          </div>
+        </div>
+      </div>`;
+
+    if(act.defisAllowed){
+      html += `
+        <div class="card">
+          <h3>Type de tournoi</h3>
+          <div class="config-grid">
+            <button class="btn ${data.tournamentType==='poule'?'':'ghost'}" data-tournament-type="poule">🏆 Par poule</button>
+            <button class="btn ${data.tournamentType==='defisClassement'?'':'ghost'}" data-tournament-type="defisClassement">📈 Défis classement progressif</button>
+            <button class="btn ${data.tournamentType==='defisHasard'?'':'ghost'}" data-tournament-type="defisHasard">🎲 Défis hasard</button>
+          </div>
         </div>`;
-    } else {
-      configFieldsHtml += `
-        <div class="field">
-          <label>Joueurs par poule</label>
-          <input type="number" id="cfgTaillePoule" min="${act.pouleMin}" max="${act.pouleMax}" value="${cfg.taillePoule || act.pouleMin}">
-          <div class="hint">de ${act.pouleMin} à ${act.pouleMax}</div>
-        </div>`;
+    }
+
+    if(data.tournamentType === 'poule'){
+      html += renderPouleConfigCard(activite);
+      html += renderTeamsSection(activite);
+      html += renderPoulesSection(activite);
+      html += renderMatchesSection(activite);
+    } else if(data.tournamentType === 'defisHasard'){
+      html += renderDefisHasardSection(activite);
+    } else if(data.tournamentType === 'defisClassement'){
+      html += renderDefisClassementSection(activite);
     }
   }
 
-  panel.innerHTML = `
-    <div class="chip-row">
-      <div class="chip" style="background:var(--c1)"><b>${students.length}</b>Élèves</div>
-      <div class="chip" style="background:var(--c3)"><b>${filles}</b>Filles</div>
-      <div class="chip" style="background:var(--c6)"><b>${garcons}</b>Garçons</div>
-    </div>
+  panel.innerHTML = html;
 
-    <div class="card">
-      <h3>⚙️ Configuration du tournoi</h3>
-      <div class="config-grid">
-        <div class="field">
-          <label>Activité</label>
-          <select id="cfgActivite">
-            <option value="">— Choisir —</option>
-            ${Object.keys(ACTIVITIES).map(a=>`<option value="${a}" ${cfg.activite===a?'selected':''}>${ACTIVITIES[a].icon} ${a}</option>`).join('')}
-          </select>
-        </div>
-        ${configFieldsHtml}
-      </div>
-      <button class="btn" id="btnGenererPoules">🎲 Générer les poules</button>
-    </div>
+  const inputSeance = document.getElementById('inputSeance');
+  if(inputSeance) inputSeance.addEventListener('change', ()=>setSeanceNumero(activite, inputSeance.value));
+  const inputDefisTerrains = document.getElementById('cfgDefisTerrains');
+  if(inputDefisTerrains){
+    inputDefisTerrains.addEventListener('change', ()=>{
+      data.defisTerrains = parseInt(inputDefisTerrains.value, 10) || 0;
+      saveState();
+    });
+  }
 
-    ${renderTeamsSection(classe)}
-    ${renderPoulesSection(classe)}
-    ${renderMatchesSection(classe)}
-  `;
+  if(classesDisponibles.length){
+    document.getElementById('btnImporterClasse').addEventListener('click', ()=>{
+      const classe = document.getElementById('selectClasse').value;
+      if(!classe){ alert('Choisissez une classe.'); return; }
+      if(data.classe && data.classe !== classe){
+        if(!confirm('Changer de classe effacera la configuration actuelle de cet onglet. Continuer ?')) return;
+      }
+      STATE.activityData[activite] = defaultActivityData();
+      STATE.activityData[activite].classe = classe;
+      saveState();
+      renderActivityTab(activite);
+      renderGeneral();
+    });
+  }
 
-  document.getElementById('cfgActivite').addEventListener('change', ()=>{
-    const activite = document.getElementById('cfgActivite').value;
-    STATE.classConfig[classe] = Object.assign({}, STATE.classConfig[classe], {activite});
-    renderClassTab(classe);
+  panel.querySelectorAll('[data-tournament-type]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      data.tournamentType = btn.dataset.tournamentType;
+      saveState();
+      renderActivityTab(activite);
+    });
   });
-  document.getElementById('btnGenererPoules').addEventListener('click', ()=>onGenererPoules(classe));
+  const btnPoules = document.getElementById('btnGenererPoules');
+  if(btnPoules) btnPoules.addEventListener('click', ()=>onGenererPoules(activite));
+  const btnMatchs = document.getElementById('btnGenererMatchs');
+  if(btnMatchs) btnMatchs.addEventListener('click', ()=>onGenererMatchs(activite));
 
   panel.querySelectorAll('[data-move-student]').forEach(sel=>{
-    sel.addEventListener('change', ()=>moveStudentTeam(classe, sel.dataset.moveStudent, sel.value));
+    sel.addEventListener('change', ()=>moveStudentTeam(activite, sel.dataset.moveStudent, sel.value));
   });
   panel.querySelectorAll('[data-move-participant]').forEach(sel=>{
-    sel.addEventListener('change', ()=>moveParticipant(classe, sel.dataset.moveParticipant, sel.value));
+    sel.addEventListener('change', ()=>moveParticipant(activite, sel.dataset.moveParticipant, sel.value));
   });
   panel.querySelectorAll('[data-team-name]').forEach(input=>{
-    input.addEventListener('change', ()=>renameTeam(classe, input.dataset.teamName, input.value.trim()));
+    input.addEventListener('change', ()=>renameTeam(activite, input.dataset.teamName, input.value.trim()));
   });
-  const btnMatchs = document.getElementById('btnGenererMatchs');
-  if(btnMatchs) btnMatchs.addEventListener('click', ()=>onGenererMatchs(classe));
+
+  panel.querySelectorAll('.defis-row').forEach(tr=>{
+    tr.addEventListener('click', (e)=>{
+      if(e.target.closest('.defis-undo')) return;
+      addWin(activite, tr.dataset.defisStudent);
+    });
+  });
+  panel.querySelectorAll('[data-defis-undo]').forEach(btn=>{
+    btn.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      undoWin(activite, btn.dataset.defisUndo);
+    });
+  });
+  const btnResetHasard = document.getElementById('btnResetDefisHasard');
+  if(btnResetHasard) btnResetHasard.addEventListener('click', ()=>resetDefisHasard(activite));
+
+  const btnTourSuivant = document.getElementById('btnTourSuivant');
+  if(btnTourSuivant) btnTourSuivant.addEventListener('click', ()=>genererTourClassement(activite));
+  const btnResetClassement = document.getElementById('btnResetClassement');
+  if(btnResetClassement) btnResetClassement.addEventListener('click', ()=>resetClassement(activite));
+  panel.querySelectorAll('[data-set-winner]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const [matchIndex, winnerId] = btn.dataset.setWinner.split('::');
+      enregistrerVainqueur(activite, parseInt(matchIndex,10), winnerId);
+    });
+  });
 }
 
-function renderTeamsSection(classe){
-  const cfg = STATE.classConfig[classe];
-  if(!cfg || cfg.type !== 'equipe') return '';
-  const teams = STATE.teams[classe] || [];
-  if(!teams.length) return '';
+function renderPouleConfigCard(activite){
+  const act = ACTIVITIES[activite];
+  const data = STATE.activityData[activite];
+  const cfg = data.config || {};
+  let fields = `
+    <div class="field">
+      <label>${act.terrainLabel} disponibles</label>
+      <input type="number" id="cfgTerrains" min="${act.pouleTerrainMin}" max="${act.pouleTerrainMax}" value="${cfg.terrains || act.pouleTerrainMin}">
+      <div class="hint">de ${act.pouleTerrainMin} à ${act.pouleTerrainMax}</div>
+    </div>`;
+  if(act.type === 'equipe'){
+    fields += `
+      <div class="field">
+        <label>Joueurs par équipe</label>
+        <input type="number" id="cfgJoueursEquipe" min="2" max="15" value="${cfg.joueursParEquipe || 4}">
+      </div>
+      <div class="field">
+        <label>Équipes par poule</label>
+        <input type="number" id="cfgTaillePoule" min="${act.pouleMin}" max="${act.pouleMax}" value="${cfg.taillePoule || act.pouleMin}">
+        <div class="hint">de ${act.pouleMin} à ${act.pouleMax}</div>
+      </div>`;
+  } else {
+    fields += `
+      <div class="field">
+        <label>Joueurs par poule</label>
+        <input type="number" id="cfgTaillePoule" min="${act.pouleMin}" max="${act.pouleMax}" value="${cfg.taillePoule || act.pouleMin}">
+        <div class="hint">de ${act.pouleMin} à ${act.pouleMax}</div>
+      </div>`;
+  }
+  return `
+    <div class="card">
+      <h3>⚙️ Configuration de la poule</h3>
+      <div class="config-grid">${fields}</div>
+      <button class="btn" id="btnGenererPoules">🎲 Générer les poules</button>
+    </div>`;
+}
+
+function renderTeamsSection(activite){
+  const act = ACTIVITIES[activite];
+  const data = STATE.activityData[activite];
+  if(act.type !== 'equipe' || !data.teams.length) return '';
   return `
     <div class="card">
       <h3>👥 Équipes</h3>
       <div class="teams-grid">
-        ${teams.map(t=>`
+        ${data.teams.map(t=>`
           <div class="team-card">
             <input class="team-name" data-team-name="${t.id}" value="${t.nom}">
             <ul>
               ${t.memberIds.map(mid=>{
-                const student = STATE.students.find(s=>s.id===mid);
+                const student = STATE.allStudents.find(s=>s.id===mid);
                 if(!student) return '';
                 return `<li>${student.nomPrenom}
                   <select data-move-student="${mid}">
-                    ${teams.map(t2=>`<option value="${t2.id}" ${t2.id===t.id?'selected':''}>${t2.nom}</option>`).join('')}
+                    ${data.teams.map(t2=>`<option value="${t2.id}" ${t2.id===t.id?'selected':''}>${t2.nom}</option>`).join('')}
                   </select>
                 </li>`;
               }).join('')}
@@ -760,21 +923,21 @@ function renderTeamsSection(classe){
     </div>`;
 }
 
-function renderPoulesSection(classe){
-  const poules = STATE.poules[classe] || [];
-  if(!poules.length) return '';
+function renderPoulesSection(activite){
+  const data = STATE.activityData[activite];
+  if(!data.poules.length) return '';
   return `
     <div class="card">
       <h3>🏆 Poules</h3>
       <div class="poules-grid">
-        ${poules.map(p=>`
+        ${data.poules.map(p=>`
           <div class="poule-card">
             <h4>${p.nom} (${p.members.length})</h4>
             <ul>
               ${p.members.map(mid=>`
-                <li>${participantLabel(classe, mid)}
+                <li>${participantLabel(activite, mid)}
                   <select data-move-participant="${mid}">
-                    ${poules.map(p2=>`<option value="${p2.id}" ${p2.id===p.id?'selected':''}>${p2.nom}</option>`).join('')}
+                    ${data.poules.map(p2=>`<option value="${p2.id}" ${p2.id===p.id?'selected':''}>${p2.nom}</option>`).join('')}
                   </select>
                 </li>`).join('')}
             </ul>
@@ -784,16 +947,17 @@ function renderPoulesSection(classe){
     </div>`;
 }
 
-function renderMatchesSection(classe){
-  const matches = STATE.matches[classe] || [];
-  if(!matches.length) return '';
-  const sorted = matches.slice().sort((a,b)=> a.tour-b.tour || a.vague-b.vague || a.table-b.table);
+function renderMatchesSection(activite){
+  const data = STATE.activityData[activite];
+  if(!data.matches.length) return '';
+  const act = ACTIVITIES[activite];
+  const sorted = data.matches.slice().sort((a,b)=> a.tour-b.tour || a.vague-b.vague || a.table-b.table);
   const rows = sorted.map(m=>`
     <tr>
       <td><span class="tour-badge">Tour ${m.tour}${m.vague>1?' · Vague '+m.vague:''}</span></td>
-      <td><span class="table-badge">Table/Terrain ${m.table}</span></td>
+      <td><span class="table-badge">${act.terrainLabel.replace(/s$/,'')} ${m.table}</span></td>
       <td><span class="poule-tag">${m.poule}</span></td>
-      <td>${participantLabel(classe, m.a)} <b>vs</b> ${participantLabel(classe, m.b)}</td>
+      <td>${participantLabel(activite, m.a)} <b>vs</b> ${participantLabel(activite, m.b)}</td>
     </tr>`).join('');
   return `
     <div class="card">
@@ -802,7 +966,7 @@ function renderMatchesSection(classe){
         <table class="match-table">
           <thead><tr>
             <th style="background:${PALETTE[6]}">Tour</th>
-            <th style="background:${PALETTE[3]}">Table/Terrain</th>
+            <th style="background:${PALETTE[3]}">${act.terrainLabel}</th>
             <th style="background:${PALETTE[1]}">Poule</th>
             <th style="background:${PALETTE[0]}">Match</th>
           </tr></thead>
@@ -812,20 +976,128 @@ function renderMatchesSection(classe){
     </div>`;
 }
 
-/* -------------------------------------------------------------- INIT -- */
-function wireGlobalEvents(){
-  document.getElementById('importClose').addEventListener('click', closeImportModal);
-  document.getElementById('importCancel').addEventListener('click', closeImportModal);
-  document.getElementById('importConfirm').addEventListener('click', confirmImport);
-  document.getElementById('importOverlay').addEventListener('click', (e)=>{
-    if(e.target.id==='importOverlay') closeImportModal();
-  });
+function renderClassementTable(students, wins){
+  const sorted = students.slice().sort((a,b)=> (wins[b.id]||0) - (wins[a.id]||0));
+  const rows = sorted.map((s,i)=>`
+    <tr>
+      <td><b>${i+1}</b></td>
+      <td>${s.nomPrenom}</td>
+      <td>${wins[s.id]||0}</td>
+    </tr>`).join('');
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th style="background:${PALETTE[0]}">Rang</th>
+          <th style="background:${PALETTE[1]}">Nom Prénom</th>
+          <th style="background:${PALETTE[2]}">Victoires</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+function defisTerrainsFieldHtml(activite){
+  const act = ACTIVITIES[activite];
+  const data = STATE.activityData[activite];
+  return `
+    <div class="config-grid">
+      <div class="field">
+        <label>${act.terrainLabel} disponibles</label>
+        <input type="number" id="cfgDefisTerrains" min="${act.defisTerrainMin}" max="${act.defisTerrainMax}" value="${data.defisTerrains || act.defisTerrainMin}">
+        <div class="hint">de ${act.defisTerrainMin} à ${act.defisTerrainMax}</div>
+      </div>
+    </div>`;
 }
 
+function renderDefisHasardSection(activite){
+  const data = STATE.activityData[activite];
+  const students = STATE.allStudents.filter(s=>s.classe===data.classe);
+  const wins = data.defisHasard.wins || {};
+  const maxWins = Math.max(20, ...students.map(s=>wins[s.id]||0));
+  const cols = Array.from({length:maxWins}, (_,i)=>i+1);
+
+  const rows = students.map(s=>{
+    const w = wins[s.id]||0;
+    const cells = cols.map(c=>`<td class="defis-cell">${c<=w?'✕':''}</td>`).join('');
+    return `
+      <tr class="defis-row" data-defis-student="${s.id}">
+        <td class="defis-name">${s.nomPrenom}
+          <button class="btn small ghost defis-undo" data-defis-undo="${s.id}" title="Annuler la dernière victoire">↩</button>
+        </td>
+        ${cells}
+      </tr>`;
+  }).join('');
+
+  return `
+    <div class="card">
+      <div class="toolbar">
+        <h3>🎲 Défis hasard — Séance ${data.seanceNumero||1} — Nombre de victoires</h3>
+        <button class="btn danger small" id="btnResetDefisHasard">🔄 Nouvelle séance</button>
+      </div>
+      ${defisTerrainsFieldHtml(activite)}
+      <p class="hint">Cliquez sur la ligne d'un élève pour lui ajouter une victoire.</p>
+      <div class="table-wrap">
+        <table class="defis-table">
+          <thead><tr>
+            <th style="background:${PALETTE[0]}">Élève</th>
+            ${cols.map(c=>`<th style="background:${PALETTE[c % PALETTE.length]}">${c}</th>`).join('')}
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <h3>🏅 Classement</h3>
+      ${renderClassementTable(students, wins)}
+    </div>`;
+}
+
+function renderDefisClassementSection(activite){
+  const data = STATE.activityData[activite];
+  const dc = data.defisClassement;
+  const students = STATE.allStudents.filter(s=>s.classe===data.classe);
+  const wins = dc.wins || {};
+
+  const matchCards = dc.currentRound.map((m,i)=>{
+    const nomA = participantLabel(activite, m.a);
+    const nomB = participantLabel(activite, m.b);
+    return `
+      <div class="poule-card">
+        <h4>Match ${i+1} (${wins[m.a]||0} victoire${(wins[m.a]||0)>1?'s':''})</h4>
+        <button class="btn ${m.winner===m.a?'':'ghost'}" data-set-winner="${i}::${m.a}">${nomA}</button>
+        <div class="hint" style="text-align:center;margin:4px 0;">contre</div>
+        <button class="btn ${m.winner===m.b?'':'ghost'}" data-set-winner="${i}::${m.b}">${nomB}</button>
+      </div>`;
+  }).join('');
+
+  const byesHtml = dc.byes.length
+    ? `<p class="hint">Exempté(s) ce tour (effectif impair) : ${dc.byes.map(id=>participantLabel(activite,id)).join(', ')}</p>`
+    : '';
+
+  return `
+    <div class="card">
+      <div class="toolbar">
+        <h3>📈 Défis classement progressif — Séance ${data.seanceNumero||1}${dc.roundNumber ? ' — Tour '+dc.roundNumber : ''}</h3>
+        <div>
+          <button class="btn" id="btnTourSuivant">▶️ ${dc.roundNumber ? 'Tour suivant' : 'Générer le 1er tour'}</button>
+          ${dc.roundNumber ? '<button class="btn danger small" id="btnResetClassement">🔄 Nouvelle séance</button>' : ''}
+        </div>
+      </div>
+      ${defisTerrainsFieldHtml(activite)}
+      <p class="hint">À chaque tour, les élèves ayant le même nombre de victoires s'affrontent. Cliquez sur le nom du vainqueur de chaque match.</p>
+      ${byesHtml}
+      ${dc.currentRound.length ? `<div class="poules-grid">${matchCards}</div>` : `<div class="empty-state">Aucun tour généré pour l'instant.</div>`}
+    </div>
+    <div class="card">
+      <h3>🏅 Classement</h3>
+      ${renderClassementTable(students, wins)}
+    </div>`;
+}
+
+/* -------------------------------------------------------------- INIT -- */
 document.addEventListener('DOMContentLoaded', ()=>{
   loadState();
   renderTabs();
-  wireGlobalEvents();
   renderAll();
 });
 </script>

@@ -82,7 +82,7 @@
   .hint{font-size:.7rem;color:var(--muted);margin-top:3px;}
   .muted{color:var(--muted);font-size:.78rem;}
 
-  /* Séances (sous-onglets) */
+  /* Classes et séances (sous-onglets) */
   .seance-tabs{display:flex;gap:6px;flex-wrap:wrap;align-items:center;}
   .seance-tabs button{
     border:none;background:#f1f5f9;color:var(--muted);padding:7px 14px;border-radius:999px;cursor:pointer;
@@ -90,6 +90,7 @@
   }
   .seance-tabs button:hover{color:var(--ink);}
   .seance-tabs button.active{background:var(--c7);color:#fff;}
+  .classe-tabs button.active{background:var(--c3);}
 
   /* Teams / Poules grids */
   .teams-grid, .poules-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-bottom:14px;}
@@ -121,14 +122,37 @@
   .chip{border-radius:10px;padding:6px 10px;color:#fff;font-size:.72rem;box-shadow:var(--shadow);text-align:center;}
   .chip b{display:block;font-size:1rem;}
 
-  /* Tournoi défis */
+  /* Tournoi défis : colonnes resserrées pour que le nom ne prenne pas toute la place */
+  .defis-table, .classement-table{table-layout:fixed;}
   .defis-table th, .defis-table td{text-align:center;}
-  .defis-name{text-align:left !important;display:flex;align-items:center;gap:8px;white-space:nowrap;}
+  .defis-name{
+    text-align:left !important;display:flex;align-items:center;gap:6px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  }
+  .defis-table th:first-child, .defis-table td:first-child{width:170px;}
   .defis-row{cursor:pointer;}
   .defis-row:hover{background:#dbeafe;}
   .defis-cell{width:26px;font-weight:800;color:var(--ok);}
-  .defis-undo{opacity:.6;}
+  .defis-undo{opacity:.6;flex:0 0 auto;}
   .defis-undo:hover{opacity:1;}
+  .classement-table th:nth-child(1), .classement-table td:nth-child(1){width:60px;}
+  .classement-table th:nth-child(2), .classement-table td:nth-child(2){width:180px;overflow:hidden;text-overflow:ellipsis;}
+  .classement-table th:nth-child(3), .classement-table td:nth-child(3){width:90px;}
+
+  /* Cases à cocher (choix du nombre de tables/terrains) */
+  .field-row-cb{margin-bottom:14px;}
+  .field-row-cb > label{display:block;font-weight:700;font-size:.82rem;margin-bottom:6px;}
+  .cb-group{display:flex;gap:6px;flex-wrap:wrap;}
+  .cb-opt{
+    display:flex;align-items:center;justify-content:center;
+    border:2px solid var(--line);border-radius:8px;padding:8px 12px;cursor:pointer;
+    min-width:40px;text-align:center;background:#f8fafc;transition:.15s;
+  }
+  .cb-opt:hover{border-color:var(--c1);}
+  .cb-opt input{display:none;}
+  .cb-opt .code{font-weight:800;font-size:.85rem;color:var(--ink);}
+  .cb-opt.checked{background:#dbeafe;border-color:var(--c1);box-shadow:0 2px 6px rgba(0,0,0,.08);}
+  .cb-opt.checked .code{color:var(--c1);}
 
   @media (max-width:700px){
     header{padding:10px 14px;}
@@ -171,68 +195,106 @@ const ACTIVITIES = {
   'Tennis de table': {
     icon:'🏓', type:'individuel', terrainLabel:'Tables', defisAllowed:true,
     pouleMin:3, pouleMax:4, pouleTerrainMin:6, pouleTerrainMax:8,
-    defisTerrainMin:6, defisTerrainMax:8,
+    defisTerrainMin:6, defisTerrainMax:8, defaultTerrains:8,
   },
   'Badminton': {
     icon:'🏸', type:'individuel', terrainLabel:'Terrains', defisAllowed:true,
     pouleMin:3, pouleMax:4, pouleTerrainMin:6, pouleTerrainMax:13,
-    defisTerrainMin:6, defisTerrainMax:8,
+    defisTerrainMin:6, defisTerrainMax:8, defaultTerrains:8,
   },
   'Handball': {
     icon:'🤾', type:'equipe', terrainLabel:'Terrains', defisAllowed:false,
-    pouleMin:3, pouleMax:6, pouleTerrainMin:1, pouleTerrainMax:1,
+    pouleMin:3, pouleMax:6, pouleTerrainMin:1, pouleTerrainMax:1, defaultTerrains:1,
   },
   'Ultimate': {
     icon:'🥏', type:'equipe', terrainLabel:'Terrains', defisAllowed:false,
-    pouleMin:3, pouleMax:6, pouleTerrainMin:1, pouleTerrainMax:3,
+    pouleMin:3, pouleMax:6, pouleTerrainMin:1, pouleTerrainMax:3, defaultTerrains:1,
   },
   'Volley': {
     icon:'🏐', type:'equipe', terrainLabel:'Terrains', defisAllowed:false,
-    pouleMin:3, pouleMax:12, pouleTerrainMin:3, pouleTerrainMax:9,
+    pouleMin:3, pouleMax:12, pouleTerrainMin:3, pouleTerrainMax:9, defaultTerrains:3,
   },
 };
 const PALETTE = ['#2563eb','#7c3aed','#db2777','#ea580c','#dc2626','#0891b2','#4f46e5','#b45309','#e11d48','#0ea5e9'];
 
 /* ------------------------------------------------------------ STATE --- */
-function defaultSeance(numero){
+// Hiérarchie : activité -> classes importées (sous-onglet, n'efface pas les
+// autres classes) -> séances (sous-sous-onglet). Le classement des défis
+// (wins) est porté par la classe, pas par la séance, pour assurer la
+// continuité du classement d'une séance à l'autre.
+function defaultSeance(numero, activite){
+  const act = ACTIVITIES[activite];
+  const defaultT = act.defaultTerrains || act.pouleTerrainMin;
   return {
-    numero, tournamentType:'', config:{}, defisTerrains:0, teams:[], poules:[], matches:[],
-    defisHasard:{ wins:{} },
-    defisClassement:{ wins:{}, currentRound:[], byes:[], roundNumber:0 },
+    numero, tournamentType:'', config:{}, defisTerrains:defaultT, pouleTerrains:defaultT,
+    teams:[], poules:[], matches:[],
+    rounds:[], currentRoundIndex:-1, // défis classement progressif uniquement
   };
 }
+function defaultClasseData(classe, activite){
+  return { classe, wins:{}, seances:[defaultSeance(1, activite)], currentSeanceIndex:0 };
+}
 function defaultActivityData(){
-  return { classe:'', seances:[], currentSeanceIndex:0 };
+  return { classes:{}, currentClasse:'' };
 }
 let STATE = {
   allStudents: [],     // {id, nomPrenom, classe, sexe} — toute la liste chargée depuis le Sheet
-  activityData: {},    // activité -> {classe, seances:[...], currentSeanceIndex}
+  activityData: {},    // activité -> { classes: {classeName: classeData}, currentClasse }
 };
 function ensureActivityData(){
   Object.keys(ACTIVITIES).forEach(a=>{
     if(!STATE.activityData[a]) STATE.activityData[a] = defaultActivityData();
-    if(!Array.isArray(STATE.activityData[a].seances)) STATE.activityData[a].seances = [];
-    if(typeof STATE.activityData[a].currentSeanceIndex !== 'number') STATE.activityData[a].currentSeanceIndex = 0;
+    if(!STATE.activityData[a].classes) STATE.activityData[a].classes = {};
+    if(typeof STATE.activityData[a].currentClasse !== 'string') STATE.activityData[a].currentClasse = '';
   });
 }
-function currentSeance(activite){
+function currentClasseData(activite){
   const data = STATE.activityData[activite];
-  if(!data || !data.seances.length) return null;
-  return data.seances[data.currentSeanceIndex] || data.seances[0];
+  if(!data || !data.currentClasse) return null;
+  return data.classes[data.currentClasse] || null;
+}
+function currentSeance(activite){
+  const cd = currentClasseData(activite);
+  if(!cd || !cd.seances.length) return null;
+  return cd.seances[cd.currentSeanceIndex] || cd.seances[0];
+}
+function importerClasseDansActivite(activite, classe){
+  const data = STATE.activityData[activite];
+  if(!data.classes[classe]) data.classes[classe] = defaultClasseData(classe, activite);
+  data.currentClasse = classe;
+  saveState();
+  renderActivityTab(activite);
+  renderGeneral();
+}
+function switchClasse(activite, classe){
+  STATE.activityData[activite].currentClasse = classe;
+  saveState();
+  renderActivityTab(activite);
 }
 function addSeance(activite){
-  const data = STATE.activityData[activite];
-  const numero = data.seances.length ? Math.max(...data.seances.map(s=>s.numero)) + 1 : 1;
-  data.seances.push(defaultSeance(numero));
-  data.currentSeanceIndex = data.seances.length - 1;
+  const cd = currentClasseData(activite);
+  const numero = cd.seances.length ? Math.max(...cd.seances.map(s=>s.numero)) + 1 : 1;
+  cd.seances.push(defaultSeance(numero, activite));
+  cd.currentSeanceIndex = cd.seances.length - 1;
   saveState();
   renderActivityTab(activite);
   renderGeneral();
 }
 function switchSeance(activite, index){
-  STATE.activityData[activite].currentSeanceIndex = index;
+  currentClasseData(activite).currentSeanceIndex = index;
   saveState();
   renderActivityTab(activite);
+}
+function deleteSeance(activite){
+  const cd = currentClasseData(activite);
+  if(!cd.seances.length) return;
+  const seance = cd.seances[cd.currentSeanceIndex];
+  if(!confirm(`Supprimer définitivement la Séance ${seance.numero} et ses matchs/tours ? (le classement des victoires est conservé)`)) return;
+  cd.seances.splice(cd.currentSeanceIndex, 1);
+  cd.currentSeanceIndex = Math.max(0, cd.currentSeanceIndex - 1);
+  saveState();
+  renderActivityTab(activite);
+  renderGeneral();
 }
 
 let currentTab = 'general';
@@ -371,14 +433,13 @@ function exportMatchesExcel(activite){
   exportRowsToExcel(rows, `matchs_${slug(activite)}_seance${seance.numero}.xlsx`, 'Matchs');
 }
 function exportClassementExcel(activite){
-  const data = STATE.activityData[activite];
+  const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
-  if(!seance) return;
-  const students = STATE.allStudents.filter(s=>s.classe===data.classe);
-  const wins = seance.tournamentType==='defisHasard' ? seance.defisHasard.wins : seance.defisClassement.wins;
-  const sorted = students.slice().sort((a,b)=>(wins[b.id]||0)-(wins[a.id]||0));
-  const rows = sorted.map((s,i)=>({ 'Rang':i+1, 'Nom Prénom':s.nomPrenom, 'Victoires':wins[s.id]||0 }));
-  exportRowsToExcel(rows, `classement_${slug(activite)}_seance${seance.numero}.xlsx`, 'Classement');
+  if(!cd || !seance) return;
+  const students = STATE.allStudents.filter(s=>s.classe===cd.classe);
+  const sorted = students.slice().sort((a,b)=>(cd.wins[b.id]||0)-(cd.wins[a.id]||0));
+  const rows = sorted.map((s,i)=>({ 'Rang':i+1, 'Nom Prénom':s.nomPrenom, 'Victoires':cd.wins[s.id]||0 }));
+  exportRowsToExcel(rows, `classement_${slug(activite)}_${slug(cd.classe)}_seance${seance.numero}.xlsx`, 'Classement');
 }
 
 /* ------------------------------------------------------- POULES / EQUIPES */
@@ -412,9 +473,9 @@ function participantLabel(activite, id){
   const s = STATE.allStudents.find(s=>s.id===id);
   return s ? s.nomPrenom : id;
 }
-function getPouleLabelFor(activite, student){
-  const seance = currentSeance(activite);
+function getPouleLabelForClasse(activite, cd, student){
   const act = ACTIVITIES[activite];
+  const seance = cd.seances[cd.currentSeanceIndex] || cd.seances[cd.seances.length-1];
   if(!seance) return '';
   if(seance.tournamentType === 'poule'){
     if(!seance.poules.length) return '';
@@ -427,44 +488,45 @@ function getPouleLabelFor(activite, student){
     const p = seance.poules.find(p=>p.members.includes(team.id));
     return p ? `${p.nom} (${team.nom})` : '';
   }
-  if(seance.tournamentType === 'defisHasard'){
-    const w = seance.defisHasard.wins[student.id] || 0;
-    return `Défis hasard — ${w} victoire${w>1?'s':''}`;
-  }
-  if(seance.tournamentType === 'defisClassement'){
-    const w = seance.defisClassement.wins[student.id] || 0;
-    return `Défis classement — ${w} victoire${w>1?'s':''}`;
+  if(seance.tournamentType === 'defisHasard' || seance.tournamentType === 'defisClassement'){
+    const w = cd.wins[student.id] || 0;
+    const label = seance.tournamentType === 'defisHasard' ? 'Défis hasard' : 'Défis classement';
+    return `${label} — ${w} victoire${w>1?'s':''}`;
   }
   return '';
 }
 function getStudentAssignment(student){
   for(const activite of Object.keys(ACTIVITIES)){
     const data = STATE.activityData[activite];
-    if(data && data.classe === student.classe){
-      return { activite, poule: getPouleLabelFor(activite, student) };
+    const cd = data.classes[student.classe];
+    if(cd){
+      return { activite, poule: getPouleLabelForClasse(activite, cd, student) };
     }
   }
   return { activite:'', poule:'' };
 }
 function getActiveStudents(){
-  const activeClasses = new Set(Object.values(STATE.activityData).map(d=>d.classe).filter(Boolean));
+  const activeClasses = new Set();
+  Object.values(STATE.activityData).forEach(d=>{
+    Object.keys(d.classes).forEach(c=>activeClasses.add(c));
+  });
   return STATE.allStudents.filter(s=>activeClasses.has(s.classe));
 }
 
 function onGenererPoules(activite){
-  const data = STATE.activityData[activite];
+  const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
   const act = ACTIVITIES[activite];
-  if(!data.classe){ alert("Choisissez d'abord une classe."); return; }
+  if(!cd){ alert("Choisissez d'abord une classe."); return; }
   if(!seance){ alert("Créez d'abord une séance."); return; }
-  const terrains = clamp(parseInt(document.getElementById('cfgTerrains').value, 10) || act.pouleTerrainMin, act.pouleTerrainMin, act.pouleTerrainMax);
+  const terrains = clamp(seance.pouleTerrains || act.pouleTerrainMin, act.pouleTerrainMin, act.pouleTerrainMax);
   const taillePoule = clamp(parseInt(document.getElementById('cfgTaillePoule').value, 10) || act.pouleMin, act.pouleMin, act.pouleMax);
 
   if(seance.poules.length){
     if(!confirm('Cela régénère les poules et efface les placements/matchs actuels de cette séance. Continuer ?')) return;
   }
 
-  const studentIds = STATE.allStudents.filter(s=>s.classe===data.classe).map(s=>s.id);
+  const studentIds = STATE.allStudents.filter(s=>s.classe===cd.classe).map(s=>s.id);
 
   if(act.type === 'equipe'){
     const joueursParEquipe = clamp(parseInt(document.getElementById('cfgJoueursEquipe').value, 10) || 4, 2, 15);
@@ -555,36 +617,42 @@ function onGenererMatchs(activite){
 
 /* ------------------------------------------------------- DEFIS HASARD - */
 function addWin(activite, studentId){
-  const seance = currentSeance(activite);
-  seance.defisHasard.wins[studentId] = (seance.defisHasard.wins[studentId]||0) + 1;
+  const cd = currentClasseData(activite);
+  cd.wins[studentId] = (cd.wins[studentId]||0) + 1;
   saveState();
   renderActivityTab(activite);
   renderGeneral();
 }
 function undoWin(activite, studentId){
-  const seance = currentSeance(activite);
-  const cur = seance.defisHasard.wins[studentId]||0;
-  if(cur>0) seance.defisHasard.wins[studentId] = cur - 1;
+  const cd = currentClasseData(activite);
+  const cur = cd.wins[studentId]||0;
+  if(cur>0) cd.wins[studentId] = cur - 1;
   saveState();
   renderActivityTab(activite);
   renderGeneral();
 }
 
 /* --------------------------------------------------- DEFIS CLASSEMENT - */
-// Apparie les élèves ayant le même nombre de victoires. Le surplus impair
+// Apparie les élèves ayant le même nombre de victoires (classement porté par
+// la classe : continuité assurée d'une séance à l'autre). Le surplus impair
 // d'un groupe est reporté sur le groupe de victoires immédiatement supérieur ;
 // s'il en reste un tout seul à la fin, il est exempté ce tour (bye).
+// Un tour peut compter plus de matchs que de tables disponibles : les matchs
+// sont répartis en "vagues" (une vague = autant de matchs simultanés que de
+// tables), et pour chaque match, un élève non-joueur de cette vague est
+// désigné arbitre.
 function genererTourClassement(activite){
-  const data = STATE.activityData[activite];
+  const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
-  const dc = seance.defisClassement;
-  if(dc.currentRound.some(m=>!m.winner)){
+  if(!seance.defisTerrains){ alert('Choisissez le nombre de tables/terrains disponibles.'); return; }
+  const current = seance.rounds[seance.currentRoundIndex];
+  if(current && current.matches.some(m=>!m.winner)){
     if(!confirm('Certains matchs du tour actuel n\'ont pas de vainqueur enregistré. Générer un nouveau tour quand même ?')) return;
   }
-  const students = STATE.allStudents.filter(s=>s.classe===data.classe).map(s=>s.id);
+  const students = STATE.allStudents.filter(s=>s.classe===cd.classe).map(s=>s.id);
   const groups = {};
   students.forEach(id=>{
-    const w = dc.wins[id]||0;
+    const w = cd.wins[id]||0;
     (groups[w] = groups[w]||[]).push(id);
   });
   const sortedKeys = Object.keys(groups).map(Number).sort((a,b)=>a-b);
@@ -596,23 +664,60 @@ function genererTourClassement(activite){
     while(pool.length>=2){ pairs.push([pool.shift(), pool.shift()]); }
     if(pool.length===1){ leftover = pool[0]; }
   });
-  dc.byes = leftover ? [leftover] : [];
-  dc.currentRound = pairs.map(([a,b])=>({a,b,winner:null}));
-  dc.roundNumber = (dc.roundNumber||0) + 1;
+  const byes = leftover ? [leftover] : [];
+
+  const terrains = seance.defisTerrains;
+  const matches = [];
+  for(let i=0; i<pairs.length; i+=terrains){
+    const wavePairs = pairs.slice(i, i+terrains);
+    const vague = Math.floor(i/terrains) + 1;
+    const playing = new Set();
+    wavePairs.forEach(([a,b])=>{ playing.add(a); playing.add(b); });
+    const available = shuffleArray(students.filter(id=>!playing.has(id)));
+    wavePairs.forEach(([a,b], idx)=>{
+      matches.push({
+        a, b, winner:null, table: idx+1, vague,
+        referee: available.length ? available[idx % available.length] : null,
+      });
+    });
+  }
+
+  seance.rounds.push({ numero: seance.rounds.length+1, matches, byes });
+  seance.currentRoundIndex = seance.rounds.length - 1;
   saveState();
   renderActivityTab(activite);
 }
-function enregistrerVainqueur(activite, matchIndex, winnerId){
+function onTourSuivant(activite){
   const seance = currentSeance(activite);
-  const dc = seance.defisClassement;
-  const match = dc.currentRound[matchIndex];
+  if(seance.currentRoundIndex < seance.rounds.length - 1){
+    seance.currentRoundIndex++;
+    saveState();
+    renderActivityTab(activite);
+  } else {
+    genererTourClassement(activite);
+  }
+}
+function tourPrecedent(activite){
+  const seance = currentSeance(activite);
+  if(seance.currentRoundIndex > 0){
+    seance.currentRoundIndex--;
+    saveState();
+    renderActivityTab(activite);
+  }
+}
+function enregistrerVainqueur(activite, matchIndex, winnerId){
+  const cd = currentClasseData(activite);
+  const seance = currentSeance(activite);
+  const round = seance.rounds[seance.currentRoundIndex];
+  if(!round) return;
+  const match = round.matches[matchIndex];
   if(!match) return;
   if(match.winner === winnerId){
     match.winner = null; // reclique sur le même = annule
   } else {
-    if(match.winner) dc.wins[match.winner] = Math.max(0, (dc.wins[match.winner]||0) - 1);
+    if(match.winner) cd.wins[match.winner] = Math.max(0, (cd.wins[match.winner]||0) - 1);
     match.winner = winnerId;
-    dc.wins[winnerId] = (dc.wins[winnerId]||0) + 1;
+    cd.wins[winnerId] = (cd.wins[winnerId]||0) + 1;
   }
   saveState();
   renderActivityTab(activite);
@@ -714,6 +819,42 @@ function wireTable(container, tableId, columns, rerender){
   });
 }
 
+/* Générique : rangée de cases à cocher exclusives pour choisir un nombre */
+function checkboxRangeHtml(groupId, label, min, max, current){
+  const opts = [];
+  for(let v=min; v<=max; v++){
+    const checked = current === v;
+    opts.push(`
+      <label class="cb-opt ${checked?'checked':''}">
+        <input type="checkbox" data-cb-value="${v}" ${checked?'checked':''}>
+        <span class="code">${v}</span>
+      </label>`);
+  }
+  return `
+    <div class="field-row-cb">
+      <label>${label}</label>
+      <div class="cb-group" id="${groupId}">${opts.join('')}</div>
+    </div>`;
+}
+function wireCheckboxRange(groupId, onSelect){
+  const group = document.getElementById(groupId);
+  if(!group) return;
+  const boxes = group.querySelectorAll('input[type=checkbox]');
+  boxes.forEach(input=>{
+    input.addEventListener('change', ()=>{
+      if(input.checked){
+        boxes.forEach(other=>{ if(other!==input) other.checked = false; });
+        onSelect(parseInt(input.dataset.cbValue, 10));
+      } else {
+        onSelect(0);
+      }
+      group.querySelectorAll('.cb-opt').forEach(lbl=>{
+        lbl.classList.toggle('checked', lbl.querySelector('input').checked);
+      });
+    });
+  });
+}
+
 /* ---- Général ---- */
 function renderGeneral(){
   const panel = document.getElementById('panel-general');
@@ -772,16 +913,17 @@ function renderActivityTab(activite){
   const act = ACTIVITIES[activite];
   const data = STATE.activityData[activite];
   const classesDisponibles = [...new Set(STATE.allStudents.map(s=>s.classe))].sort((a,b)=>a.localeCompare(b,'fr'));
+  const classesChargees = Object.keys(data.classes).sort((a,b)=>a.localeCompare(b,'fr'));
 
   let html = `
     <div class="card">
       <h3>${act.icon} ${activite}</h3>
       <div class="config-grid">
         <div class="field">
-          <label>Classe</label>
+          <label>Classe à importer</label>
           <select id="selectClasse" ${!classesDisponibles.length?'disabled':''}>
             <option value="">— Choisir —</option>
-            ${classesDisponibles.map(c=>`<option value="${c}" ${data.classe===c?'selected':''}>${c}</option>`).join('')}
+            ${classesDisponibles.map(c=>`<option value="${c}">${c}</option>`).join('')}
           </select>
         </div>
       </div>
@@ -789,10 +931,18 @@ function renderActivityTab(activite){
       ${!classesDisponibles.length ? '<div class="hint">Chargez d\'abord la liste des élèves depuis l\'onglet Général.</div>' : ''}
     </div>`;
 
-  let seance = null;
+  if(classesChargees.length){
+    html += `
+      <div class="card">
+        <div class="seance-tabs classe-tabs">
+          ${classesChargees.map(c=>`<button class="${c===data.currentClasse?'active':''}" data-classe-select="${c}">${c}</button>`).join('')}
+        </div>
+      </div>`;
+  }
 
-  if(data.classe){
-    const students = STATE.allStudents.filter(s=>s.classe===data.classe);
+  const cd = currentClasseData(activite);
+  if(cd){
+    const students = STATE.allStudents.filter(s=>s.classe===cd.classe);
     const filles = students.filter(s=>s.sexe==='F').length;
     const garcons = students.filter(s=>s.sexe==='G').length;
 
@@ -807,15 +957,18 @@ function renderActivityTab(activite){
       <div class="card">
         <div class="toolbar" style="margin-bottom:0;">
           <div class="seance-tabs">
-            ${data.seances.length
-              ? data.seances.map((s,i)=>`<button class="${i===data.currentSeanceIndex?'active':''}" data-seance-index="${i}">Séance ${s.numero}</button>`).join('')
+            ${cd.seances.length
+              ? cd.seances.map((s,i)=>`<button class="${i===cd.currentSeanceIndex?'active':''}" data-seance-index="${i}">Séance ${s.numero}</button>`).join('')
               : '<span class="muted">Aucune séance pour l\'instant</span>'}
           </div>
-          <button class="btn small secondary" id="btnNouvelleSeance">➕ Nouvelle séance</button>
+          <div style="display:flex;gap:6px;">
+            <button class="btn small secondary" id="btnNouvelleSeance">➕ Nouvelle séance</button>
+            ${cd.seances.length ? '<button class="btn small danger" id="btnSupprimerSeance">🗑️ Supprimer la séance</button>' : ''}
+          </div>
         </div>
       </div>`;
 
-    seance = currentSeance(activite);
+    const seance = currentSeance(activite);
     if(seance){
       if(!act.defisAllowed && !seance.tournamentType){
         seance.tournamentType = 'poule';
@@ -853,19 +1006,17 @@ function renderActivityTab(activite){
     document.getElementById('btnImporterClasse').addEventListener('click', ()=>{
       const classe = document.getElementById('selectClasse').value;
       if(!classe){ alert('Choisissez une classe.'); return; }
-      if(data.classe && data.classe !== classe){
-        if(!confirm('Changer de classe effacera toutes les séances de cet onglet. Continuer ?')) return;
-      }
-      STATE.activityData[activite] = defaultActivityData();
-      STATE.activityData[activite].classe = classe;
-      saveState();
-      renderActivityTab(activite);
-      renderGeneral();
+      importerClasseDansActivite(activite, classe);
     });
   }
+  panel.querySelectorAll('[data-classe-select]').forEach(btn=>{
+    btn.addEventListener('click', ()=>switchClasse(activite, btn.dataset.classeSelect));
+  });
 
   const btnNouvelleSeance = document.getElementById('btnNouvelleSeance');
   if(btnNouvelleSeance) btnNouvelleSeance.addEventListener('click', ()=>addSeance(activite));
+  const btnSupprimerSeance = document.getElementById('btnSupprimerSeance');
+  if(btnSupprimerSeance) btnSupprimerSeance.addEventListener('click', ()=>deleteSeance(activite));
   panel.querySelectorAll('[data-seance-index]').forEach(btn=>{
     btn.addEventListener('click', ()=>switchSeance(activite, parseInt(btn.dataset.seanceIndex, 10)));
   });
@@ -878,13 +1029,14 @@ function renderActivityTab(activite){
     });
   });
 
-  const inputDefisTerrains = document.getElementById('cfgDefisTerrains');
-  if(inputDefisTerrains){
-    inputDefisTerrains.addEventListener('change', ()=>{
-      currentSeance(activite).defisTerrains = parseInt(inputDefisTerrains.value, 10) || 0;
-      saveState();
-    });
-  }
+  wireCheckboxRange('pouleTerrainCbGroup', (v)=>{
+    currentSeance(activite).pouleTerrains = v;
+    saveState();
+  });
+  wireCheckboxRange('defisTerrainCbGroup', (v)=>{
+    currentSeance(activite).defisTerrains = v;
+    saveState();
+  });
 
   const btnPoules = document.getElementById('btnGenererPoules');
   if(btnPoules) btnPoules.addEventListener('click', ()=>onGenererPoules(activite));
@@ -919,7 +1071,9 @@ function renderActivityTab(activite){
   });
 
   const btnTourSuivant = document.getElementById('btnTourSuivant');
-  if(btnTourSuivant) btnTourSuivant.addEventListener('click', ()=>genererTourClassement(activite));
+  if(btnTourSuivant) btnTourSuivant.addEventListener('click', ()=>onTourSuivant(activite));
+  const btnTourPrecedent = document.getElementById('btnTourPrecedent');
+  if(btnTourPrecedent) btnTourPrecedent.addEventListener('click', ()=>tourPrecedent(activite));
   panel.querySelectorAll('[data-set-winner]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const [matchIndex, winnerId] = btn.dataset.setWinner.split('::');
@@ -932,35 +1086,34 @@ function renderPouleConfigCard(activite){
   const act = ACTIVITIES[activite];
   const seance = currentSeance(activite);
   const cfg = seance.config || {};
-  let fields = `
-    <div class="field">
-      <label>${act.terrainLabel} disponibles</label>
-      <input type="number" id="cfgTerrains" min="${act.pouleTerrainMin}" max="${act.pouleTerrainMax}" value="${cfg.terrains || act.pouleTerrainMin}">
-      <div class="hint">de ${act.pouleTerrainMin} à ${act.pouleTerrainMax}</div>
-    </div>`;
+  let fields = checkboxRangeHtml('pouleTerrainCbGroup', act.terrainLabel+' disponibles', act.pouleTerrainMin, act.pouleTerrainMax, seance.pouleTerrains || act.pouleTerrainMin);
   if(act.type === 'equipe'){
     fields += `
-      <div class="field">
-        <label>Joueurs par équipe</label>
-        <input type="number" id="cfgJoueursEquipe" min="2" max="15" value="${cfg.joueursParEquipe || 4}">
-      </div>
-      <div class="field">
-        <label>Équipes par poule</label>
-        <input type="number" id="cfgTaillePoule" min="${act.pouleMin}" max="${act.pouleMax}" value="${cfg.taillePoule || act.pouleMin}">
-        <div class="hint">de ${act.pouleMin} à ${act.pouleMax}</div>
+      <div class="config-grid">
+        <div class="field">
+          <label>Joueurs par équipe</label>
+          <input type="number" id="cfgJoueursEquipe" min="2" max="15" value="${cfg.joueursParEquipe || 4}">
+        </div>
+        <div class="field">
+          <label>Équipes par poule</label>
+          <input type="number" id="cfgTaillePoule" min="${act.pouleMin}" max="${act.pouleMax}" value="${cfg.taillePoule || act.pouleMin}">
+          <div class="hint">de ${act.pouleMin} à ${act.pouleMax}</div>
+        </div>
       </div>`;
   } else {
     fields += `
-      <div class="field">
-        <label>Joueurs par poule</label>
-        <input type="number" id="cfgTaillePoule" min="${act.pouleMin}" max="${act.pouleMax}" value="${cfg.taillePoule || act.pouleMin}">
-        <div class="hint">de ${act.pouleMin} à ${act.pouleMax}</div>
+      <div class="config-grid">
+        <div class="field">
+          <label>Joueurs par poule</label>
+          <input type="number" id="cfgTaillePoule" min="${act.pouleMin}" max="${act.pouleMax}" value="${cfg.taillePoule || act.pouleMin}">
+          <div class="hint">de ${act.pouleMin} à ${act.pouleMax}</div>
+        </div>
       </div>`;
   }
   return `
     <div class="card">
       <h3>⚙️ Configuration de la poule</h3>
-      <div class="config-grid">${fields}</div>
+      ${fields}
       <button class="btn" id="btnGenererPoules">🎲 Générer les poules</button>
     </div>`;
 }
@@ -1058,7 +1211,7 @@ function renderClassementTable(students, wins){
     </tr>`).join('');
   return `
     <div class="table-wrap">
-      <table>
+      <table class="classement-table">
         <thead><tr>
           <th style="background:${PALETTE[0]}">Rang</th>
           <th style="background:${PALETTE[1]}">Nom Prénom</th>
@@ -1068,24 +1221,13 @@ function renderClassementTable(students, wins){
       </table>
     </div>`;
 }
-function defisTerrainsFieldHtml(activite){
-  const act = ACTIVITIES[activite];
-  const seance = currentSeance(activite);
-  return `
-    <div class="config-grid">
-      <div class="field">
-        <label>${act.terrainLabel} disponibles</label>
-        <input type="number" id="cfgDefisTerrains" min="${act.defisTerrainMin}" max="${act.defisTerrainMax}" value="${seance.defisTerrains || act.defisTerrainMin}">
-        <div class="hint">de ${act.defisTerrainMin} à ${act.defisTerrainMax}</div>
-      </div>
-    </div>`;
-}
 
 function renderDefisHasardSection(activite){
-  const data = STATE.activityData[activite];
+  const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
-  const students = STATE.allStudents.filter(s=>s.classe===data.classe);
-  const wins = seance.defisHasard.wins || {};
+  const act = ACTIVITIES[activite];
+  const students = STATE.allStudents.filter(s=>s.classe===cd.classe);
+  const wins = cd.wins || {};
   const maxWins = Math.max(20, ...students.map(s=>wins[s.id]||0));
   const cols = Array.from({length:maxWins}, (_,i)=>i+1);
 
@@ -1104,7 +1246,7 @@ function renderDefisHasardSection(activite){
   return `
     <div class="card">
       <h3>🎲 Défis hasard — Nombre de victoires</h3>
-      ${defisTerrainsFieldHtml(activite)}
+      ${checkboxRangeHtml('defisTerrainCbGroup', act.terrainLabel+' disponibles', act.defisTerrainMin, act.defisTerrainMax, seance.defisTerrains || act.defisTerrainMin)}
       <p class="hint">Cliquez sur la ligne d'un élève pour lui ajouter une victoire.</p>
       <div class="table-wrap">
         <table class="defis-table">
@@ -1126,38 +1268,49 @@ function renderDefisHasardSection(activite){
 }
 
 function renderDefisClassementSection(activite){
-  const data = STATE.activityData[activite];
+  const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
-  const dc = seance.defisClassement;
-  const students = STATE.allStudents.filter(s=>s.classe===data.classe);
-  const wins = dc.wins || {};
+  const students = STATE.allStudents.filter(s=>s.classe===cd.classe);
+  const wins = cd.wins || {};
+  const act = ACTIVITIES[activite];
+  const round = seance.rounds[seance.currentRoundIndex] || null;
+  const hasWaves = round && round.matches.some(m=>m.vague>1);
 
-  const matchCards = dc.currentRound.map((m,i)=>{
+  const matchCards = round ? round.matches.map((m,i)=>{
     const nomA = participantLabel(activite, m.a);
     const nomB = participantLabel(activite, m.b);
+    const refereeLabel = m.referee ? participantLabel(activite, m.referee) : '—';
     return `
       <div class="poule-card">
-        <h4>Match ${i+1} (${wins[m.a]||0} victoire${(wins[m.a]||0)>1?'s':''})</h4>
+        <h4>${act.terrainLabel.replace(/s$/,'')} ${m.table}${hasWaves ? ' · Vague '+m.vague : ''}</h4>
         <button class="btn ${m.winner===m.a?'':'ghost'}" data-set-winner="${i}::${m.a}">${nomA}</button>
         <div class="hint" style="text-align:center;margin:4px 0;">contre</div>
         <button class="btn ${m.winner===m.b?'':'ghost'}" data-set-winner="${i}::${m.b}">${nomB}</button>
+        <div class="hint" style="margin-top:6px;">🧑‍⚖️ Arbitre : ${refereeLabel}</div>
       </div>`;
-  }).join('');
+  }).join('') : '';
 
-  const byesHtml = dc.byes.length
-    ? `<p class="hint">Exempté(s) ce tour (effectif impair) : ${dc.byes.map(id=>participantLabel(activite,id)).join(', ')}</p>`
+  const byesHtml = round && round.byes.length
+    ? `<p class="hint">Exempté(s) ce tour (effectif impair) : ${round.byes.map(id=>participantLabel(activite,id)).join(', ')}</p>`
     : '';
+
+  const canGoBack = seance.currentRoundIndex > 0;
+  const isLatest = seance.currentRoundIndex >= seance.rounds.length - 1;
+  const suivantLabel = !seance.rounds.length ? 'Générer le 1er tour' : (isLatest ? 'Générer le tour suivant' : 'Tour suivant');
 
   return `
     <div class="card">
       <div class="toolbar">
-        <h3>📈 Défis classement progressif${dc.roundNumber ? ' — Tour '+dc.roundNumber : ''}</h3>
-        <button class="btn" id="btnTourSuivant">▶️ ${dc.roundNumber ? 'Tour suivant' : 'Générer le 1er tour'}</button>
+        <h3>📈 Défis classement progressif${round ? ' — Tour '+round.numero : ''}</h3>
+        <div style="display:flex;gap:6px;">
+          ${canGoBack ? `<button class="btn ghost small" id="btnTourPrecedent">◀ Tour précédent</button>` : ''}
+          <button class="btn" id="btnTourSuivant">▶️ ${suivantLabel}</button>
+        </div>
       </div>
-      ${defisTerrainsFieldHtml(activite)}
-      <p class="hint">À chaque tour, les élèves ayant le même nombre de victoires s'affrontent. Cliquez sur le nom du vainqueur de chaque match.</p>
+      ${checkboxRangeHtml('defisTerrainCbGroup', act.terrainLabel+' disponibles', act.defisTerrainMin, act.defisTerrainMax, seance.defisTerrains || act.defisTerrainMin)}
+      <p class="hint">À chaque tour, les élèves ayant le même nombre de victoires s'affrontent. Cliquez sur le nom du vainqueur de chaque match. S'il y a plus de matchs que de tables, les élèves non-joueurs de la vague officient comme arbitres.</p>
       ${byesHtml}
-      ${dc.currentRound.length ? `<div class="poules-grid">${matchCards}</div>` : `<div class="empty-state">Aucun tour généré pour l'instant.</div>`}
+      ${round ? `<div class="poules-grid">${matchCards}</div>` : `<div class="empty-state">Aucun tour généré pour l'instant.</div>`}
     </div>
     <div class="card">
       <div class="toolbar">

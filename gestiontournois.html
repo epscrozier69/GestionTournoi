@@ -82,6 +82,15 @@
   .hint{font-size:.7rem;color:var(--muted);margin-top:3px;}
   .muted{color:var(--muted);font-size:.78rem;}
 
+  /* Séances (sous-onglets) */
+  .seance-tabs{display:flex;gap:6px;flex-wrap:wrap;align-items:center;}
+  .seance-tabs button{
+    border:none;background:#f1f5f9;color:var(--muted);padding:7px 14px;border-radius:999px;cursor:pointer;
+    font-weight:600;font-size:.8rem;transition:.15s;
+  }
+  .seance-tabs button:hover{color:var(--ink);}
+  .seance-tabs button.active{background:var(--c7);color:#fff;}
+
   /* Teams / Poules grids */
   .teams-grid, .poules-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-bottom:14px;}
   .team-card, .poule-card{
@@ -150,6 +159,7 @@
   <div class="panel" id="panel-volley"></div>
 </main>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 'use strict';
 
@@ -184,22 +194,47 @@ const ACTIVITIES = {
 const PALETTE = ['#2563eb','#7c3aed','#db2777','#ea580c','#dc2626','#0891b2','#4f46e5','#b45309','#e11d48','#0ea5e9'];
 
 /* ------------------------------------------------------------ STATE --- */
-function defaultActivityData(){
+function defaultSeance(numero){
   return {
-    classe:'', seanceNumero:1, tournamentType:'', config:{}, defisTerrains:0, teams:[], poules:[], matches:[],
+    numero, tournamentType:'', config:{}, defisTerrains:0, teams:[], poules:[], matches:[],
     defisHasard:{ wins:{} },
     defisClassement:{ wins:{}, currentRound:[], byes:[], roundNumber:0 },
   };
 }
+function defaultActivityData(){
+  return { classe:'', seances:[], currentSeanceIndex:0 };
+}
 let STATE = {
   allStudents: [],     // {id, nomPrenom, classe, sexe} — toute la liste chargée depuis le Sheet
-  activityData: {},    // activité -> {classe, tournamentType, config, teams, poules, matches, defis}
+  activityData: {},    // activité -> {classe, seances:[...], currentSeanceIndex}
 };
 function ensureActivityData(){
   Object.keys(ACTIVITIES).forEach(a=>{
     if(!STATE.activityData[a]) STATE.activityData[a] = defaultActivityData();
+    if(!Array.isArray(STATE.activityData[a].seances)) STATE.activityData[a].seances = [];
+    if(typeof STATE.activityData[a].currentSeanceIndex !== 'number') STATE.activityData[a].currentSeanceIndex = 0;
   });
 }
+function currentSeance(activite){
+  const data = STATE.activityData[activite];
+  if(!data || !data.seances.length) return null;
+  return data.seances[data.currentSeanceIndex] || data.seances[0];
+}
+function addSeance(activite){
+  const data = STATE.activityData[activite];
+  const numero = data.seances.length ? Math.max(...data.seances.map(s=>s.numero)) + 1 : 1;
+  data.seances.push(defaultSeance(numero));
+  data.currentSeanceIndex = data.seances.length - 1;
+  saveState();
+  renderActivityTab(activite);
+  renderGeneral();
+}
+function switchSeance(activite, index){
+  STATE.activityData[activite].currentSeanceIndex = index;
+  saveState();
+  renderActivityTab(activite);
+}
+
 let currentTab = 'general';
 const tableState = {};
 
@@ -310,6 +345,42 @@ async function onChargerListe(){
   }
 }
 
+/* --------------------------------------------------------- EXCEL export */
+function exportRowsToExcel(rows, filename, sheetName){
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, sheetName || 'Export');
+  XLSX.writeFile(wb, filename);
+}
+function exportGeneralExcel(){
+  const rows = getActiveStudents().map(s=>{
+    const a = getStudentAssignment(s);
+    return { 'Nom Prénom':s.nomPrenom, 'Classe':s.classe, 'Sexe':s.sexe, 'Activité':a.activite, 'Poule':a.poule };
+  });
+  exportRowsToExcel(rows, 'general_tournois.xlsx', 'Général');
+}
+function exportMatchesExcel(activite){
+  const seance = currentSeance(activite);
+  if(!seance || !seance.matches.length) return;
+  const act = ACTIVITIES[activite];
+  const sorted = seance.matches.slice().sort((a,b)=> a.tour-b.tour || a.vague-b.vague || a.table-b.table);
+  const rows = sorted.map(m=>({
+    'Tour':m.tour, 'Vague':m.vague, [act.terrainLabel]:m.table, 'Poule':m.poule,
+    'Participant A':participantLabel(activite, m.a), 'Participant B':participantLabel(activite, m.b),
+  }));
+  exportRowsToExcel(rows, `matchs_${slug(activite)}_seance${seance.numero}.xlsx`, 'Matchs');
+}
+function exportClassementExcel(activite){
+  const data = STATE.activityData[activite];
+  const seance = currentSeance(activite);
+  if(!seance) return;
+  const students = STATE.allStudents.filter(s=>s.classe===data.classe);
+  const wins = seance.tournamentType==='defisHasard' ? seance.defisHasard.wins : seance.defisClassement.wins;
+  const sorted = students.slice().sort((a,b)=>(wins[b.id]||0)-(wins[a.id]||0));
+  const rows = sorted.map((s,i)=>({ 'Rang':i+1, 'Nom Prénom':s.nomPrenom, 'Victoires':wins[s.id]||0 }));
+  exportRowsToExcel(rows, `classement_${slug(activite)}_seance${seance.numero}.xlsx`, 'Classement');
+}
+
 /* ------------------------------------------------------- POULES / EQUIPES */
 function generateTeams(studentIds, joueursParEquipe){
   const shuffled = shuffleArray(studentIds);
@@ -333,35 +404,35 @@ function generatePoules(ids, taillePoule){
 }
 function participantLabel(activite, id){
   const act = ACTIVITIES[activite];
-  const data = STATE.activityData[activite];
-  if(act.type === 'equipe'){
-    const t = data.teams.find(t=>t.id===id);
-    return t ? t.nom : id;
+  const seance = currentSeance(activite);
+  if(act.type === 'equipe' && seance){
+    const t = seance.teams.find(t=>t.id===id);
+    if(t) return t.nom;
   }
   const s = STATE.allStudents.find(s=>s.id===id);
   return s ? s.nomPrenom : id;
 }
 function getPouleLabelFor(activite, student){
-  const data = STATE.activityData[activite];
+  const seance = currentSeance(activite);
   const act = ACTIVITIES[activite];
-  if(!data) return '';
-  if(data.tournamentType === 'poule'){
-    if(!data.poules.length) return '';
+  if(!seance) return '';
+  if(seance.tournamentType === 'poule'){
+    if(!seance.poules.length) return '';
     if(act.type === 'individuel'){
-      const p = data.poules.find(p=>p.members.includes(student.id));
+      const p = seance.poules.find(p=>p.members.includes(student.id));
       return p ? p.nom : '';
     }
-    const team = data.teams.find(t=>t.memberIds.includes(student.id));
+    const team = seance.teams.find(t=>t.memberIds.includes(student.id));
     if(!team) return '';
-    const p = data.poules.find(p=>p.members.includes(team.id));
+    const p = seance.poules.find(p=>p.members.includes(team.id));
     return p ? `${p.nom} (${team.nom})` : '';
   }
-  if(data.tournamentType === 'defisHasard'){
-    const w = data.defisHasard.wins[student.id] || 0;
+  if(seance.tournamentType === 'defisHasard'){
+    const w = seance.defisHasard.wins[student.id] || 0;
     return `Défis hasard — ${w} victoire${w>1?'s':''}`;
   }
-  if(data.tournamentType === 'defisClassement'){
-    const w = data.defisClassement.wins[student.id] || 0;
+  if(seance.tournamentType === 'defisClassement'){
+    const w = seance.defisClassement.wins[student.id] || 0;
     return `Défis classement — ${w} victoire${w>1?'s':''}`;
   }
   return '';
@@ -382,56 +453,58 @@ function getActiveStudents(){
 
 function onGenererPoules(activite){
   const data = STATE.activityData[activite];
+  const seance = currentSeance(activite);
   const act = ACTIVITIES[activite];
   if(!data.classe){ alert("Choisissez d'abord une classe."); return; }
+  if(!seance){ alert("Créez d'abord une séance."); return; }
   const terrains = clamp(parseInt(document.getElementById('cfgTerrains').value, 10) || act.pouleTerrainMin, act.pouleTerrainMin, act.pouleTerrainMax);
   const taillePoule = clamp(parseInt(document.getElementById('cfgTaillePoule').value, 10) || act.pouleMin, act.pouleMin, act.pouleMax);
 
-  if(data.poules.length){
-    if(!confirm('Cela régénère les poules et efface les placements/matchs actuels. Continuer ?')) return;
+  if(seance.poules.length){
+    if(!confirm('Cela régénère les poules et efface les placements/matchs actuels de cette séance. Continuer ?')) return;
   }
 
   const studentIds = STATE.allStudents.filter(s=>s.classe===data.classe).map(s=>s.id);
 
   if(act.type === 'equipe'){
     const joueursParEquipe = clamp(parseInt(document.getElementById('cfgJoueursEquipe').value, 10) || 4, 2, 15);
-    data.config = { terrains, taillePoule, joueursParEquipe };
-    data.teams = generateTeams(studentIds, joueursParEquipe);
-    data.poules = generatePoules(data.teams.map(t=>t.id), taillePoule);
+    seance.config = { terrains, taillePoule, joueursParEquipe };
+    seance.teams = generateTeams(studentIds, joueursParEquipe);
+    seance.poules = generatePoules(seance.teams.map(t=>t.id), taillePoule);
   } else {
-    data.config = { terrains, taillePoule };
-    data.teams = [];
-    data.poules = generatePoules(studentIds, taillePoule);
+    seance.config = { terrains, taillePoule };
+    seance.teams = [];
+    seance.poules = generatePoules(studentIds, taillePoule);
   }
-  data.matches = [];
+  seance.matches = [];
   saveState();
   renderActivityTab(activite);
   renderGeneral();
 }
 
 function moveParticipant(activite, participantId, targetPouleId){
-  const data = STATE.activityData[activite];
-  data.poules.forEach(p=>{ p.members = p.members.filter(id=>id!==participantId); });
-  const target = data.poules.find(p=>p.id===targetPouleId);
+  const seance = currentSeance(activite);
+  seance.poules.forEach(p=>{ p.members = p.members.filter(id=>id!==participantId); });
+  const target = seance.poules.find(p=>p.id===targetPouleId);
   if(target) target.members.push(participantId);
-  data.matches = [];
+  seance.matches = [];
   saveState();
   renderActivityTab(activite);
   renderGeneral();
 }
 function moveStudentTeam(activite, studentId, targetTeamId){
-  const data = STATE.activityData[activite];
-  data.teams.forEach(t=>{ t.memberIds = t.memberIds.filter(id=>id!==studentId); });
-  const target = data.teams.find(t=>t.id===targetTeamId);
+  const seance = currentSeance(activite);
+  seance.teams.forEach(t=>{ t.memberIds = t.memberIds.filter(id=>id!==studentId); });
+  const target = seance.teams.find(t=>t.id===targetTeamId);
   if(target) target.memberIds.push(studentId);
-  data.matches = [];
+  seance.matches = [];
   saveState();
   renderActivityTab(activite);
   renderGeneral();
 }
 function renameTeam(activite, teamId, newName){
-  const data = STATE.activityData[activite];
-  const t = data.teams.find(t=>t.id===teamId);
+  const seance = currentSeance(activite);
+  const t = seance.teams.find(t=>t.id===teamId);
   if(t){ t.nom = newName || t.nom; saveState(); renderGeneral(); }
 }
 
@@ -458,49 +531,40 @@ function roundRobinRounds(participants){
 }
 
 function onGenererMatchs(activite){
-  const data = STATE.activityData[activite];
-  if(!data.poules.length){ alert("Générez d'abord les poules."); return; }
-  const pouleRounds = data.poules.map(p => roundRobinRounds(p.members));
+  const seance = currentSeance(activite);
+  if(!seance || !seance.poules.length){ alert("Générez d'abord les poules."); return; }
+  const pouleRounds = seance.poules.map(p => roundRobinRounds(p.members));
   const maxRounds = Math.max(0, ...pouleRounds.map(r=>r.length));
   const matches = [];
   for(let round=0; round<maxRounds; round++){
     let counter = 0;
-    data.poules.forEach((p, pi)=>{
+    seance.poules.forEach((p, pi)=>{
       const pairs = pouleRounds[pi][round] || [];
       pairs.forEach(([a,b])=>{
-        const table = (counter % data.config.terrains) + 1;
-        const vague = Math.floor(counter / data.config.terrains) + 1;
+        const table = (counter % seance.config.terrains) + 1;
+        const vague = Math.floor(counter / seance.config.terrains) + 1;
         matches.push({ poule:p.nom, tour:round+1, vague, table, a, b });
         counter++;
       });
     });
   }
-  data.matches = matches;
+  seance.matches = matches;
   saveState();
   renderActivityTab(activite);
 }
 
 /* ------------------------------------------------------- DEFIS HASARD - */
 function addWin(activite, studentId){
-  const data = STATE.activityData[activite];
-  data.defisHasard.wins[studentId] = (data.defisHasard.wins[studentId]||0) + 1;
+  const seance = currentSeance(activite);
+  seance.defisHasard.wins[studentId] = (seance.defisHasard.wins[studentId]||0) + 1;
   saveState();
   renderActivityTab(activite);
   renderGeneral();
 }
 function undoWin(activite, studentId){
-  const data = STATE.activityData[activite];
-  const cur = data.defisHasard.wins[studentId]||0;
-  if(cur>0) data.defisHasard.wins[studentId] = cur - 1;
-  saveState();
-  renderActivityTab(activite);
-  renderGeneral();
-}
-function resetDefisHasard(activite){
-  if(!confirm('Remettre à zéro le compteur de victoires (nouvelle séance) ?')) return;
-  const data = STATE.activityData[activite];
-  data.defisHasard.wins = {};
-  data.seanceNumero = (data.seanceNumero||1) + 1;
+  const seance = currentSeance(activite);
+  const cur = seance.defisHasard.wins[studentId]||0;
+  if(cur>0) seance.defisHasard.wins[studentId] = cur - 1;
   saveState();
   renderActivityTab(activite);
   renderGeneral();
@@ -512,7 +576,8 @@ function resetDefisHasard(activite){
 // s'il en reste un tout seul à la fin, il est exempté ce tour (bye).
 function genererTourClassement(activite){
   const data = STATE.activityData[activite];
-  const dc = data.defisClassement;
+  const seance = currentSeance(activite);
+  const dc = seance.defisClassement;
   if(dc.currentRound.some(m=>!m.winner)){
     if(!confirm('Certains matchs du tour actuel n\'ont pas de vainqueur enregistré. Générer un nouveau tour quand même ?')) return;
   }
@@ -538,8 +603,8 @@ function genererTourClassement(activite){
   renderActivityTab(activite);
 }
 function enregistrerVainqueur(activite, matchIndex, winnerId){
-  const data = STATE.activityData[activite];
-  const dc = data.defisClassement;
+  const seance = currentSeance(activite);
+  const dc = seance.defisClassement;
   const match = dc.currentRound[matchIndex];
   if(!match) return;
   if(match.winner === winnerId){
@@ -552,21 +617,6 @@ function enregistrerVainqueur(activite, matchIndex, winnerId){
   saveState();
   renderActivityTab(activite);
   renderGeneral();
-}
-function resetClassement(activite){
-  if(!confirm('Remettre à zéro le classement et les tours (nouvelle séance) ?')) return;
-  const data = STATE.activityData[activite];
-  data.defisClassement = { wins:{}, currentRound:[], byes:[], roundNumber:0 };
-  data.seanceNumero = (data.seanceNumero||1) + 1;
-  saveState();
-  renderActivityTab(activite);
-  renderGeneral();
-}
-function setSeanceNumero(activite, valeur){
-  const n = parseInt(valeur, 10);
-  STATE.activityData[activite].seanceNumero = (n && n>0) ? n : 1;
-  saveState();
-  renderActivityTab(activite);
 }
 
 /* --------------------------------------------------------- RENDERING -- */
@@ -701,11 +751,18 @@ function renderGeneral(){
   const html = buildTable('general', columns, activeStudents);
   panel.innerHTML = `
     <div class="card">
-      <div class="toolbar"><div class="muted">${STATE.allStudents.length} élève(s) chargé(s) au total</div>${loadBtn}</div>
+      <div class="toolbar">
+        <div class="muted">${STATE.allStudents.length} élève(s) chargé(s) au total</div>
+        <div>
+          <button class="btn secondary" id="btnExportGeneral">📊 Exporter Excel</button>
+          ${loadBtn}
+        </div>
+      </div>
       ${html}
     </div>`;
   wireTable(panel, 'general', columns, renderGeneral);
   document.getElementById('btnChargerListe').addEventListener('click', onChargerListe);
+  document.getElementById('btnExportGeneral').addEventListener('click', exportGeneralExcel);
 }
 
 /* ---- Onglet d'activité ---- */
@@ -732,6 +789,8 @@ function renderActivityTab(activite){
       ${!classesDisponibles.length ? '<div class="hint">Chargez d\'abord la liste des élèves depuis l\'onglet Général.</div>' : ''}
     </div>`;
 
+  let seance = null;
+
   if(data.classe){
     const students = STATE.allStudents.filter(s=>s.classe===data.classe);
     const filles = students.filter(s=>s.sexe==='F').length;
@@ -744,63 +803,58 @@ function renderActivityTab(activite){
         <div class="chip" style="background:var(--c6)"><b>${garcons}</b>Garçons</div>
       </div>`;
 
-    if(!act.defisAllowed && !data.tournamentType){
-      data.tournamentType = 'poule';
-      saveState();
-    }
-
     html += `
       <div class="card">
-        <div class="config-grid">
-          <div class="field" style="max-width:160px;">
-            <label>Numéro de séance</label>
-            <input type="number" id="inputSeance" min="1" value="${data.seanceNumero||1}">
+        <div class="toolbar" style="margin-bottom:0;">
+          <div class="seance-tabs">
+            ${data.seances.length
+              ? data.seances.map((s,i)=>`<button class="${i===data.currentSeanceIndex?'active':''}" data-seance-index="${i}">Séance ${s.numero}</button>`).join('')
+              : '<span class="muted">Aucune séance pour l\'instant</span>'}
           </div>
+          <button class="btn small secondary" id="btnNouvelleSeance">➕ Nouvelle séance</button>
         </div>
       </div>`;
 
-    if(act.defisAllowed){
-      html += `
-        <div class="card">
-          <h3>Type de tournoi</h3>
-          <div class="config-grid">
-            <button class="btn ${data.tournamentType==='poule'?'':'ghost'}" data-tournament-type="poule">🏆 Par poule</button>
-            <button class="btn ${data.tournamentType==='defisClassement'?'':'ghost'}" data-tournament-type="defisClassement">📈 Défis classement progressif</button>
-            <button class="btn ${data.tournamentType==='defisHasard'?'':'ghost'}" data-tournament-type="defisHasard">🎲 Défis hasard</button>
-          </div>
-        </div>`;
-    }
+    seance = currentSeance(activite);
+    if(seance){
+      if(!act.defisAllowed && !seance.tournamentType){
+        seance.tournamentType = 'poule';
+        saveState();
+      }
 
-    if(data.tournamentType === 'poule'){
-      html += renderPouleConfigCard(activite);
-      html += renderTeamsSection(activite);
-      html += renderPoulesSection(activite);
-      html += renderMatchesSection(activite);
-    } else if(data.tournamentType === 'defisHasard'){
-      html += renderDefisHasardSection(activite);
-    } else if(data.tournamentType === 'defisClassement'){
-      html += renderDefisClassementSection(activite);
+      if(act.defisAllowed){
+        html += `
+          <div class="card">
+            <h3>Type de tournoi</h3>
+            <div class="config-grid">
+              <button class="btn ${seance.tournamentType==='poule'?'':'ghost'}" data-tournament-type="poule">🏆 Par poule</button>
+              <button class="btn ${seance.tournamentType==='defisClassement'?'':'ghost'}" data-tournament-type="defisClassement">📈 Défis classement progressif</button>
+              <button class="btn ${seance.tournamentType==='defisHasard'?'':'ghost'}" data-tournament-type="defisHasard">🎲 Défis hasard</button>
+            </div>
+          </div>`;
+      }
+
+      if(seance.tournamentType === 'poule'){
+        html += renderPouleConfigCard(activite);
+        html += renderTeamsSection(activite);
+        html += renderPoulesSection(activite);
+        html += renderMatchesSection(activite);
+      } else if(seance.tournamentType === 'defisHasard'){
+        html += renderDefisHasardSection(activite);
+      } else if(seance.tournamentType === 'defisClassement'){
+        html += renderDefisClassementSection(activite);
+      }
     }
   }
 
   panel.innerHTML = html;
-
-  const inputSeance = document.getElementById('inputSeance');
-  if(inputSeance) inputSeance.addEventListener('change', ()=>setSeanceNumero(activite, inputSeance.value));
-  const inputDefisTerrains = document.getElementById('cfgDefisTerrains');
-  if(inputDefisTerrains){
-    inputDefisTerrains.addEventListener('change', ()=>{
-      data.defisTerrains = parseInt(inputDefisTerrains.value, 10) || 0;
-      saveState();
-    });
-  }
 
   if(classesDisponibles.length){
     document.getElementById('btnImporterClasse').addEventListener('click', ()=>{
       const classe = document.getElementById('selectClasse').value;
       if(!classe){ alert('Choisissez une classe.'); return; }
       if(data.classe && data.classe !== classe){
-        if(!confirm('Changer de classe effacera la configuration actuelle de cet onglet. Continuer ?')) return;
+        if(!confirm('Changer de classe effacera toutes les séances de cet onglet. Continuer ?')) return;
       }
       STATE.activityData[activite] = defaultActivityData();
       STATE.activityData[activite].classe = classe;
@@ -810,17 +864,36 @@ function renderActivityTab(activite){
     });
   }
 
+  const btnNouvelleSeance = document.getElementById('btnNouvelleSeance');
+  if(btnNouvelleSeance) btnNouvelleSeance.addEventListener('click', ()=>addSeance(activite));
+  panel.querySelectorAll('[data-seance-index]').forEach(btn=>{
+    btn.addEventListener('click', ()=>switchSeance(activite, parseInt(btn.dataset.seanceIndex, 10)));
+  });
+
   panel.querySelectorAll('[data-tournament-type]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
-      data.tournamentType = btn.dataset.tournamentType;
+      currentSeance(activite).tournamentType = btn.dataset.tournamentType;
       saveState();
       renderActivityTab(activite);
     });
   });
+
+  const inputDefisTerrains = document.getElementById('cfgDefisTerrains');
+  if(inputDefisTerrains){
+    inputDefisTerrains.addEventListener('change', ()=>{
+      currentSeance(activite).defisTerrains = parseInt(inputDefisTerrains.value, 10) || 0;
+      saveState();
+    });
+  }
+
   const btnPoules = document.getElementById('btnGenererPoules');
   if(btnPoules) btnPoules.addEventListener('click', ()=>onGenererPoules(activite));
   const btnMatchs = document.getElementById('btnGenererMatchs');
   if(btnMatchs) btnMatchs.addEventListener('click', ()=>onGenererMatchs(activite));
+  const btnExportMatchs = document.getElementById('btnExportMatchs');
+  if(btnExportMatchs) btnExportMatchs.addEventListener('click', ()=>exportMatchesExcel(activite));
+  const btnExportClassement = document.getElementById('btnExportClassement');
+  if(btnExportClassement) btnExportClassement.addEventListener('click', ()=>exportClassementExcel(activite));
 
   panel.querySelectorAll('[data-move-student]').forEach(sel=>{
     sel.addEventListener('change', ()=>moveStudentTeam(activite, sel.dataset.moveStudent, sel.value));
@@ -844,13 +917,9 @@ function renderActivityTab(activite){
       undoWin(activite, btn.dataset.defisUndo);
     });
   });
-  const btnResetHasard = document.getElementById('btnResetDefisHasard');
-  if(btnResetHasard) btnResetHasard.addEventListener('click', ()=>resetDefisHasard(activite));
 
   const btnTourSuivant = document.getElementById('btnTourSuivant');
   if(btnTourSuivant) btnTourSuivant.addEventListener('click', ()=>genererTourClassement(activite));
-  const btnResetClassement = document.getElementById('btnResetClassement');
-  if(btnResetClassement) btnResetClassement.addEventListener('click', ()=>resetClassement(activite));
   panel.querySelectorAll('[data-set-winner]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const [matchIndex, winnerId] = btn.dataset.setWinner.split('::');
@@ -861,8 +930,8 @@ function renderActivityTab(activite){
 
 function renderPouleConfigCard(activite){
   const act = ACTIVITIES[activite];
-  const data = STATE.activityData[activite];
-  const cfg = data.config || {};
+  const seance = currentSeance(activite);
+  const cfg = seance.config || {};
   let fields = `
     <div class="field">
       <label>${act.terrainLabel} disponibles</label>
@@ -898,13 +967,13 @@ function renderPouleConfigCard(activite){
 
 function renderTeamsSection(activite){
   const act = ACTIVITIES[activite];
-  const data = STATE.activityData[activite];
-  if(act.type !== 'equipe' || !data.teams.length) return '';
+  const seance = currentSeance(activite);
+  if(act.type !== 'equipe' || !seance.teams.length) return '';
   return `
     <div class="card">
       <h3>👥 Équipes</h3>
       <div class="teams-grid">
-        ${data.teams.map(t=>`
+        ${seance.teams.map(t=>`
           <div class="team-card">
             <input class="team-name" data-team-name="${t.id}" value="${t.nom}">
             <ul>
@@ -913,7 +982,7 @@ function renderTeamsSection(activite){
                 if(!student) return '';
                 return `<li>${student.nomPrenom}
                   <select data-move-student="${mid}">
-                    ${data.teams.map(t2=>`<option value="${t2.id}" ${t2.id===t.id?'selected':''}>${t2.nom}</option>`).join('')}
+                    ${seance.teams.map(t2=>`<option value="${t2.id}" ${t2.id===t.id?'selected':''}>${t2.nom}</option>`).join('')}
                   </select>
                 </li>`;
               }).join('')}
@@ -924,20 +993,20 @@ function renderTeamsSection(activite){
 }
 
 function renderPoulesSection(activite){
-  const data = STATE.activityData[activite];
-  if(!data.poules.length) return '';
+  const seance = currentSeance(activite);
+  if(!seance.poules.length) return '';
   return `
     <div class="card">
       <h3>🏆 Poules</h3>
       <div class="poules-grid">
-        ${data.poules.map(p=>`
+        ${seance.poules.map(p=>`
           <div class="poule-card">
             <h4>${p.nom} (${p.members.length})</h4>
             <ul>
               ${p.members.map(mid=>`
                 <li>${participantLabel(activite, mid)}
                   <select data-move-participant="${mid}">
-                    ${data.poules.map(p2=>`<option value="${p2.id}" ${p2.id===p.id?'selected':''}>${p2.nom}</option>`).join('')}
+                    ${seance.poules.map(p2=>`<option value="${p2.id}" ${p2.id===p.id?'selected':''}>${p2.nom}</option>`).join('')}
                   </select>
                 </li>`).join('')}
             </ul>
@@ -948,10 +1017,10 @@ function renderPoulesSection(activite){
 }
 
 function renderMatchesSection(activite){
-  const data = STATE.activityData[activite];
-  if(!data.matches.length) return '';
+  const seance = currentSeance(activite);
+  if(!seance.matches.length) return '';
   const act = ACTIVITIES[activite];
-  const sorted = data.matches.slice().sort((a,b)=> a.tour-b.tour || a.vague-b.vague || a.table-b.table);
+  const sorted = seance.matches.slice().sort((a,b)=> a.tour-b.tour || a.vague-b.vague || a.table-b.table);
   const rows = sorted.map(m=>`
     <tr>
       <td><span class="tour-badge">Tour ${m.tour}${m.vague>1?' · Vague '+m.vague:''}</span></td>
@@ -961,7 +1030,10 @@ function renderMatchesSection(activite){
     </tr>`).join('');
   return `
     <div class="card">
-      <h3>📅 Calendrier des matchs</h3>
+      <div class="toolbar">
+        <h3>📅 Calendrier des matchs</h3>
+        <button class="btn secondary small" id="btnExportMatchs">📊 Exporter Excel</button>
+      </div>
       <div class="table-wrap">
         <table class="match-table">
           <thead><tr>
@@ -998,12 +1070,12 @@ function renderClassementTable(students, wins){
 }
 function defisTerrainsFieldHtml(activite){
   const act = ACTIVITIES[activite];
-  const data = STATE.activityData[activite];
+  const seance = currentSeance(activite);
   return `
     <div class="config-grid">
       <div class="field">
         <label>${act.terrainLabel} disponibles</label>
-        <input type="number" id="cfgDefisTerrains" min="${act.defisTerrainMin}" max="${act.defisTerrainMax}" value="${data.defisTerrains || act.defisTerrainMin}">
+        <input type="number" id="cfgDefisTerrains" min="${act.defisTerrainMin}" max="${act.defisTerrainMax}" value="${seance.defisTerrains || act.defisTerrainMin}">
         <div class="hint">de ${act.defisTerrainMin} à ${act.defisTerrainMax}</div>
       </div>
     </div>`;
@@ -1011,8 +1083,9 @@ function defisTerrainsFieldHtml(activite){
 
 function renderDefisHasardSection(activite){
   const data = STATE.activityData[activite];
+  const seance = currentSeance(activite);
   const students = STATE.allStudents.filter(s=>s.classe===data.classe);
-  const wins = data.defisHasard.wins || {};
+  const wins = seance.defisHasard.wins || {};
   const maxWins = Math.max(20, ...students.map(s=>wins[s.id]||0));
   const cols = Array.from({length:maxWins}, (_,i)=>i+1);
 
@@ -1030,10 +1103,7 @@ function renderDefisHasardSection(activite){
 
   return `
     <div class="card">
-      <div class="toolbar">
-        <h3>🎲 Défis hasard — Séance ${data.seanceNumero||1} — Nombre de victoires</h3>
-        <button class="btn danger small" id="btnResetDefisHasard">🔄 Nouvelle séance</button>
-      </div>
+      <h3>🎲 Défis hasard — Nombre de victoires</h3>
       ${defisTerrainsFieldHtml(activite)}
       <p class="hint">Cliquez sur la ligne d'un élève pour lui ajouter une victoire.</p>
       <div class="table-wrap">
@@ -1047,14 +1117,18 @@ function renderDefisHasardSection(activite){
       </div>
     </div>
     <div class="card">
-      <h3>🏅 Classement</h3>
+      <div class="toolbar">
+        <h3>🏅 Classement</h3>
+        <button class="btn secondary small" id="btnExportClassement">📊 Exporter Excel</button>
+      </div>
       ${renderClassementTable(students, wins)}
     </div>`;
 }
 
 function renderDefisClassementSection(activite){
   const data = STATE.activityData[activite];
-  const dc = data.defisClassement;
+  const seance = currentSeance(activite);
+  const dc = seance.defisClassement;
   const students = STATE.allStudents.filter(s=>s.classe===data.classe);
   const wins = dc.wins || {};
 
@@ -1077,11 +1151,8 @@ function renderDefisClassementSection(activite){
   return `
     <div class="card">
       <div class="toolbar">
-        <h3>📈 Défis classement progressif — Séance ${data.seanceNumero||1}${dc.roundNumber ? ' — Tour '+dc.roundNumber : ''}</h3>
-        <div>
-          <button class="btn" id="btnTourSuivant">▶️ ${dc.roundNumber ? 'Tour suivant' : 'Générer le 1er tour'}</button>
-          ${dc.roundNumber ? '<button class="btn danger small" id="btnResetClassement">🔄 Nouvelle séance</button>' : ''}
-        </div>
+        <h3>📈 Défis classement progressif${dc.roundNumber ? ' — Tour '+dc.roundNumber : ''}</h3>
+        <button class="btn" id="btnTourSuivant">▶️ ${dc.roundNumber ? 'Tour suivant' : 'Générer le 1er tour'}</button>
       </div>
       ${defisTerrainsFieldHtml(activite)}
       <p class="hint">À chaque tour, les élèves ayant le même nombre de victoires s'affrontent. Cliquez sur le nom du vainqueur de chaque match.</p>
@@ -1089,7 +1160,10 @@ function renderDefisClassementSection(activite){
       ${dc.currentRound.length ? `<div class="poules-grid">${matchCards}</div>` : `<div class="empty-state">Aucun tour généré pour l'instant.</div>`}
     </div>
     <div class="card">
-      <h3>🏅 Classement</h3>
+      <div class="toolbar">
+        <h3>🏅 Classement</h3>
+        <button class="btn secondary small" id="btnExportClassement">📊 Exporter Excel</button>
+      </div>
       ${renderClassementTable(students, wins)}
     </div>`;
 }

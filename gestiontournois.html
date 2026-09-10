@@ -139,6 +139,19 @@
   .classement-table th:nth-child(2), .classement-table td:nth-child(2){width:180px;overflow:hidden;text-overflow:ellipsis;}
   .classement-table th:nth-child(3), .classement-table td:nth-child(3){width:90px;}
 
+  /* Présence */
+  .presence-list{display:flex;flex-wrap:wrap;gap:6px;}
+  .presence-chip{
+    border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-size:.75rem;
+    background:#f8fafc;cursor:pointer;color:var(--ink);
+  }
+  .presence-chip.absent{background:#fee2e2;color:var(--bad);border-color:var(--bad);text-decoration:line-through;}
+  .demi-terrain-toggle{
+    display:inline-flex;align-items:center;gap:8px;margin-bottom:10px;font-size:.82rem;font-weight:600;
+    cursor:pointer;background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:8px 12px;
+  }
+  .demi-terrain-toggle input{width:16px;height:16px;}
+
   /* Cases à cocher (choix du nombre de tables/terrains) */
   .field-row-cb{margin-bottom:14px;}
   .field-row-cb > label{display:block;font-weight:700;font-size:.82rem;margin-bottom:6px;}
@@ -227,6 +240,8 @@ function defaultSeance(numero, activite){
   const defaultT = act.defaultTerrains || act.pouleTerrainMin;
   return {
     numero, tournamentType:'', config:{}, defisTerrains:defaultT, pouleTerrains:defaultT,
+    demiTerrain:false, // Badminton uniquement : double la capacité de terrains simultanés
+    absents:[], // ids d'élèves absents/dispensés pour cette séance
     teams:[], poules:[], matches:[],
     rounds:[], currentRoundIndex:-1, // défis classement progressif uniquement
   };
@@ -295,6 +310,13 @@ function deleteSeance(activite){
   saveState();
   renderActivityTab(activite);
   renderGeneral();
+}
+function toggleAbsent(activite, studentId){
+  const seance = currentSeance(activite);
+  const idx = seance.absents.indexOf(studentId);
+  if(idx >= 0) seance.absents.splice(idx, 1); else seance.absents.push(studentId);
+  saveState();
+  renderActivityTab(activite);
 }
 
 let currentTab = 'general';
@@ -453,12 +475,19 @@ function generateTeams(studentIds, joueursParEquipe){
   }
   return teams;
 }
-function generatePoules(ids, taillePoule){
-  const shuffled = shuffleArray(ids);
+// wins fourni (optionnel) : trie par classement décroissant avant de répartir
+// séquentiellement (Poule 1 = meilleurs, dernière poule = moins bons), comme
+// demandé ("Table 1 = meilleurs élèves avec le plus de victoires"). Sans wins,
+// répartition purement aléatoire.
+function generatePoules(ids, taillePoule, wins){
+  let ordered = shuffleArray(ids);
+  if(wins){
+    ordered = ordered.sort((a,b)=> (wins[b]||0) - (wins[a]||0));
+  }
   const poules = [];
   let idx=0, n=1;
-  while(idx < shuffled.length){
-    poules.push({ id:'poule'+n, nom:'Poule '+n, members: shuffled.slice(idx, idx+taillePoule) });
+  while(idx < ordered.length){
+    poules.push({ id:'poule'+n, nom:'Poule '+n, members: ordered.slice(idx, idx+taillePoule) });
     idx += taillePoule; n++;
   }
   return poules;
@@ -526,7 +555,7 @@ function onGenererPoules(activite){
     if(!confirm('Cela régénère les poules et efface les placements/matchs actuels de cette séance. Continuer ?')) return;
   }
 
-  const studentIds = STATE.allStudents.filter(s=>s.classe===cd.classe).map(s=>s.id);
+  const studentIds = STATE.allStudents.filter(s=>s.classe===cd.classe && !seance.absents.includes(s.id)).map(s=>s.id);
 
   if(act.type === 'equipe'){
     const joueursParEquipe = clamp(parseInt(document.getElementById('cfgJoueursEquipe').value, 10) || 4, 2, 15);
@@ -536,7 +565,8 @@ function onGenererPoules(activite){
   } else {
     seance.config = { terrains, taillePoule };
     seance.teams = [];
-    seance.poules = generatePoules(studentIds, taillePoule);
+    // Classement (cd.wins) utilisé pour placer les meilleurs élèves en Poule 1.
+    seance.poules = generatePoules(studentIds, taillePoule, cd.wins);
   }
   seance.matches = [];
   saveState();
@@ -649,7 +679,7 @@ function genererTourClassement(activite){
   if(current && current.matches.some(m=>!m.winner)){
     if(!confirm('Certains matchs du tour actuel n\'ont pas de vainqueur enregistré. Générer un nouveau tour quand même ?')) return;
   }
-  const students = STATE.allStudents.filter(s=>s.classe===cd.classe).map(s=>s.id);
+  const students = STATE.allStudents.filter(s=>s.classe===cd.classe && !seance.absents.includes(s.id)).map(s=>s.id);
   const groups = {};
   students.forEach(id=>{
     const w = cd.wins[id]||0;
@@ -666,7 +696,8 @@ function genererTourClassement(activite){
   });
   const byes = leftover ? [leftover] : [];
 
-  const terrains = seance.defisTerrains;
+  // Badminton : le demi-terrain double la capacité simultanée.
+  const terrains = seance.defisTerrains * (seance.demiTerrain ? 2 : 1);
   const matches = [];
   for(let i=0; i<pairs.length; i+=terrains){
     const wavePairs = pairs.slice(i, i+terrains);
@@ -970,6 +1001,8 @@ function renderActivityTab(activite){
 
     const seance = currentSeance(activite);
     if(seance){
+      html += renderPresenceCard(activite, students, seance);
+
       if(!act.defisAllowed && !seance.tournamentType){
         seance.tournamentType = 'poule';
         saveState();
@@ -1020,6 +1053,9 @@ function renderActivityTab(activite){
   panel.querySelectorAll('[data-seance-index]').forEach(btn=>{
     btn.addEventListener('click', ()=>switchSeance(activite, parseInt(btn.dataset.seanceIndex, 10)));
   });
+  panel.querySelectorAll('[data-toggle-absent]').forEach(btn=>{
+    btn.addEventListener('click', ()=>toggleAbsent(activite, btn.dataset.toggleAbsent));
+  });
 
   panel.querySelectorAll('[data-tournament-type]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
@@ -1037,6 +1073,14 @@ function renderActivityTab(activite){
     currentSeance(activite).defisTerrains = v;
     saveState();
   });
+  const chkDemiTerrain = document.getElementById('chkDemiTerrain');
+  if(chkDemiTerrain){
+    chkDemiTerrain.addEventListener('change', ()=>{
+      currentSeance(activite).demiTerrain = chkDemiTerrain.checked;
+      saveState();
+      renderActivityTab(activite);
+    });
+  }
 
   const btnPoules = document.getElementById('btnGenererPoules');
   if(btnPoules) btnPoules.addEventListener('click', ()=>onGenererPoules(activite));
@@ -1080,6 +1124,20 @@ function renderActivityTab(activite){
       enregistrerVainqueur(activite, parseInt(matchIndex,10), winnerId);
     });
   });
+}
+
+function renderPresenceCard(activite, students, seance){
+  return `
+    <div class="card">
+      <h3>🧍 Présence — Séance ${seance.numero}</h3>
+      <p class="hint">Cliquez sur un élève absent ou dispensé pour l'exclure des poules/défis de cette séance.</p>
+      <div class="presence-list">
+        ${students.map(s=>{
+          const absent = seance.absents.includes(s.id);
+          return `<button class="presence-chip ${absent?'absent':''}" data-toggle-absent="${s.id}">${absent?'🚫':'✅'} ${s.nomPrenom}</button>`;
+        }).join('')}
+      </div>
+    </div>`;
 }
 
 function renderPouleConfigCard(activite){
@@ -1226,7 +1284,7 @@ function renderDefisHasardSection(activite){
   const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
   const act = ACTIVITIES[activite];
-  const students = STATE.allStudents.filter(s=>s.classe===cd.classe);
+  const students = STATE.allStudents.filter(s=>s.classe===cd.classe && !seance.absents.includes(s.id));
   const wins = cd.wins || {};
   const maxWins = Math.max(20, ...students.map(s=>wins[s.id]||0));
   const cols = Array.from({length:maxWins}, (_,i)=>i+1);
@@ -1270,11 +1328,12 @@ function renderDefisHasardSection(activite){
 function renderDefisClassementSection(activite){
   const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
-  const students = STATE.allStudents.filter(s=>s.classe===cd.classe);
+  const students = STATE.allStudents.filter(s=>s.classe===cd.classe && !seance.absents.includes(s.id));
   const wins = cd.wins || {};
   const act = ACTIVITIES[activite];
   const round = seance.rounds[seance.currentRoundIndex] || null;
   const hasWaves = round && round.matches.some(m=>m.vague>1);
+  const isBadminton = activite === 'Badminton';
 
   const matchCards = round ? round.matches.map((m,i)=>{
     const nomA = participantLabel(activite, m.a);
@@ -1298,6 +1357,19 @@ function renderDefisClassementSection(activite){
   const isLatest = seance.currentRoundIndex >= seance.rounds.length - 1;
   const suivantLabel = !seance.rounds.length ? 'Générer le 1er tour' : (isLatest ? 'Générer le tour suivant' : 'Tour suivant');
 
+  const capaciteParVague = seance.defisTerrains * (seance.demiTerrain ? 2 : 1);
+  const maxConcurrent = round ? Math.min(capaciteParVague, round.matches.length) : 0;
+  const terrainsPhysiques = seance.demiTerrain ? Math.ceil(maxConcurrent / 2) : maxConcurrent;
+  const terrainsInfo = round
+    ? `<p class="hint">Ce tour nécessite au maximum <b>${terrainsPhysiques} ${act.terrainLabel.toLowerCase()}</b>${seance.demiTerrain ? ` (jeu en demi-terrain : jusqu'à ${maxConcurrent} matchs simultanés)` : ''}.</p>`
+    : '';
+
+  const demiTerrainToggle = isBadminton ? `
+    <label class="demi-terrain-toggle">
+      <input type="checkbox" id="chkDemiTerrain" ${seance.demiTerrain?'checked':''}>
+      Jouer sur demi-terrain (double le nombre de matchs simultanés)
+    </label>` : '';
+
   return `
     <div class="card">
       <div class="toolbar">
@@ -1308,6 +1380,8 @@ function renderDefisClassementSection(activite){
         </div>
       </div>
       ${checkboxRangeHtml('defisTerrainCbGroup', act.terrainLabel+' disponibles', act.defisTerrainMin, act.defisTerrainMax, seance.defisTerrains || act.defisTerrainMin)}
+      ${demiTerrainToggle}
+      ${terrainsInfo}
       <p class="hint">À chaque tour, les élèves ayant le même nombre de victoires s'affrontent. Cliquez sur le nom du vainqueur de chaque match. S'il y a plus de matchs que de tables, les élèves non-joueurs de la vague officient comme arbitres.</p>
       ${byesHtml}
       ${round ? `<div class="poules-grid">${matchCards}</div>` : `<div class="empty-state">Aucun tour généré pour l'instant.</div>`}

@@ -118,10 +118,13 @@
     margin:0 0 8px;font-size:.9rem;font-weight:700;color:var(--ink);
   }
   .match-row{
-    display:flex;align-items:center;gap:4px;flex-wrap:wrap;
-    padding:6px 0;border-bottom:1px dashed var(--line);font-size:.78rem;
+    display:flex;align-items:center;gap:4px;flex-wrap:wrap;cursor:pointer;
+    padding:6px 4px;border-bottom:1px dashed var(--line);font-size:.78rem;border-radius:6px;
   }
+  .match-row:hover{background:#eef2ff;}
   .match-row:last-child{border-bottom:none;}
+  .match-name{font-weight:600;}
+  .match-name.winner{color:var(--ok);text-decoration:underline;}
   .team-card .team-name{
     width:100%;border:1px solid var(--line);border-radius:7px;padding:5px 7px;background:#fff;
   }
@@ -174,6 +177,25 @@
   }
   .demi-terrain-toggle input{width:16px;height:16px;}
 
+  /* Modale de saisie de score */
+  .modal-overlay{
+    position:fixed;inset:0;background:rgba(15,23,42,.5);
+    display:flex;align-items:center;justify-content:center;z-index:200;padding:16px;
+  }
+  .modal-box{
+    background:var(--panel);border-radius:14px;padding:20px;max-width:420px;width:100%;
+    box-shadow:0 10px 40px rgba(0,0,0,.25);
+  }
+  .modal-box h3{margin:0 0 14px;}
+  .modal-score-row{display:flex;align-items:center;gap:10px;margin-bottom:10px;}
+  .modal-player{flex:1;display:flex;flex-direction:column;gap:6px;text-align:center;}
+  .modal-player label{font-weight:700;font-size:.85rem;}
+  .modal-player input{
+    width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;font-size:1.1rem;text-align:center;
+  }
+  .modal-vs{font-weight:700;color:var(--muted);}
+  .modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px;}
+
   /* Cases à cocher (choix du nombre de tables/terrains) */
   .field-row-cb{margin-bottom:14px;}
   .field-row-cb > label{display:block;font-weight:700;font-size:.82rem;margin-bottom:6px;}
@@ -217,6 +239,30 @@
   <div class="panel" id="panel-ultimate"></div>
   <div class="panel" id="panel-volley"></div>
 </main>
+
+<div class="modal-overlay" id="scoreModal" hidden>
+  <div class="modal-box">
+    <h3>📝 Résultat du match</h3>
+    <div class="modal-score-row">
+      <div class="modal-player">
+        <label id="scoreModalNomA">Joueur A</label>
+        <input type="number" id="scoreModalScoreA" min="0" placeholder="Score">
+        <button class="btn ghost small" id="btnAbandonA">Abandon</button>
+      </div>
+      <div class="modal-vs">vs</div>
+      <div class="modal-player">
+        <label id="scoreModalNomB">Joueur B</label>
+        <input type="number" id="scoreModalScoreB" min="0" placeholder="Score">
+        <button class="btn ghost small" id="btnAbandonB">Abandon</button>
+      </div>
+    </div>
+    <p class="hint">Barème : victoire (écart ≥ 5) = 5 pts, victoire (écart &lt; 5) = 3 pts, défaite (écart &lt; 5) = 2 pts, défaite (écart ≥ 5) = 1 pt, abandon = 0 pt.</p>
+    <div class="modal-actions">
+      <button class="btn ghost" id="btnAnnulerScore">Annuler</button>
+      <button class="btn" id="btnValiderScore">✅ Valider</button>
+    </div>
+  </div>
+</div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
@@ -515,16 +561,22 @@ function exportMatchesExcel(activite){
   }));
   exportRowsToExcel(rows, `matchs_${slug(activite)}_seance${seance.numero}.xlsx`, 'Matchs');
 }
-// Feuilles de match imprimables (1 page par table) : une grille avec une
-// ligne par élève de la poule et une colonne par match joué à cette table ;
-// les cases où l'élève ne joue pas (il arbitre) sont pré-remplies avec
-// "Arbitre", les autres restent vides pour noter les points marqués à la
-// main. Colonnes Total/Classement + règlement du tournoi en bas de page.
-// Réservé aux activités individuelles (1 vs 1).
+// Feuilles de match imprimables (2 pages par table) :
+// 1) le recueil de points pendant le match (double échelle : Joueur A monte
+//    de 1 à N, Joueur B descend de N à 1), avec l'arbitre de chaque match ;
+// 2) la grille récapitulative (une ligne par élève, une colonne par match,
+//    "Arbitre" pré-rempli quand l'élève ne joue pas) + Total/Classement et
+//    le règlement du tournoi. Réservé aux activités individuelles (1 vs 1).
 function exportFeuillesMatchsPDF(activite){
   const seance = currentSeance(activite);
   const act = ACTIVITIES[activite];
   if(!seance || !seance.matches.length){ alert("Générez d'abord les matchs."); return; }
+  const saisie = prompt('Nombre de points maximum par manche (ex : 11 pour le tennis de table, 21 pour le badminton) ?', '11');
+  if(saisie === null) return;
+  const maxPoints = parseInt(saisie, 10);
+  if(!maxPoints || maxPoints < 1){ alert('Valeur invalide.'); return; }
+  const cols = Array.from({length:maxPoints}, (_,i)=>i+1);
+  const colsRev = cols.slice().reverse();
 
   const byTable = {};
   seance.matches.forEach(m=>{ (byTable[m.table] = byTable[m.table]||[]).push(m); });
@@ -538,6 +590,50 @@ function exportFeuillesMatchsPDF(activite){
     const members = (poule ? poule.members : []).filter(id=>!seance.absents.includes(id));
     const maxTotal = matches.length * 5;
 
+    const enteteHtml = `
+      <table class="feuille-entete">
+        <tr>
+          <td class="entete-label">Séance : ${seance.numero}</td>
+          <td></td>
+          <td class="entete-date">Date :</td>
+        </tr>
+        <tr>
+          <td class="entete-label">Table : ${t}</td>
+          <td class="entete-titre">Tournoi de ${activite.toLowerCase()}</td>
+          <td></td>
+        </tr>
+      </table>`;
+
+    // 1) Recueil de points par match (double échelle Joueur A / Joueur B).
+    let tracksHtml = '';
+    matches.forEach((m,i)=>{
+      const nomA = participantLabel(activite, m.a);
+      const nomB = participantLabel(activite, m.b);
+      let arbitreLabel = '—';
+      if(poule){
+        const libres = poule.members.filter(id=>id!==m.a && id!==m.b && !seance.absents.includes(id));
+        if(libres.length) arbitreLabel = libres.map(id=>participantLabel(activite,id)).join(', ');
+      }
+      tracksHtml += `
+        <table class="feuille-track">
+          <tr>
+            <td class="track-side" rowspan="2">
+              <div class="track-match-num">Match ${i+1}</div>
+              <div class="track-arbitre">Arbitre :<br>${arbitreLabel}</div>
+            </td>
+            <td class="track-joueur" colspan="${maxPoints}">${nomA}</td>
+            <td class="track-sep"></td>
+            <td class="track-joueur" colspan="${maxPoints}">${nomB}</td>
+          </tr>
+          <tr>
+            ${cols.map(c=>`<td class="track-pt">${c}</td>`).join('')}
+            <td class="track-sep"></td>
+            ${colsRev.map(c=>`<td class="track-pt">${c}</td>`).join('')}
+          </tr>
+        </table>`;
+    });
+
+    // 2) Grille récapitulative (Total/Classement) + règlement.
     const headerCols = matches.map((m,i)=>`<th>Match ${i+1}</th>`).join('');
     const rows = members.map(id=>{
       const cells = matches.map(m=>{
@@ -555,18 +651,13 @@ function exportFeuillesMatchsPDF(activite){
 
     pagesHtml += `
       <div class="feuille-page">
-        <table class="feuille-entete">
-          <tr>
-            <td class="entete-label">Séance : ${seance.numero}</td>
-            <td></td>
-            <td class="entete-date">Date :</td>
-          </tr>
-          <tr>
-            <td class="entete-label">Table : ${t}</td>
-            <td class="entete-titre">Tournoi de ${activite.toLowerCase()}</td>
-            <td></td>
-          </tr>
-        </table>
+        ${enteteHtml}
+        <h4 class="feuille-soustitre">Recueil des points (pendant le match)</h4>
+        ${tracksHtml}
+      </div>
+      <div class="feuille-page">
+        ${enteteHtml}
+        <h4 class="feuille-soustitre">Récapitulatif</h4>
         <table class="feuille-grille">
           <thead>
             <tr>
@@ -607,11 +698,20 @@ function exportFeuillesMatchsPDF(activite){
       @page{ size: landscape; }
       body{font-family:Arial, Helvetica, sans-serif;color:#111;margin:0;}
       .feuille-page{page-break-after:always;padding:18px;}
+      .feuille-soustitre{margin:4px 0 10px;}
       table.feuille-entete{width:100%;border-collapse:collapse;margin-bottom:10px;}
       table.feuille-entete td{border:none;padding:4px 6px;font-size:1rem;}
       .entete-label{font-weight:bold;white-space:nowrap;width:160px;}
       .entete-titre{font-weight:bold;text-align:center;font-size:1.15rem;}
       .entete-date{text-align:right;white-space:nowrap;}
+      table.feuille-track{border-collapse:collapse;width:100%;margin-bottom:14px;table-layout:fixed;}
+      table.feuille-track td{border:1px solid #333;text-align:center;padding:4px 2px;font-size:.8rem;}
+      .track-side{width:90px;background:#f3f4f6;}
+      .track-match-num{font-weight:bold;color:#1d4ed8;margin-bottom:6px;}
+      .track-arbitre{color:#b91c1c;font-weight:bold;font-size:.72rem;}
+      .track-joueur{font-weight:bold;color:#b91c1c;font-size:1rem;height:26px;}
+      .track-pt{height:34px;}
+      .track-sep{width:6px;border:none;}
       table.feuille-grille{border-collapse:collapse;width:100%;table-layout:fixed;margin-bottom:22px;}
       table.feuille-grille th, table.feuille-grille td{border:1px solid #333;text-align:center;padding:4px 2px;font-size:.78rem;}
       table.feuille-grille thead th{background:#f3f4f6;font-weight:bold;}
@@ -824,24 +924,98 @@ function renameTeam(activite, teamId, newName){
   if(t){ t.nom = newName || t.nom; saveState(); renderGeneral(); }
 }
 
-function setPouleMatchWinner(activite, matchIndex, winnerId){
+// Barème de points selon l'écart de score (voir carte Règlement des feuilles
+// PDF) : victoire ou défaite "large" (écart >= 5) rapporte respectivement 5
+// ou 1 point ; victoire ou défaite "courte" (écart < 5) rapporte 3 ou 2
+// points. Un score à égalité est refusé (il doit y avoir un vainqueur).
+function computeMatchPoints(scoreA, scoreB){
+  if(scoreA === scoreB) return null;
+  const diff = Math.abs(scoreA - scoreB);
+  const large = diff >= 5;
+  const winnerIsA = scoreA > scoreB;
+  const pointsWinner = large ? 5 : 3;
+  const pointsLoser = large ? 1 : 2;
+  return {
+    winnerIsA,
+    pointsA: winnerIsA ? pointsWinner : pointsLoser,
+    pointsB: winnerIsA ? pointsLoser : pointsWinner,
+  };
+}
+// Total de points marqués (barème ci-dessus) par membre d'une poule, à partir
+// des matchs déjà résultés de cette séance.
+function computePoulePoints(seance, poule){
+  const totals = {};
+  poule.members.forEach(id=>{ totals[id] = 0; });
+  seance.matches.forEach(m=>{
+    if(m.poule !== poule.nom || m.pointsA === undefined) return;
+    if(totals[m.a] !== undefined) totals[m.a] += m.pointsA;
+    if(totals[m.b] !== undefined) totals[m.b] += m.pointsB;
+  });
+  return totals;
+}
+// Classement (ordre décroissant de points marqués) des membres ACTIFS (non
+// absents) d'une poule, à partir des matchs de cette séance.
+function computePouleStanding(seance, poule){
+  const totals = computePoulePoints(seance, poule);
+  const actifs = poule.members.filter(id=>!seance.absents.includes(id));
+  return actifs.slice().sort((a,b)=> (totals[b]||0) - (totals[a]||0));
+}
+
+/* --------------------------------------------- SAISIE DU SCORE (MODALE) - */
+let scoreModalContext = null;
+function openScoreModal(activite, matchIndex){
   const seance = currentSeance(activite);
   const match = seance.matches[matchIndex];
   if(!match) return;
-  match.winner = (match.winner === winnerId) ? null : winnerId;
+  scoreModalContext = { activite, matchIndex };
+  document.getElementById('scoreModalNomA').textContent = participantLabel(activite, match.a);
+  document.getElementById('scoreModalNomB').textContent = participantLabel(activite, match.b);
+  document.getElementById('scoreModalScoreA').value = (match.scoreA !== undefined && match.scoreA !== null) ? match.scoreA : '';
+  document.getElementById('scoreModalScoreB').value = (match.scoreB !== undefined && match.scoreB !== null) ? match.scoreB : '';
+  document.getElementById('scoreModal').hidden = false;
+  document.getElementById('scoreModalScoreA').focus();
+}
+function closeScoreModal(){
+  document.getElementById('scoreModal').hidden = true;
+  scoreModalContext = null;
+}
+function validerScoreModal(){
+  if(!scoreModalContext) return;
+  const { activite, matchIndex } = scoreModalContext;
+  const seance = currentSeance(activite);
+  const match = seance.matches[matchIndex];
+  if(!match) return;
+  const scoreA = parseInt(document.getElementById('scoreModalScoreA').value, 10);
+  const scoreB = parseInt(document.getElementById('scoreModalScoreB').value, 10);
+  if(isNaN(scoreA) || isNaN(scoreB) || scoreA < 0 || scoreB < 0){ alert('Entrez les deux scores.'); return; }
+  const result = computeMatchPoints(scoreA, scoreB);
+  if(!result){ alert('Les deux scores ne peuvent pas être égaux : il doit y avoir un vainqueur.'); return; }
+  match.scoreA = scoreA; match.scoreB = scoreB;
+  match.pointsA = result.pointsA; match.pointsB = result.pointsB;
+  match.winner = result.winnerIsA ? match.a : match.b;
+  match.abandon = null;
   saveState();
+  closeScoreModal();
   renderActivityTab(activite);
 }
-// Classement (ordre décroissant de victoires) des membres ACTIFS (non absents)
-// d'une poule, à partir des matchs de cette séance.
-function computePouleStanding(seance, poule){
-  const winCounts = {};
-  poule.members.forEach(id=>{ winCounts[id] = 0; });
-  seance.matches.filter(m=>m.poule===poule.nom && m.winner).forEach(m=>{
-    if(winCounts[m.winner] !== undefined) winCounts[m.winner]++;
-  });
-  const actifs = poule.members.filter(id=>!seance.absents.includes(id));
-  return actifs.slice().sort((a,b)=> (winCounts[b]||0) - (winCounts[a]||0));
+// Abandon d'un des deux participants : il marque 0 point, l'autre remporte le
+// match avec le maximum (5 points), sans qu'un score n'ait besoin d'être saisi.
+function abandonScoreModal(who){
+  if(!scoreModalContext) return;
+  const { activite, matchIndex } = scoreModalContext;
+  const seance = currentSeance(activite);
+  const match = seance.matches[matchIndex];
+  if(!match) return;
+  if(who === 'a'){
+    match.pointsA = 0; match.pointsB = 5; match.winner = match.b;
+  } else {
+    match.pointsB = 0; match.pointsA = 5; match.winner = match.a;
+  }
+  match.scoreA = null; match.scoreB = null;
+  match.abandon = who;
+  saveState();
+  closeScoreModal();
+  renderActivityTab(activite);
 }
 // Montée-descente : le 1er d'une poule monte dans la poule au-dessus, le
 // dernier descend dans la poule en-dessous, le reste (le "milieu") reste sur
@@ -1460,11 +1634,8 @@ function renderActivityTab(activite){
       enregistrerVainqueur(activite, parseInt(matchIndex,10), winnerId);
     });
   });
-  panel.querySelectorAll('[data-set-poule-winner]').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      const [matchIndex, winnerId] = btn.dataset.setPouleWinner.split('::');
-      setPouleMatchWinner(activite, parseInt(matchIndex,10), winnerId);
-    });
+  panel.querySelectorAll('[data-open-score]').forEach(row=>{
+    row.addEventListener('click', ()=> openScoreModal(activite, parseInt(row.dataset.openScore, 10)));
   });
 }
 
@@ -1557,14 +1728,15 @@ function renderPoulesSection(activite){
       <div class="poules-grid">
         ${seance.poules.map(p=>{
           const standing = computePouleStanding(seance, p);
+          const totals = computePoulePoints(seance, p);
           const absentsDeLaPoule = p.members.filter(id=>seance.absents.includes(id));
           return `
           <div class="poule-card">
             <h4>${p.nom} (${p.members.length})</h4>
             <ul>
               ${standing.map((mid,rank)=>{
-                const w = seance.matches.filter(m=>m.poule===p.nom && m.winner===mid).length;
-                return `<li>${rank+1}. ${participantLabel(activite, mid)} <span class="muted">(${w}v)</span>
+                const pts = totals[mid]||0;
+                return `<li>${rank+1}. ${participantLabel(activite, mid)} <span class="muted">(${pts}pts)</span>
                   <select data-move-participant="${mid}">
                     ${seance.poules.map(p2=>`<option value="${p2.id}" ${p2.id===p.id?'selected':''}>${p2.nom}</option>`).join('')}
                   </select>
@@ -1599,13 +1771,18 @@ function renderMatchesSection(activite){
 
   const tableCards = tables.map(t=>{
     const matches = byTable[t].slice().sort((a,b)=> a.tour-b.tour || a.vague-b.vague);
-    const rows = matches.map((m,i)=>`
-      <div class="match-row">
+    const rows = matches.map((m,i)=>{
+      const joue = m.pointsA !== undefined && m.pointsA !== null;
+      const scoreLabel = m.abandon ? '(abandon)' : (joue ? `${m.scoreA} - ${m.scoreB}` : 'vs');
+      return `
+      <div class="match-row" data-open-score="${m.idx}">
         <span class="tour-badge">Match ${i+1}</span>
-        <button class="btn small ${m.winner===m.a?'':'ghost'}" data-set-poule-winner="${m.idx}::${m.a}">${participantLabel(activite, m.a)}</button>
-        <span class="hint" style="margin:0 4px;">vs</span>
-        <button class="btn small ${m.winner===m.b?'':'ghost'}" data-set-poule-winner="${m.idx}::${m.b}">${participantLabel(activite, m.b)}</button>
-      </div>`).join('');
+        <span class="match-name ${m.winner===m.a?'winner':''}">${participantLabel(activite, m.a)}</span>
+        <span class="hint" style="margin:0 4px;">${scoreLabel}</span>
+        <span class="match-name ${m.winner===m.b?'winner':''}">${participantLabel(activite, m.b)}</span>
+        ${joue ? `<span class="hint">(${m.pointsA}/${m.pointsB} pts)</span>` : ''}
+      </div>`;
+    }).join('');
     return `
       <div class="poule-card">
         <h4>${act.terrainLabel.replace(/s$/,'')} ${t}</h4>
@@ -1626,7 +1803,7 @@ function renderMatchesSection(activite){
           <button class="btn secondary small" id="btnExportMatchs">📊 Exporter Excel</button>
         </div>
       </div>
-      <p class="hint">Cliquez sur le nom du vainqueur de chaque match — le classement des poules (ci-dessus) se met à jour automatiquement.</p>
+      <p class="hint">Cliquez sur un match pour saisir le score — les points marqués (selon l'écart) et le classement des poules (ci-dessus) se mettent à jour automatiquement.</p>
       <div class="poules-grid">${tableCards}</div>
     </div>`;
 }
@@ -1774,6 +1951,13 @@ document.addEventListener('DOMContentLoaded', ()=>{
   loadState();
   renderTabs();
   renderAll();
+  document.getElementById('btnValiderScore').addEventListener('click', validerScoreModal);
+  document.getElementById('btnAnnulerScore').addEventListener('click', closeScoreModal);
+  document.getElementById('btnAbandonA').addEventListener('click', ()=>abandonScoreModal('a'));
+  document.getElementById('btnAbandonB').addEventListener('click', ()=>abandonScoreModal('b'));
+  document.getElementById('scoreModal').addEventListener('click', (e)=>{
+    if(e.target.id === 'scoreModal') closeScoreModal();
+  });
 });
 </script>
 </body>

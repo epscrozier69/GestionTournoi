@@ -399,9 +399,23 @@ function deleteSeance(activite){
 // réintégrer lui redonne aussitôt un match dès qu'une table se libère.
 function toggleAbsent(activite, studentId){
   const seance = currentSeance(activite);
+  const act = ACTIVITIES[activite];
   const idx = seance.absents.indexOf(studentId);
   if(idx >= 0){
     seance.absents.splice(idx, 1);
+    // Réintégration : si un tournoi par poule est en cours et que cet élève
+    // n'appartient encore à aucune poule (il était absent au moment de la
+    // génération), on l'ajoute à la poule la moins remplie au lieu de le
+    // laisser orphelin (sans quoi il resterait "présent" sans jouer nulle part).
+    if(seance.tournamentType === 'poule' && act.type === 'individuel' && seance.poules.length){
+      const dejaMembre = seance.poules.some(p=>p.members.includes(studentId));
+      if(!dejaMembre){
+        let target = seance.poules[0], min = Infinity;
+        seance.poules.forEach(p=>{ if(p.members.length < min){ min = p.members.length; target = p; } });
+        target.members.push(studentId);
+        seance.matches = []; // les matchs existants ne tenaient pas compte de cet élève
+      }
+    }
   } else {
     seance.absents.push(studentId);
     if(seance.defisMatches && seance.defisMatches.length){

@@ -125,6 +125,11 @@
   .match-row:last-child{border-bottom:none;}
   .match-name{font-weight:600;}
   .match-name.winner{color:var(--ok);text-decoration:underline;}
+  .table-players-summary{
+    display:flex;flex-wrap:wrap;gap:6px 14px;margin-bottom:8px;padding-bottom:8px;
+    border-bottom:1px solid var(--line);font-size:.78rem;color:var(--muted);
+  }
+  .table-players-summary b{color:var(--ink);}
   .team-card .team-name{
     width:100%;border:1px solid var(--line);border-radius:7px;padding:5px 7px;background:#fff;
   }
@@ -1641,9 +1646,10 @@ function renderActivityTab(activite){
 }
 
 function renderPresenceCard(activite, students, seance){
+  const presents = students.filter(s=>!seance.absents.includes(s.id)).length;
   return `
     <div class="card">
-      <h3>🧍 Présence — Séance ${seance.numero}</h3>
+      <h3>🧍 Présence — Séance ${seance.numero} <span class="muted">(${presents}/${students.length} présents)</span></h3>
       <p class="hint">Cliquez sur un élève absent ou dispensé pour l'exclure des poules/défis de cette séance.</p>
       <div class="presence-list">
         ${students.map(s=>{
@@ -1772,6 +1778,11 @@ function renderMatchesSection(activite){
 
   const tableCards = tables.map(t=>{
     const matches = byTable[t].slice().sort((a,b)=> a.tour-b.tour || a.vague-b.vague);
+    const pouleName = matches[0] ? matches[0].poule : '';
+    const poule = seance.poules.find(p=>p.nom===pouleName);
+    const standing = poule ? computePouleStanding(seance, poule) : [];
+    const totals = poule ? computePoulePoints(seance, poule) : {};
+    const playersSummary = standing.map(id=>`<span>${participantLabel(activite, id)} <b>${totals[id]||0}pts</b></span>`).join('');
     const rows = matches.map((m,i)=>{
       const joue = m.pointsA !== undefined && m.pointsA !== null;
       const scoreLabel = m.abandon ? '(abandon)' : (joue ? `${m.scoreA} - ${m.scoreB}` : 'vs');
@@ -1787,6 +1798,7 @@ function renderMatchesSection(activite){
     return `
       <div class="poule-card">
         <h4>${act.terrainLabel.replace(/s$/,'')} ${t}</h4>
+        ${playersSummary ? `<div class="table-players-summary">${playersSummary}</div>` : ''}
         ${rows}
       </div>`;
   }).join('');
@@ -1798,7 +1810,7 @@ function renderMatchesSection(activite){
   return `
     <div class="card">
       <div class="toolbar">
-        <h3>📅 Calendrier des matchs</h3>
+        <h3>📅 Ordre des matchs</h3>
         <div style="display:flex;gap:6px;">
           ${pdfBtn}
           <button class="btn secondary small" id="btnExportMatchs">📊 Exporter Excel</button>

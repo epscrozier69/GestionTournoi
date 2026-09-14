@@ -94,12 +94,34 @@
 
   /* Teams / Poules grids */
   .teams-grid, .poules-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-bottom:14px;}
+
+  /* Défis classement progressif : matchs à gauche (3 tables par ligne), classement à droite */
+  .defis-layout{display:grid;grid-template-columns:2fr 1fr;gap:16px;align-items:start;}
+  .defis-tables-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;}
+  .defis-classement-live{
+    border:2px solid var(--line);border-radius:12px;padding:12px;background:#f8fafc;
+    position:sticky;top:12px;
+  }
+  .defis-classement-live h4{margin:0 0 4px;font-size:.95rem;}
+  @media (max-width:900px){
+    .defis-layout{grid-template-columns:1fr;}
+    .defis-tables-grid{grid-template-columns:repeat(2,1fr);}
+    .defis-classement-live{position:static;}
+  }
+  @media (max-width:560px){
+    .defis-tables-grid{grid-template-columns:1fr;}
+  }
   .team-card, .poule-card{
     border:2px solid var(--line);border-radius:12px;padding:10px;background:#f8fafc;
   }
   .poule-card h4, .team-card .team-name{
     margin:0 0 8px;font-size:.9rem;font-weight:700;color:var(--ink);
   }
+  .match-row{
+    display:flex;align-items:center;gap:4px;flex-wrap:wrap;
+    padding:6px 0;border-bottom:1px dashed var(--line);font-size:.78rem;
+  }
+  .match-row:last-child{border-bottom:none;}
   .team-card .team-name{
     width:100%;border:1px solid var(--line);border-radius:7px;padding:5px 7px;background:#fff;
   }
@@ -248,7 +270,7 @@ function defaultSeance(numero, activite){
   };
 }
 function defaultClasseData(classe, activite){
-  return { classe, wins:{}, seances:[defaultSeance(1, activite)], currentSeanceIndex:0 };
+  return { classe, wins:{}, seances:[defaultSeance(1, activite)], currentSeanceIndex:0, showClassementTotal:false };
 }
 function defaultActivityData(){
   return { classes:{}, currentClasse:'' };
@@ -319,11 +341,26 @@ function deleteSeance(activite){
   renderActivityTab(activite);
   renderGeneral();
 }
+// Raye (absent/dispensé/puni) ou réintègre un élève en cours de séance.
+// En défis classement progressif, rayer un élève en plein match annule
+// aussitôt ce match (la table et son éventuel adversaire se libèrent) ; le
+// réintégrer lui redonne aussitôt un match dès qu'une table se libère.
 function toggleAbsent(activite, studentId){
   const seance = currentSeance(activite);
   const idx = seance.absents.indexOf(studentId);
-  if(idx >= 0) seance.absents.splice(idx, 1); else seance.absents.push(studentId);
+  if(idx >= 0){
+    seance.absents.splice(idx, 1);
+  } else {
+    seance.absents.push(studentId);
+    if(seance.defisMatches && seance.defisMatches.length){
+      seance.defisMatches = seance.defisMatches.filter(m=>!(m.winner===null && (m.a===studentId || m.b===studentId)));
+      seance.defisMatches.forEach(m=>{ if(m.referee===studentId) m.referee = null; });
+    }
+  }
   saveState();
+  if(seance.tournamentType === 'defisClassement' && seance.defisMatches && seance.defisMatches.length){
+    remplirTablesClassement(activite);
+  }
   renderActivityTab(activite);
 }
 // Efface matchs/tours de la séance en cours ET remet le classement (victoires) à zéro pour cette classe.
@@ -477,6 +514,85 @@ function exportMatchesExcel(activite){
     'Participant A':participantLabel(activite, m.a), 'Participant B':participantLabel(activite, m.b),
   }));
   exportRowsToExcel(rows, `matchs_${slug(activite)}_seance${seance.numero}.xlsx`, 'Matchs');
+}
+// Feuilles de match imprimables (1 page par table) : liste des matchs à faire
+// avec un recueil de points façon "double échelle" (Joueur A monte de 1 à N,
+// Joueur B descend de N à 1), plus l'arbitre (le ou les membres de la poule
+// non-joueurs de ce match). Réservé aux activités individuelles (1 vs 1).
+function exportFeuillesMatchsPDF(activite){
+  const seance = currentSeance(activite);
+  const act = ACTIVITIES[activite];
+  if(!seance || !seance.matches.length){ alert("Générez d'abord les matchs."); return; }
+  const saisie = prompt('Nombre de points maximum par manche (ex : 11 pour le tennis de table, 21 pour le badminton) ?', '11');
+  if(saisie === null) return;
+  const maxPoints = parseInt(saisie, 10);
+  if(!maxPoints || maxPoints < 1){ alert('Valeur invalide.'); return; }
+  const cols = Array.from({length:maxPoints}, (_,i)=>i+1);
+  const colsRev = cols.slice().reverse();
+
+  const byTable = {};
+  seance.matches.forEach(m=>{ (byTable[m.table] = byTable[m.table]||[]).push(m); });
+  const tables = Object.keys(byTable).map(Number).sort((a,b)=>a-b);
+
+  let pagesHtml = '';
+  tables.forEach(t=>{
+    const matches = byTable[t].slice().sort((a,b)=> a.tour-b.tour || a.vague-b.vague);
+    const pouleName = matches[0] ? matches[0].poule : '';
+    const poule = seance.poules.find(p=>p.nom===pouleName);
+    let blocksHtml = '';
+    matches.forEach((m,i)=>{
+      const nomA = participantLabel(activite, m.a);
+      const nomB = participantLabel(activite, m.b);
+      let arbitreLabel = '—';
+      if(poule){
+        const libres = poule.members.filter(id=>id!==m.a && id!==m.b);
+        if(libres.length) arbitreLabel = libres.map(id=>participantLabel(activite,id)).join(', ');
+      }
+      blocksHtml += `
+        <table class="feuille-table">
+          <tr>
+            <td class="feuille-side" rowspan="2">
+              <div class="feuille-match-num">Match ${i+1}</div>
+              <div class="feuille-arbitre">Arbitre :<br>${arbitreLabel}</div>
+            </td>
+            <td class="feuille-joueur" colspan="${maxPoints}">${nomA}</td>
+            <td class="feuille-sep"></td>
+            <td class="feuille-joueur" colspan="${maxPoints}">${nomB}</td>
+          </tr>
+          <tr>
+            ${cols.map(c=>`<td class="feuille-pt">${c}</td>`).join('')}
+            <td class="feuille-sep"></td>
+            ${colsRev.map(c=>`<td class="feuille-pt">${c}</td>`).join('')}
+          </tr>
+        </table>`;
+    });
+    pagesHtml += `
+      <div class="feuille-page">
+        <h2>${act.terrainLabel.replace(/s$/,'')} ${t}${pouleName ? ' — '+pouleName : ''}</h2>
+        ${blocksHtml}
+      </div>`;
+  });
+
+  const w = window.open('', '_blank');
+  if(!w){ alert("Le navigateur a bloqué l'ouverture de la fenêtre d'impression. Autorisez les pop-ups pour ce site."); return; }
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Feuilles de match — ${activite}</title>
+    <style>
+      body{font-family:Arial, Helvetica, sans-serif;color:#111;margin:0;}
+      .feuille-page{page-break-after:always;padding:18px;}
+      .feuille-page h2{margin:0 0 14px;}
+      table.feuille-table{border-collapse:collapse;width:100%;margin-bottom:18px;table-layout:fixed;}
+      table.feuille-table td{border:1px solid #333;text-align:center;padding:4px 2px;font-size:.8rem;}
+      .feuille-side{width:90px;background:#f3f4f6;}
+      .feuille-match-num{font-weight:bold;color:#1d4ed8;margin-bottom:6px;}
+      .feuille-arbitre{color:#b91c1c;font-weight:bold;font-size:.72rem;}
+      .feuille-joueur{font-weight:bold;color:#b91c1c;font-size:1rem;height:26px;}
+      .feuille-pt{height:34px;}
+      .feuille-sep{width:6px;border:none;}
+    </style>
+    </head><body>${pagesHtml}</body></html>`);
+  w.document.close();
+  w.focus();
+  setTimeout(()=>{ w.print(); }, 300);
 }
 function exportClassementExcel(activite){
   const cd = currentClasseData(activite);
@@ -777,7 +893,10 @@ function undoWin(activite, studentId){
 // donner la priorité à ceux qui ont joué le moins de matchs, pour que tout
 // le monde en joue toujours le même nombre. Le surplus impair d'un groupe de
 // victoires est reporté sur le groupe immédiatement supérieur ; s'il en
-// reste un tout seul, il est exempté en attendant un adversaire.
+// reste un tout seul, il est exempté en attendant un adversaire. Un match
+// n'est créé que si un arbitre dédié peut lui être garanti (jamais partagé
+// entre deux tables simultanées) : une table peut donc rester vide s'il n'y
+// a pas assez d'élèves disponibles pour lui assurer un arbitre.
 function ordinalMatch(n){
   return n===1 ? '1er match' : n+'e match';
 }
@@ -823,18 +942,22 @@ function remplirTablesClassement(activite){
     while(pool.length>=2){ pairs.push([pool.shift(), pool.shift()]); }
     if(pool.length===1){ leftover = pool[0]; }
   });
+  // On ne crée un match que si un arbitre dédié (unique, jamais partagé entre
+  // deux tables en même temps) peut lui être garanti : chaque match mobilise
+  // 2 joueurs + 1 arbitre, donc au plus 1 match pour 3 élèves disponibles.
+  const maxMatchesAvecArbitre = Math.floor(available.length / 3);
+  const matchesACreer = Math.min(freeTables.length, pairs.length, maxMatchesAvecArbitre);
+  const chosenPairs = pairs.slice(0, matchesACreer);
   seance.defisBye = leftover;
 
   const usedInPairs = new Set();
-  pairs.forEach(([a,b])=>{ usedInPairs.add(a); usedInPairs.add(b); });
+  chosenPairs.forEach(([a,b])=>{ usedInPairs.add(a); usedInPairs.add(b); });
   const refPool = shuffleArray(available.filter(id=>!usedInPairs.has(id)));
-  let refIdx = 0;
-  pairs.slice(0, freeTables.length).forEach(([a,b], i)=>{
+  chosenPairs.forEach(([a,b], i)=>{
     const table = freeTables[i];
     const numA = defisMatchCount(seance,a) + 1;
     const numB = defisMatchCount(seance,b) + 1;
-    const referee = refPool.length ? refPool[refIdx % refPool.length] : null;
-    if(refPool.length) refIdx++;
+    const referee = refPool[i]; // garanti disponible et unique (voir maxMatchesAvecArbitre)
     seance.defisMatches.push({ table, a, b, winner:null, referee, numA, numB });
   });
   saveState();
@@ -1088,14 +1211,19 @@ function renderActivityTab(activite){
       </div>`;
 
     if(Object.keys(cd.wins).length){
+      const showTotal = !!cd.showClassementTotal;
       html += `
         <div class="card">
           <div class="toolbar">
             <h3>📊 Classement total — victoires depuis le début du cycle</h3>
-            <button class="btn secondary small" id="btnExportClassement">📊 Exporter Excel</button>
+            <div style="display:flex;gap:6px;">
+              ${showTotal ? '<button class="btn secondary small" id="btnExportClassement">📊 Exporter Excel</button>' : ''}
+              <button class="btn ghost small" id="btnToggleClassementTotal">${showTotal ? '🙈 Masquer' : '👁️ Afficher'}</button>
+            </div>
           </div>
+          ${showTotal ? `
           <p class="hint">Ce total additionne les victoires de toutes les séances de cette classe depuis le début du cycle (remis à zéro seulement si toutes les séances sont supprimées, ou via "Effacer les résultats").</p>
-          ${renderClassementTable(students, cd.wins)}
+          ${renderClassementTable(students, cd.wins)}` : ''}
         </div>`;
     }
 
@@ -1217,8 +1345,16 @@ function renderActivityTab(activite){
   if(btnMatchs) btnMatchs.addEventListener('click', ()=>onGenererMatchs(activite));
   const btnExportMatchs = document.getElementById('btnExportMatchs');
   if(btnExportMatchs) btnExportMatchs.addEventListener('click', ()=>exportMatchesExcel(activite));
+  const btnExportFeuilles = document.getElementById('btnExportFeuilles');
+  if(btnExportFeuilles) btnExportFeuilles.addEventListener('click', ()=>exportFeuillesMatchsPDF(activite));
   const btnExportClassement = document.getElementById('btnExportClassement');
   if(btnExportClassement) btnExportClassement.addEventListener('click', ()=>exportClassementExcel(activite));
+  const btnToggleClassementTotal = document.getElementById('btnToggleClassementTotal');
+  if(btnToggleClassementTotal) btnToggleClassementTotal.addEventListener('click', ()=>{
+    cd.showClassementTotal = !cd.showClassementTotal;
+    saveState();
+    renderActivityTab(activite);
+  });
 
   panel.querySelectorAll('[data-move-student]').forEach(sel=>{
     sel.addEventListener('change', ()=>moveStudentTeam(activite, sel.dataset.moveStudent, sel.value));
@@ -1377,41 +1513,50 @@ function renderPoulesSection(activite){
     </div>`;
 }
 
+// Les matchs à faire sont regroupés par table (une colonne par table), avec
+// pour chacune la liste ordonnée de ses matchs (tous tours confondus) en
+// dessous — plus lisible qu'un long tableau à parcourir ligne par ligne.
 function renderMatchesSection(activite){
   const seance = currentSeance(activite);
   if(!seance.matches.length) return '';
   const act = ACTIVITIES[activite];
   const withIndex = seance.matches.map((m,idx)=>Object.assign({}, m, {idx}));
-  const sorted = withIndex.sort((a,b)=> a.tour-b.tour || a.vague-b.vague || a.table-b.table);
-  const rows = sorted.map(m=>`
-    <tr>
-      <td><span class="tour-badge">Tour ${m.tour}${m.vague>1?' · Vague '+m.vague:''}</span></td>
-      <td><span class="table-badge">${act.terrainLabel.replace(/s$/,'')} ${m.table}</span></td>
-      <td><span class="poule-tag">${m.poule}</span></td>
-      <td>
+  const byTable = {};
+  withIndex.forEach(m=>{ (byTable[m.table] = byTable[m.table]||[]).push(m); });
+  const tables = Object.keys(byTable).map(Number).sort((a,b)=>a-b);
+
+  const tableCards = tables.map(t=>{
+    const matches = byTable[t].slice().sort((a,b)=> a.tour-b.tour || a.vague-b.vague);
+    const pouleName = matches[0] ? matches[0].poule : '';
+    const rows = matches.map(m=>`
+      <div class="match-row">
+        <span class="tour-badge">Tour ${m.tour}${m.vague>1?' · V'+m.vague:''}</span>
         <button class="btn small ${m.winner===m.a?'':'ghost'}" data-set-poule-winner="${m.idx}::${m.a}">${participantLabel(activite, m.a)}</button>
         <span class="hint" style="margin:0 4px;">vs</span>
         <button class="btn small ${m.winner===m.b?'':'ghost'}" data-set-poule-winner="${m.idx}::${m.b}">${participantLabel(activite, m.b)}</button>
-      </td>
-    </tr>`).join('');
+      </div>`).join('');
+    return `
+      <div class="poule-card">
+        <h4>${act.terrainLabel.replace(/s$/,'')} ${t}${pouleName ? ' · '+pouleName : ''}</h4>
+        ${rows}
+      </div>`;
+  }).join('');
+
+  const pdfBtn = act.type === 'individuel'
+    ? `<button class="btn secondary small" id="btnExportFeuilles">🖨️ Feuilles de match (PDF)</button>`
+    : '';
+
   return `
     <div class="card">
       <div class="toolbar">
         <h3>📅 Calendrier des matchs</h3>
-        <button class="btn secondary small" id="btnExportMatchs">📊 Exporter Excel</button>
+        <div style="display:flex;gap:6px;">
+          ${pdfBtn}
+          <button class="btn secondary small" id="btnExportMatchs">📊 Exporter Excel</button>
+        </div>
       </div>
       <p class="hint">Cliquez sur le nom du vainqueur de chaque match — le classement des poules (ci-dessus) se met à jour automatiquement.</p>
-      <div class="table-wrap">
-        <table class="match-table">
-          <thead><tr>
-            <th style="background:${PALETTE[6]}">Tour</th>
-            <th style="background:${PALETTE[3]}">${act.terrainLabel}</th>
-            <th style="background:${PALETTE[1]}">Poule</th>
-            <th style="background:${PALETTE[0]}">Match</th>
-          </tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-      </div>
+      <div class="poules-grid">${tableCards}</div>
     </div>`;
 }
 
@@ -1541,12 +1686,15 @@ function renderDefisClassementSection(activite){
       ${demiTerrainToggle}
       <p class="hint">Les élèves ayant le même nombre de victoires s'affrontent. Cliquez sur le nom du vainqueur : la table se libère aussitôt et un nouveau match s'y organise automatiquement, en gardant le même nombre de matchs joués pour chacun. S'il y a plus d'élèves que de tables, les non-joueurs officient comme arbitres.</p>
       ${byeHtml}
-      ${started ? `<div class="poules-grid">${tableCards.join('')}</div>` : `<div class="empty-state">Choisissez le nombre de ${act.terrainLabel.toLowerCase()} puis cliquez sur « Démarrer les matchs ».</div>`}
       ${started ? `
-      <div class="card" style="margin-top:14px;">
-        <h3>🏅 Classement de cette séance (matchs de cette séance uniquement)</h3>
-        ${renderClassementTable(students, seanceWins)}
-      </div>` : ''}
+      <div class="defis-layout">
+        <div class="defis-tables-grid">${tableCards.join('')}</div>
+        <div class="defis-classement-live">
+          <h4>🏅 Classement de cette séance</h4>
+          <p class="hint">Se met à jour à chaque résultat enregistré.</p>
+          ${renderClassementTable(students, seanceWins)}
+        </div>
+      </div>` : `<div class="empty-state">Choisissez le nombre de ${act.terrainLabel.toLowerCase()} puis cliquez sur « Démarrer les matchs ».</div>`}
     </div>`;
 }
 

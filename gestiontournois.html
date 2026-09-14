@@ -515,20 +515,16 @@ function exportMatchesExcel(activite){
   }));
   exportRowsToExcel(rows, `matchs_${slug(activite)}_seance${seance.numero}.xlsx`, 'Matchs');
 }
-// Feuilles de match imprimables (1 page par table) : liste des matchs à faire
-// avec un recueil de points façon "double échelle" (Joueur A monte de 1 à N,
-// Joueur B descend de N à 1), plus l'arbitre (le ou les membres de la poule
-// non-joueurs de ce match). Réservé aux activités individuelles (1 vs 1).
+// Feuilles de match imprimables (1 page par table) : une grille avec une
+// ligne par élève de la poule et une colonne par match joué à cette table ;
+// les cases où l'élève ne joue pas (il arbitre) sont pré-remplies avec
+// "Arbitre", les autres restent vides pour noter les points marqués à la
+// main. Colonnes Total/Classement + règlement du tournoi en bas de page.
+// Réservé aux activités individuelles (1 vs 1).
 function exportFeuillesMatchsPDF(activite){
   const seance = currentSeance(activite);
   const act = ACTIVITIES[activite];
   if(!seance || !seance.matches.length){ alert("Générez d'abord les matchs."); return; }
-  const saisie = prompt('Nombre de points maximum par manche (ex : 11 pour le tennis de table, 21 pour le badminton) ?', '11');
-  if(saisie === null) return;
-  const maxPoints = parseInt(saisie, 10);
-  if(!maxPoints || maxPoints < 1){ alert('Valeur invalide.'); return; }
-  const cols = Array.from({length:maxPoints}, (_,i)=>i+1);
-  const colsRev = cols.slice().reverse();
 
   const byTable = {};
   seance.matches.forEach(m=>{ (byTable[m.table] = byTable[m.table]||[]).push(m); });
@@ -539,37 +535,68 @@ function exportFeuillesMatchsPDF(activite){
     const matches = byTable[t].slice().sort((a,b)=> a.tour-b.tour || a.vague-b.vague);
     const pouleName = matches[0] ? matches[0].poule : '';
     const poule = seance.poules.find(p=>p.nom===pouleName);
-    let blocksHtml = '';
-    matches.forEach((m,i)=>{
-      const nomA = participantLabel(activite, m.a);
-      const nomB = participantLabel(activite, m.b);
-      let arbitreLabel = '—';
-      if(poule){
-        const libres = poule.members.filter(id=>id!==m.a && id!==m.b);
-        if(libres.length) arbitreLabel = libres.map(id=>participantLabel(activite,id)).join(', ');
-      }
-      blocksHtml += `
-        <table class="feuille-table">
-          <tr>
-            <td class="feuille-side" rowspan="2">
-              <div class="feuille-match-num">Match ${i+1}</div>
-              <div class="feuille-arbitre">Arbitre :<br>${arbitreLabel}</div>
-            </td>
-            <td class="feuille-joueur" colspan="${maxPoints}">${nomA}</td>
-            <td class="feuille-sep"></td>
-            <td class="feuille-joueur" colspan="${maxPoints}">${nomB}</td>
-          </tr>
-          <tr>
-            ${cols.map(c=>`<td class="feuille-pt">${c}</td>`).join('')}
-            <td class="feuille-sep"></td>
-            ${colsRev.map(c=>`<td class="feuille-pt">${c}</td>`).join('')}
-          </tr>
-        </table>`;
-    });
+    const members = (poule ? poule.members : []).filter(id=>!seance.absents.includes(id));
+    const maxTotal = matches.length * 5;
+
+    const headerCols = matches.map((m,i)=>`<th>Match ${i+1}</th>`).join('');
+    const rows = members.map(id=>{
+      const cells = matches.map(m=>{
+        const joue = (m.a === id || m.b === id);
+        return `<td class="feuille-cell">${joue ? '' : 'Arbitre'}</td>`;
+      }).join('');
+      return `
+        <tr>
+          <td class="feuille-nom">${participantLabel(activite, id)} :</td>
+          ${cells}
+          <td class="feuille-cell"></td>
+          <td class="feuille-cell"></td>
+        </tr>`;
+    }).join('');
+
     pagesHtml += `
       <div class="feuille-page">
-        <h2>${act.terrainLabel.replace(/s$/,'')} ${t}${pouleName ? ' — '+pouleName : ''}</h2>
-        ${blocksHtml}
+        <table class="feuille-entete">
+          <tr>
+            <td class="entete-label">Séance : ${seance.numero}</td>
+            <td></td>
+            <td class="entete-date">Date :</td>
+          </tr>
+          <tr>
+            <td class="entete-label">Table : ${t}</td>
+            <td class="entete-titre">Tournoi de ${activite.toLowerCase()}</td>
+            <td></td>
+          </tr>
+        </table>
+        <table class="feuille-grille">
+          <thead>
+            <tr>
+              <th class="col-nom" rowspan="2"></th>
+              <th colspan="${matches.length}">POINTS MARQUÉS</th>
+              <th rowspan="2">TOTAL de PTS<br>/ ${maxTotal} points</th>
+              <th rowspan="2">Classement</th>
+            </tr>
+            <tr>${headerCols}</tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <div class="feuille-reglement">
+          <h3>Règlement du tournoi :</h3>
+          <div class="reglement-cols">
+            <ul>
+              <li>2 services consécutifs chacun</li>
+              <li>Comptage des points : type tie-break</li>
+              <li>Vainqueur du match : celui qui remplit sa ligne en 1er</li>
+              <li>L'arbitre entoure le nombre de points marqués après chaque échange</li>
+            </ul>
+            <ul class="reglement-points">
+              <li>Victoire avec + de 5 points d'écart = 5 points</li>
+              <li>Victoire avec - de 4 points d'écart = 3 points</li>
+              <li>Défaite avec - de 4 points d'écart = 2 points</li>
+              <li>Défaite avec &gt;= de 5 points d'écart = 1 point</li>
+              <li>Abandon = 0 point</li>
+            </ul>
+          </div>
+        </div>
       </div>`;
   });
 
@@ -577,17 +604,24 @@ function exportFeuillesMatchsPDF(activite){
   if(!w){ alert("Le navigateur a bloqué l'ouverture de la fenêtre d'impression. Autorisez les pop-ups pour ce site."); return; }
   w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Feuilles de match — ${activite}</title>
     <style>
+      @page{ size: landscape; }
       body{font-family:Arial, Helvetica, sans-serif;color:#111;margin:0;}
       .feuille-page{page-break-after:always;padding:18px;}
-      .feuille-page h2{margin:0 0 14px;}
-      table.feuille-table{border-collapse:collapse;width:100%;margin-bottom:18px;table-layout:fixed;}
-      table.feuille-table td{border:1px solid #333;text-align:center;padding:4px 2px;font-size:.8rem;}
-      .feuille-side{width:90px;background:#f3f4f6;}
-      .feuille-match-num{font-weight:bold;color:#1d4ed8;margin-bottom:6px;}
-      .feuille-arbitre{color:#b91c1c;font-weight:bold;font-size:.72rem;}
-      .feuille-joueur{font-weight:bold;color:#b91c1c;font-size:1rem;height:26px;}
-      .feuille-pt{height:34px;}
-      .feuille-sep{width:6px;border:none;}
+      table.feuille-entete{width:100%;border-collapse:collapse;margin-bottom:10px;}
+      table.feuille-entete td{border:none;padding:4px 6px;font-size:1rem;}
+      .entete-label{font-weight:bold;white-space:nowrap;width:160px;}
+      .entete-titre{font-weight:bold;text-align:center;font-size:1.15rem;}
+      .entete-date{text-align:right;white-space:nowrap;}
+      table.feuille-grille{border-collapse:collapse;width:100%;table-layout:fixed;margin-bottom:22px;}
+      table.feuille-grille th, table.feuille-grille td{border:1px solid #333;text-align:center;padding:4px 2px;font-size:.78rem;}
+      table.feuille-grille thead th{background:#f3f4f6;font-weight:bold;}
+      .col-nom{width:150px;}
+      .feuille-nom{font-weight:bold;text-align:left;padding-left:8px !important;font-size:.9rem;}
+      .feuille-cell{height:36px;}
+      .feuille-reglement h3{text-decoration:underline;margin:0 0 10px;}
+      .reglement-cols{display:flex;gap:32px;flex-wrap:wrap;}
+      .reglement-cols ul{margin:0;padding-left:18px;font-size:.85rem;line-height:1.8;}
+      .reglement-points li{font-weight:bold;}
     </style>
     </head><body>${pagesHtml}</body></html>`);
   w.document.close();
@@ -614,21 +648,50 @@ function generateTeams(studentIds, joueursParEquipe){
   }
   return teams;
 }
+// Calcule la taille des poules à créer pour n participants, en respectant les
+// bornes [min, max] de l'activité : priorité à la taille de base souhaitée,
+// et absorption du reste par des poules d'une unité de plus (jamais de poule
+// plus petite que min — par ex. jamais de poule à 2 si la base est 3 et que
+// max autorise 4).
+function computePouleSizes(n, base, min, max){
+  if(n <= 0) return [];
+  if(n <= max) return [n]; // un seul groupe suffit (même incomplet si n < min)
+  const full = Math.floor(n / base);
+  const r = n % base;
+  if(r === 0) return Array(full).fill(base);
+  if(base + 1 <= max && full >= r){
+    return [...Array(full - r).fill(base), ...Array(r).fill(base + 1)];
+  }
+  // Repli : le reste ne peut pas être absorbé proprement avec base+1 ->
+  // on répartit le plus uniformément possible dans les bornes [min, max].
+  let groups = full > 0 ? full : 1;
+  while(groups > 1){
+    const q = Math.floor(n / groups), rem = n % groups;
+    const big = q + 1, small = q;
+    if(small >= min && big <= max){
+      return [...Array(rem).fill(big), ...Array(groups - rem).fill(small)];
+    }
+    groups--;
+  }
+  return [n];
+}
 // wins fourni (optionnel) : trie par classement décroissant avant de répartir
 // séquentiellement (Poule 1 = meilleurs, dernière poule = moins bons), comme
 // demandé ("Table 1 = meilleurs élèves avec le plus de victoires"). Sans wins,
-// répartition purement aléatoire.
-function generatePoules(ids, taillePoule, wins){
+// répartition purement aléatoire. La taille de chaque poule s'ajuste
+// automatiquement au nombre de participants (voir computePouleSizes).
+function generatePoules(ids, taillePoule, wins, min, max){
   let ordered = shuffleArray(ids);
   if(wins){
     ordered = ordered.sort((a,b)=> (wins[b]||0) - (wins[a]||0));
   }
+  const sizes = computePouleSizes(ordered.length, taillePoule, min || taillePoule, max || taillePoule);
   const poules = [];
-  let idx=0, n=1;
-  while(idx < ordered.length){
-    poules.push({ id:'poule'+n, nom:'Poule '+n, members: ordered.slice(idx, idx+taillePoule) });
-    idx += taillePoule; n++;
-  }
+  let idx = 0;
+  sizes.forEach((size, i)=>{
+    poules.push({ id:'poule'+(i+1), nom:'Poule '+(i+1), members: ordered.slice(idx, idx+size) });
+    idx += size;
+  });
   return poules;
 }
 function participantLabel(activite, id){
@@ -700,7 +763,7 @@ function onGenererPoules(activite){
     const joueursParEquipe = clamp(parseInt(document.getElementById('cfgJoueursEquipe').value, 10) || 4, 2, 15);
     seance.config = { terrains, taillePoule, joueursParEquipe };
     seance.teams = generateTeams(studentIds, joueursParEquipe);
-    seance.poules = generatePoules(seance.teams.map(t=>t.id), taillePoule);
+    seance.poules = generatePoules(seance.teams.map(t=>t.id), taillePoule, null, act.pouleMin, act.pouleMax);
   } else {
     seance.config = { terrains, taillePoule };
     seance.teams = [];
@@ -726,7 +789,7 @@ function onGenererPoules(activite){
       seance.poules = groups.map((members,i)=>({ id:'poule'+(i+1), nom:'Poule '+(i+1), members: shuffleArray(members) }));
     } else {
       // Pas de séance de poule précédente exploitable : classement global (cd.wins) ou aléatoire.
-      seance.poules = generatePoules(studentIds, taillePoule, cd.wins);
+      seance.poules = generatePoules(studentIds, taillePoule, cd.wins, act.pouleMin, act.pouleMax);
     }
   }
   seance.matches = [];
@@ -837,10 +900,17 @@ function roundRobinRounds(participants){
   return rounds;
 }
 
+// Aller-retour : chaque paire de la poule se rencontre deux fois (une fois
+// dans chaque sens). Une poule de 3 fait donc 6 matchs, une poule de 4 en
+// fait 12, etc. (le simple aller ferait 2 fois moins de matchs).
 function onGenererMatchs(activite){
   const seance = currentSeance(activite);
   if(!seance || !seance.poules.length){ alert("Générez d'abord les poules."); return; }
-  const pouleRounds = seance.poules.map(p => roundRobinRounds(p.members));
+  const pouleRounds = seance.poules.map(p => {
+    const aller = roundRobinRounds(p.members);
+    const retour = aller.map(round => round.map(([a,b])=>[b,a]));
+    return [...aller, ...retour];
+  });
   const maxRounds = Math.max(0, ...pouleRounds.map(r=>r.length));
   const matches = [];
   for(let round=0; round<maxRounds; round++){
@@ -1445,6 +1515,7 @@ function renderPouleConfigCard(activite){
       <h3>⚙️ Configuration de la poule</h3>
       ${fields}
       <button class="btn" id="btnGenererPoules">🎲 Générer les poules</button>
+      <p class="hint" style="margin-top:8px;">Le nombre de poules s'ajuste automatiquement au nombre de participants présents : priorité à des poules de ${act.pouleMin}, complétées si besoin par une ou plusieurs poules de ${act.pouleMin+1} — jamais de poule à ${act.pouleMin-1}.</p>
     </div>`;
 }
 
@@ -1509,7 +1580,8 @@ function renderPoulesSection(activite){
           </div>`;
         }).join('')}
       </div>
-      <button class="btn secondary" id="btnGenererMatchs">📅 Générer les matchs</button>
+      <button class="btn secondary" id="btnGenererMatchs">📅 Générer les matchs (aller-retour)</button>
+      <p class="hint" style="margin-top:8px;">Chaque paire de la poule se rencontre deux fois (aller puis retour) : une poule de 3 fait 6 matchs, une poule de 4 en fait 12.</p>
     </div>`;
 }
 
@@ -1527,17 +1599,16 @@ function renderMatchesSection(activite){
 
   const tableCards = tables.map(t=>{
     const matches = byTable[t].slice().sort((a,b)=> a.tour-b.tour || a.vague-b.vague);
-    const pouleName = matches[0] ? matches[0].poule : '';
-    const rows = matches.map(m=>`
+    const rows = matches.map((m,i)=>`
       <div class="match-row">
-        <span class="tour-badge">Tour ${m.tour}${m.vague>1?' · V'+m.vague:''}</span>
+        <span class="tour-badge">Match ${i+1}</span>
         <button class="btn small ${m.winner===m.a?'':'ghost'}" data-set-poule-winner="${m.idx}::${m.a}">${participantLabel(activite, m.a)}</button>
         <span class="hint" style="margin:0 4px;">vs</span>
         <button class="btn small ${m.winner===m.b?'':'ghost'}" data-set-poule-winner="${m.idx}::${m.b}">${participantLabel(activite, m.b)}</button>
       </div>`).join('');
     return `
       <div class="poule-card">
-        <h4>${act.terrainLabel.replace(/s$/,'')} ${t}${pouleName ? ' · '+pouleName : ''}</h4>
+        <h4>${act.terrainLabel.replace(/s$/,'')} ${t}</h4>
         ${rows}
       </div>`;
   }).join('');

@@ -243,7 +243,8 @@ function defaultSeance(numero, activite){
     demiTerrain:false, // Badminton uniquement : double la capacité de terrains simultanés
     absents:[], // ids d'élèves absents/dispensés pour cette séance
     teams:[], poules:[], matches:[],
-    rounds:[], currentRoundIndex:-1, // défis classement progressif uniquement
+    hasardWins:{}, // défis hasard : victoires de cette séance uniquement
+    defisMatches:[], defisBye:null, // défis classement progressif uniquement (flux continu)
   };
 }
 function defaultClasseData(classe, activite){
@@ -333,8 +334,9 @@ function clearSeanceResults(activite){
   seance.teams = [];
   seance.poules = [];
   seance.matches = [];
-  seance.rounds = [];
-  seance.currentRoundIndex = -1;
+  seance.hasardWins = {};
+  seance.defisMatches = [];
+  seance.defisBye = null;
   cd.wins = {};
   saveState();
   renderActivityTab(activite);
@@ -745,125 +747,113 @@ function onGenererMatchs(activite){
 /* ------------------------------------------------------- DEFIS HASARD - */
 function addWin(activite, studentId){
   const cd = currentClasseData(activite);
+  const seance = currentSeance(activite);
   cd.wins[studentId] = (cd.wins[studentId]||0) + 1;
+  seance.hasardWins[studentId] = (seance.hasardWins[studentId]||0) + 1;
   saveState();
   renderActivityTab(activite);
   renderGeneral();
 }
 function undoWin(activite, studentId){
   const cd = currentClasseData(activite);
+  const seance = currentSeance(activite);
   const cur = cd.wins[studentId]||0;
   if(cur>0) cd.wins[studentId] = cur - 1;
+  const curSeance = seance.hasardWins[studentId]||0;
+  if(curSeance>0) seance.hasardWins[studentId] = curSeance - 1;
   saveState();
   renderActivityTab(activite);
   renderGeneral();
 }
 
 /* --------------------------------------------------- DEFIS CLASSEMENT - */
-// Apparie les élèves ayant le même nombre de victoires (classement porté par
-// la classe : continuité assurée d'une séance à l'autre). Le surplus impair
-// d'un groupe est reporté sur le groupe de victoires immédiatement supérieur ;
-// s'il en reste un tout seul à la fin, il est exempté ce tour (bye).
-// Un tour peut compter plus de matchs que de tables disponibles : les matchs
-// sont répartis en "vagues" (une vague = autant de matchs simultanés que de
-// tables), et pour chaque match, un élève non-joueur de cette vague est
-// désigné arbitre.
-function genererTourClassement(activite){
+// Flux continu : les élèves ayant le même nombre de victoires (classement
+// porté par la classe : continuité assurée d'une séance à l'autre) sont
+// appariés table par table. Dès qu'un résultat est enregistré sur une table,
+// celle-ci se libère et un nouveau match y est aussitôt organisé avec les
+// élèves disponibles ayant le même nombre de victoires — sans notion de
+// "tour" ni de "vague" à gérer manuellement. Chaque match affiche le numéro
+// de match de chacun des deux élèves (1er match, 2e match…), en veillant à
+// donner la priorité à ceux qui ont joué le moins de matchs, pour que tout
+// le monde en joue toujours le même nombre. Le surplus impair d'un groupe de
+// victoires est reporté sur le groupe immédiatement supérieur ; s'il en
+// reste un tout seul, il est exempté en attendant un adversaire.
+function ordinalMatch(n){
+  return n===1 ? '1er match' : n+'e match';
+}
+function defisCapacite(seance){
+  return (seance.defisTerrains||1) * (seance.demiTerrain ? 2 : 1);
+}
+function defisMatchCount(seance, studentId){
+  return seance.defisMatches.filter(m=>m.a===studentId || m.b===studentId).length;
+}
+function remplirTablesClassement(activite){
   const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
   if(!seance.defisTerrains){ alert('Choisissez le nombre de tables/terrains disponibles.'); return; }
-  const current = seance.rounds[seance.currentRoundIndex];
-  if(current && current.matches.some(m=>!m.winner)){
-    if(!confirm('Certains matchs du tour actuel n\'ont pas de vainqueur enregistré. Générer un nouveau tour quand même ?')) return;
-  }
+  if(!seance.defisMatches) seance.defisMatches = [];
+  const capacite = defisCapacite(seance);
   const students = STATE.allStudents.filter(s=>s.classe===cd.classe && !seance.absents.includes(s.id)).map(s=>s.id);
+
+  const unresolved = seance.defisMatches.filter(m=>m.winner===null);
+  const occupiedTables = new Set(unresolved.map(m=>m.table));
+  const busy = new Set();
+  unresolved.forEach(m=>{ busy.add(m.a); busy.add(m.b); });
+
+  const freeTables = [];
+  for(let t=1; t<=capacite; t++){ if(!occupiedTables.has(t)) freeTables.push(t); }
+  if(!freeTables.length){ saveState(); return; }
+
+  const available = students.filter(id=>!busy.has(id));
   const groups = {};
-  students.forEach(id=>{
+  available.forEach(id=>{
     const w = cd.wins[id]||0;
     (groups[w] = groups[w]||[]).push(id);
+  });
+  Object.keys(groups).forEach(k=>{
+    // priorité à ceux qui ont joué le moins de matchs, pour égaliser le nombre de matchs de chacun
+    groups[k] = shuffleArray(groups[k]).sort((x,y)=> defisMatchCount(seance,x) - defisMatchCount(seance,y));
   });
   const sortedKeys = Object.keys(groups).map(Number).sort((a,b)=>a-b);
   let leftover = null;
   const pairs = [];
   sortedKeys.forEach(k=>{
-    let pool = shuffleArray(groups[k]);
+    let pool = groups[k].slice();
     if(leftover){ pool = [leftover, ...pool]; leftover = null; }
     while(pool.length>=2){ pairs.push([pool.shift(), pool.shift()]); }
     if(pool.length===1){ leftover = pool[0]; }
   });
-  const byes = leftover ? [leftover] : [];
+  seance.defisBye = leftover;
 
-  // Badminton : le demi-terrain double la capacité simultanée.
-  const capacite = seance.defisTerrains * (seance.demiTerrain ? 2 : 1);
-  // Seule la première vague est créée tout de suite ; le reste attend en file
-  // et sera révélé match par match dès qu'un résultat libère une table
-  // (voir enregistrerVainqueur), pour garder un maximum de tables occupées.
-  const firstWave = pairs.slice(0, capacite);
-  const pendingPairs = pairs.slice(capacite);
-  const matches = [];
-  const playing = new Set();
-  firstWave.forEach(([a,b])=>{ playing.add(a); playing.add(b); });
-  const available = shuffleArray(students.filter(id=>!playing.has(id)));
-  firstWave.forEach(([a,b], idx)=>{
-    matches.push({
-      a, b, winner:null, table: idx+1, vague:1,
-      referee: available.length ? available[idx % available.length] : null,
-    });
+  const usedInPairs = new Set();
+  pairs.forEach(([a,b])=>{ usedInPairs.add(a); usedInPairs.add(b); });
+  const refPool = shuffleArray(available.filter(id=>!usedInPairs.has(id)));
+  let refIdx = 0;
+  pairs.slice(0, freeTables.length).forEach(([a,b], i)=>{
+    const table = freeTables[i];
+    const numA = defisMatchCount(seance,a) + 1;
+    const numB = defisMatchCount(seance,b) + 1;
+    const referee = refPool.length ? refPool[refIdx % refPool.length] : null;
+    if(refPool.length) refIdx++;
+    seance.defisMatches.push({ table, a, b, winner:null, referee, numA, numB });
   });
-
-  seance.rounds.push({ numero: seance.rounds.length+1, matches, byes, pendingPairs, capacite });
-  seance.currentRoundIndex = seance.rounds.length - 1;
   saveState();
-  renderActivityTab(activite);
-}
-function onTourSuivant(activite){
-  const seance = currentSeance(activite);
-  if(seance.currentRoundIndex < seance.rounds.length - 1){
-    seance.currentRoundIndex++;
-    saveState();
-    renderActivityTab(activite);
-  } else {
-    genererTourClassement(activite);
-  }
-}
-function tourPrecedent(activite){
-  const seance = currentSeance(activite);
-  if(seance.currentRoundIndex > 0){
-    seance.currentRoundIndex--;
-    saveState();
-    renderActivityTab(activite);
-  }
 }
 function enregistrerVainqueur(activite, matchIndex, winnerId){
   const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
-  const round = seance.rounds[seance.currentRoundIndex];
-  if(!round) return;
-  const match = round.matches[matchIndex];
+  const match = seance.defisMatches[matchIndex];
   if(!match) return;
-  const wasUnplayed = match.winner === null;
   if(match.winner === winnerId){
     match.winner = null; // reclique sur le même = annule
   } else {
     if(match.winner) cd.wins[match.winner] = Math.max(0, (cd.wins[match.winner]||0) - 1);
     match.winner = winnerId;
     cd.wins[winnerId] = (cd.wins[winnerId]||0) + 1;
-    // Une table vient de se libérer : on révèle immédiatement le prochain
-    // match en attente sur cette table, pour garder un maximum de tables occupées.
-    if(wasUnplayed && round.pendingPairs && round.pendingPairs.length){
-      const [a,b] = round.pendingPairs.shift();
-      const counter = round.matches.length;
-      const capacite = round.capacite || seance.defisTerrains;
-      const table = (counter % capacite) + 1;
-      const vague = Math.floor(counter / capacite) + 1;
-      const students = STATE.allStudents.filter(s=>s.classe===cd.classe && !seance.absents.includes(s.id)).map(s=>s.id);
-      const playing = new Set([a,b]);
-      round.matches.forEach(m=>{ if(m.winner === null){ playing.add(m.a); playing.add(m.b); } });
-      const available = shuffleArray(students.filter(id=>!playing.has(id)));
-      round.matches.push({ a, b, winner:null, table, vague, referee: available.length ? available[0] : null });
-    }
   }
-  saveState();
+  // La table vient de se libérer (ou de se ré-occuper après annulation) :
+  // on tente aussitôt d'organiser un nouveau match sur les tables libres.
+  remplirTablesClassement(activite);
   renderActivityTab(activite);
   renderGeneral();
 }
@@ -1101,10 +1091,10 @@ function renderActivityTab(activite){
       html += `
         <div class="card">
           <div class="toolbar">
-            <h3>📊 Statistiques — Total des victoires cumulées (toutes séances)</h3>
+            <h3>📊 Classement total — victoires depuis le début du cycle</h3>
             <button class="btn secondary small" id="btnExportClassement">📊 Exporter Excel</button>
           </div>
-          <p class="hint">Ce total est propre à la classe et se conserve d'une séance à l'autre (remis à zéro seulement si toutes les séances sont supprimées, ou via "Effacer les résultats").</p>
+          <p class="hint">Ce total additionne les victoires de toutes les séances de cette classe depuis le début du cycle (remis à zéro seulement si toutes les séances sont supprimées, ou via "Effacer les résultats").</p>
           ${renderClassementTable(students, cd.wins)}
         </div>`;
     }
@@ -1198,14 +1188,25 @@ function renderActivityTab(activite){
     saveState();
   });
   wireCheckboxRange('defisTerrainCbGroup', (v)=>{
-    currentSeance(activite).defisTerrains = v;
-    saveState();
+    const s = currentSeance(activite);
+    s.defisTerrains = v;
+    if(s.tournamentType === 'defisClassement' && s.defisMatches && s.defisMatches.length){
+      remplirTablesClassement(activite);
+      renderActivityTab(activite);
+    } else {
+      saveState();
+    }
   });
   const chkDemiTerrain = document.getElementById('chkDemiTerrain');
   if(chkDemiTerrain){
     chkDemiTerrain.addEventListener('change', ()=>{
-      currentSeance(activite).demiTerrain = chkDemiTerrain.checked;
-      saveState();
+      const s = currentSeance(activite);
+      s.demiTerrain = chkDemiTerrain.checked;
+      if(s.tournamentType === 'defisClassement' && s.defisMatches && s.defisMatches.length){
+        remplirTablesClassement(activite);
+      } else {
+        saveState();
+      }
       renderActivityTab(activite);
     });
   }
@@ -1242,10 +1243,11 @@ function renderActivityTab(activite){
     });
   });
 
-  const btnTourSuivant = document.getElementById('btnTourSuivant');
-  if(btnTourSuivant) btnTourSuivant.addEventListener('click', ()=>onTourSuivant(activite));
-  const btnTourPrecedent = document.getElementById('btnTourPrecedent');
-  if(btnTourPrecedent) btnTourPrecedent.addEventListener('click', ()=>tourPrecedent(activite));
+  const btnDemarrerDefis = document.getElementById('btnDemarrerDefis');
+  if(btnDemarrerDefis) btnDemarrerDefis.addEventListener('click', ()=>{
+    remplirTablesClassement(activite);
+    renderActivityTab(activite);
+  });
   panel.querySelectorAll('[data-set-winner]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const [matchIndex, winnerId] = btn.dataset.setWinner.split('::');
@@ -1469,6 +1471,10 @@ function renderDefisHasardSection(activite){
           <tbody>${rows}</tbody>
         </table>
       </div>
+    </div>
+    <div class="card">
+      <h3>🏅 Classement de cette séance (matchs de cette séance uniquement)</h3>
+      ${renderClassementTable(students, seance.hasardWins || {})}
     </div>`;
 }
 
@@ -1476,37 +1482,43 @@ function renderDefisClassementSection(activite){
   const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
   const act = ACTIVITIES[activite];
-  const round = seance.rounds[seance.currentRoundIndex] || null;
-  const hasWaves = round && round.matches.some(m=>m.vague>1);
+  if(!seance.defisMatches) seance.defisMatches = [];
   const isBadminton = activite === 'Badminton';
+  const capacite = defisCapacite(seance);
+  const started = seance.defisMatches.length > 0;
 
-  const matchCards = round ? round.matches.map((m,i)=>{
+  // dernier match connu de chaque table = le match actuellement affiché
+  const parTable = {};
+  seance.defisMatches.forEach((m,i)=>{ parTable[m.table] = i; });
+  const tableCards = [];
+  for(let t=1; t<=capacite; t++){
+    const i = parTable[t];
+    if(i === undefined){
+      tableCards.push(`
+        <div class="poule-card">
+          <h4>${act.terrainLabel.replace(/s$/,'')} ${t}</h4>
+          <p class="hint">En attente d'élèves disponibles…</p>
+        </div>`);
+      continue;
+    }
+    const m = seance.defisMatches[i];
     const nomA = participantLabel(activite, m.a);
     const nomB = participantLabel(activite, m.b);
     const refereeLabel = m.referee ? participantLabel(activite, m.referee) : '—';
-    return `
+    tableCards.push(`
       <div class="poule-card">
-        <h4>${act.terrainLabel.replace(/s$/,'')} ${m.table}${hasWaves ? ' · Vague '+m.vague : ''}</h4>
+        <h4>${act.terrainLabel.replace(/s$/,'')} ${t}</h4>
+        <div class="hint" style="text-align:center;">${ordinalMatch(m.numA)}</div>
         <button class="btn ${m.winner===m.a?'':'ghost'}" data-set-winner="${i}::${m.a}">${nomA}</button>
         <div class="hint" style="text-align:center;margin:4px 0;">contre</div>
+        <div class="hint" style="text-align:center;">${ordinalMatch(m.numB)}</div>
         <button class="btn ${m.winner===m.b?'':'ghost'}" data-set-winner="${i}::${m.b}">${nomB}</button>
         <div class="hint" style="margin-top:6px;">🧑‍⚖️ Arbitre : ${refereeLabel}</div>
-      </div>`;
-  }).join('') : '';
+      </div>`);
+  }
 
-  const byesHtml = round && round.byes.length
-    ? `<p class="hint">Exempté(s) ce tour (effectif impair) : ${round.byes.map(id=>participantLabel(activite,id)).join(', ')}</p>`
-    : '';
-
-  const canGoBack = seance.currentRoundIndex > 0;
-  const isLatest = seance.currentRoundIndex >= seance.rounds.length - 1;
-  const suivantLabel = !seance.rounds.length ? 'Générer le 1er tour' : (isLatest ? 'Générer le tour suivant' : 'Tour suivant');
-
-  const capaciteParVague = seance.defisTerrains * (seance.demiTerrain ? 2 : 1);
-  const maxConcurrent = round ? Math.min(capaciteParVague, round.matches.length) : 0;
-  const terrainsPhysiques = seance.demiTerrain ? Math.ceil(maxConcurrent / 2) : maxConcurrent;
-  const terrainsInfo = round
-    ? `<p class="hint">Ce tour nécessite au maximum <b>${terrainsPhysiques} ${act.terrainLabel.toLowerCase()}</b>${seance.demiTerrain ? ` (jeu en demi-terrain : jusqu'à ${maxConcurrent} matchs simultanés)` : ''}.</p>`
+  const byeHtml = seance.defisBye
+    ? `<p class="hint">Exempté(e) pour l'instant, en attente d'un adversaire au même nombre de victoires : ${participantLabel(activite, seance.defisBye)}</p>`
     : '';
 
   const demiTerrainToggle = isBadminton ? `
@@ -1515,21 +1527,26 @@ function renderDefisClassementSection(activite){
       Jouer sur demi-terrain (double le nombre de matchs simultanés)
     </label>` : '';
 
+  const students = STATE.allStudents.filter(s=>s.classe===cd.classe);
+  const seanceWins = {};
+  seance.defisMatches.forEach(m=>{ if(m.winner) seanceWins[m.winner] = (seanceWins[m.winner]||0) + 1; });
+
   return `
     <div class="card">
       <div class="toolbar">
-        <h3>📈 Défis classement progressif${round ? ' — Tour '+round.numero : ''}</h3>
-        <div style="display:flex;gap:6px;">
-          ${canGoBack ? `<button class="btn ghost small" id="btnTourPrecedent">◀ Tour précédent</button>` : ''}
-          <button class="btn" id="btnTourSuivant">▶️ ${suivantLabel}</button>
-        </div>
+        <h3>📈 Défis classement progressif</h3>
+        ${!started ? `<button class="btn" id="btnDemarrerDefis">▶️ Démarrer les matchs</button>` : ''}
       </div>
       ${checkboxRangeHtml('defisTerrainCbGroup', act.terrainLabel+' disponibles', act.defisTerrainMin, act.defisTerrainMax, seance.defisTerrains || act.defisTerrainMin)}
       ${demiTerrainToggle}
-      ${terrainsInfo}
-      <p class="hint">À chaque tour, les élèves ayant le même nombre de victoires s'affrontent. Cliquez sur le nom du vainqueur de chaque match. S'il y a plus de matchs que de tables, les élèves non-joueurs de la vague officient comme arbitres.</p>
-      ${byesHtml}
-      ${round ? `<div class="poules-grid">${matchCards}</div>` : `<div class="empty-state">Aucun tour généré pour l'instant.</div>`}
+      <p class="hint">Les élèves ayant le même nombre de victoires s'affrontent. Cliquez sur le nom du vainqueur : la table se libère aussitôt et un nouveau match s'y organise automatiquement, en gardant le même nombre de matchs joués pour chacun. S'il y a plus d'élèves que de tables, les non-joueurs officient comme arbitres.</p>
+      ${byeHtml}
+      ${started ? `<div class="poules-grid">${tableCards.join('')}</div>` : `<div class="empty-state">Choisissez le nombre de ${act.terrainLabel.toLowerCase()} puis cliquez sur « Démarrer les matchs ».</div>`}
+      ${started ? `
+      <div class="card" style="margin-top:14px;">
+        <h3>🏅 Classement de cette séance (matchs de cette séance uniquement)</h3>
+        ${renderClassementTable(students, seanceWins)}
+      </div>` : ''}
     </div>`;
 }
 

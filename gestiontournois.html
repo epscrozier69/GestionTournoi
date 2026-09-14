@@ -304,9 +304,16 @@ function deleteSeance(activite){
   const cd = currentClasseData(activite);
   if(!cd.seances.length) return;
   const seance = cd.seances[cd.currentSeanceIndex];
-  if(!confirm(`Supprimer définitivement la Séance ${seance.numero} et ses matchs/tours ? (le classement des victoires est conservé)`)) return;
+  const isLast = cd.seances.length === 1;
+  const msg = isLast
+    ? `Supprimer définitivement la Séance ${seance.numero} ? C'est la dernière séance de cette classe : le total de victoires cumulées sera aussi remis à zéro.`
+    : `Supprimer définitivement la Séance ${seance.numero} et ses matchs/tours ? (le total de victoires cumulées est conservé)`;
+  if(!confirm(msg)) return;
   cd.seances.splice(cd.currentSeanceIndex, 1);
   cd.currentSeanceIndex = Math.max(0, cd.currentSeanceIndex - 1);
+  if(!cd.seances.length){
+    cd.wins = {}; // plus aucune séance : on repart de zéro
+  }
   saveState();
   renderActivityTab(activite);
   renderGeneral();
@@ -317,6 +324,21 @@ function toggleAbsent(activite, studentId){
   if(idx >= 0) seance.absents.splice(idx, 1); else seance.absents.push(studentId);
   saveState();
   renderActivityTab(activite);
+}
+// Efface matchs/tours de la séance en cours ET remet le classement (victoires) à zéro pour cette classe.
+function clearSeanceResults(activite){
+  const cd = currentClasseData(activite);
+  const seance = currentSeance(activite);
+  if(!confirm('Effacer tous les résultats de cette séance (matchs, tours, poules) et remettre le classement des victoires à zéro pour cette classe ? Cette action est irréversible.')) return;
+  seance.teams = [];
+  seance.poules = [];
+  seance.matches = [];
+  seance.rounds = [];
+  seance.currentRoundIndex = -1;
+  cd.wins = {};
+  saveState();
+  renderActivityTab(activite);
+  renderGeneral();
 }
 
 let currentTab = 'general';
@@ -456,12 +478,11 @@ function exportMatchesExcel(activite){
 }
 function exportClassementExcel(activite){
   const cd = currentClasseData(activite);
-  const seance = currentSeance(activite);
-  if(!cd || !seance) return;
+  if(!cd) return;
   const students = STATE.allStudents.filter(s=>s.classe===cd.classe);
   const sorted = students.slice().sort((a,b)=>(cd.wins[b.id]||0)-(cd.wins[a.id]||0));
-  const rows = sorted.map((s,i)=>({ 'Rang':i+1, 'Nom Prénom':s.nomPrenom, 'Victoires':cd.wins[s.id]||0 }));
-  exportRowsToExcel(rows, `classement_${slug(activite)}_${slug(cd.classe)}_seance${seance.numero}.xlsx`, 'Classement');
+  const rows = sorted.map((s,i)=>({ 'Rang':i+1, 'Nom Prénom':s.nomPrenom, 'Victoires cumulées':cd.wins[s.id]||0 }));
+  exportRowsToExcel(rows, `classement_cumule_${slug(activite)}_${slug(cd.classe)}.xlsx`, 'Classement');
 }
 
 /* ------------------------------------------------------- POULES / EQUIPES */
@@ -565,8 +586,30 @@ function onGenererPoules(activite){
   } else {
     seance.config = { terrains, taillePoule };
     seance.teams = [];
-    // Classement (cd.wins) utilisé pour placer les meilleurs élèves en Poule 1.
-    seance.poules = generatePoules(studentIds, taillePoule, cd.wins);
+    const seanceIdx = cd.seances.indexOf(seance);
+    const prevSeance = seanceIdx > 0 ? cd.seances[seanceIdx-1] : null;
+    const prevHasResults = prevSeance && prevSeance.tournamentType === 'poule' && prevSeance.poules.length && prevSeance.matches.some(m=>m.winner);
+
+    if(prevHasResults){
+      // Montée-descente à partir du classement de la séance précédente.
+      const assignment = computeMonteeDescente(prevSeance);
+      const nbPoules = prevSeance.poules.length;
+      const groups = Array.from({length:nbPoules}, ()=>[]);
+      const unassigned = [];
+      studentIds.forEach(id=>{
+        if(assignment[id] !== undefined) groups[assignment[id]].push(id);
+        else unassigned.push(id); // nouvel élève, ou absent la séance précédente
+      });
+      unassigned.forEach(id=>{
+        let target = 0, min = Infinity;
+        groups.forEach((g,i)=>{ if(g.length < min){ min = g.length; target = i; } });
+        groups[target].push(id);
+      });
+      seance.poules = groups.map((members,i)=>({ id:'poule'+(i+1), nom:'Poule '+(i+1), members: shuffleArray(members) }));
+    } else {
+      // Pas de séance de poule précédente exploitable : classement global (cd.wins) ou aléatoire.
+      seance.poules = generatePoules(studentIds, taillePoule, cd.wins);
+    }
   }
   seance.matches = [];
   saveState();
@@ -598,6 +641,60 @@ function renameTeam(activite, teamId, newName){
   const seance = currentSeance(activite);
   const t = seance.teams.find(t=>t.id===teamId);
   if(t){ t.nom = newName || t.nom; saveState(); renderGeneral(); }
+}
+
+function setPouleMatchWinner(activite, matchIndex, winnerId){
+  const seance = currentSeance(activite);
+  const match = seance.matches[matchIndex];
+  if(!match) return;
+  match.winner = (match.winner === winnerId) ? null : winnerId;
+  saveState();
+  renderActivityTab(activite);
+}
+// Classement (ordre décroissant de victoires) des membres ACTIFS (non absents)
+// d'une poule, à partir des matchs de cette séance.
+function computePouleStanding(seance, poule){
+  const winCounts = {};
+  poule.members.forEach(id=>{ winCounts[id] = 0; });
+  seance.matches.filter(m=>m.poule===poule.nom && m.winner).forEach(m=>{
+    if(winCounts[m.winner] !== undefined) winCounts[m.winner]++;
+  });
+  const actifs = poule.members.filter(id=>!seance.absents.includes(id));
+  return actifs.slice().sort((a,b)=> (winCounts[b]||0) - (winCounts[a]||0));
+}
+// Montée-descente : le 1er d'une poule monte dans la poule au-dessus, le
+// dernier descend dans la poule en-dessous, le reste (le "milieu") reste sur
+// place. Poule 1 : seul le dernier descend. Dernière poule : seul le premier
+// monte. Renvoie une map participantId -> index de poule cible (0-based).
+function computeMonteeDescente(previousSeance){
+  const poules = previousSeance.poules;
+  const n = poules.length;
+  const assignment = {};
+  poules.forEach((p, idx)=>{
+    const standing = computePouleStanding(previousSeance, p);
+    if(!standing.length) return;
+    if(standing.length === 1){
+      assignment[standing[0]] = idx;
+      return;
+    }
+    const premier = standing[0];
+    const dernier = standing[standing.length-1];
+    const milieu = standing.slice(1, -1);
+    if(idx === 0){
+      assignment[premier] = idx;
+      milieu.forEach(id=>{ assignment[id] = idx; });
+      assignment[dernier] = Math.min(idx+1, n-1);
+    } else if(idx === n-1){
+      assignment[premier] = Math.max(idx-1, 0);
+      milieu.forEach(id=>{ assignment[id] = idx; });
+      assignment[dernier] = idx;
+    } else {
+      assignment[premier] = idx-1;
+      milieu.forEach(id=>{ assignment[id] = idx; });
+      assignment[dernier] = idx+1;
+    }
+  });
+  return assignment;
 }
 
 /* ------------------------------------------------------------ MATCHES - */
@@ -635,7 +732,7 @@ function onGenererMatchs(activite){
       pairs.forEach(([a,b])=>{
         const table = (counter % seance.config.terrains) + 1;
         const vague = Math.floor(counter / seance.config.terrains) + 1;
-        matches.push({ poule:p.nom, tour:round+1, vague, table, a, b });
+        matches.push({ poule:p.nom, tour:round+1, vague, table, a, b, winner:null });
         counter++;
       });
     });
@@ -697,23 +794,24 @@ function genererTourClassement(activite){
   const byes = leftover ? [leftover] : [];
 
   // Badminton : le demi-terrain double la capacité simultanée.
-  const terrains = seance.defisTerrains * (seance.demiTerrain ? 2 : 1);
+  const capacite = seance.defisTerrains * (seance.demiTerrain ? 2 : 1);
+  // Seule la première vague est créée tout de suite ; le reste attend en file
+  // et sera révélé match par match dès qu'un résultat libère une table
+  // (voir enregistrerVainqueur), pour garder un maximum de tables occupées.
+  const firstWave = pairs.slice(0, capacite);
+  const pendingPairs = pairs.slice(capacite);
   const matches = [];
-  for(let i=0; i<pairs.length; i+=terrains){
-    const wavePairs = pairs.slice(i, i+terrains);
-    const vague = Math.floor(i/terrains) + 1;
-    const playing = new Set();
-    wavePairs.forEach(([a,b])=>{ playing.add(a); playing.add(b); });
-    const available = shuffleArray(students.filter(id=>!playing.has(id)));
-    wavePairs.forEach(([a,b], idx)=>{
-      matches.push({
-        a, b, winner:null, table: idx+1, vague,
-        referee: available.length ? available[idx % available.length] : null,
-      });
+  const playing = new Set();
+  firstWave.forEach(([a,b])=>{ playing.add(a); playing.add(b); });
+  const available = shuffleArray(students.filter(id=>!playing.has(id)));
+  firstWave.forEach(([a,b], idx)=>{
+    matches.push({
+      a, b, winner:null, table: idx+1, vague:1,
+      referee: available.length ? available[idx % available.length] : null,
     });
-  }
+  });
 
-  seance.rounds.push({ numero: seance.rounds.length+1, matches, byes });
+  seance.rounds.push({ numero: seance.rounds.length+1, matches, byes, pendingPairs, capacite });
   seance.currentRoundIndex = seance.rounds.length - 1;
   saveState();
   renderActivityTab(activite);
@@ -743,12 +841,27 @@ function enregistrerVainqueur(activite, matchIndex, winnerId){
   if(!round) return;
   const match = round.matches[matchIndex];
   if(!match) return;
+  const wasUnplayed = match.winner === null;
   if(match.winner === winnerId){
     match.winner = null; // reclique sur le même = annule
   } else {
     if(match.winner) cd.wins[match.winner] = Math.max(0, (cd.wins[match.winner]||0) - 1);
     match.winner = winnerId;
     cd.wins[winnerId] = (cd.wins[winnerId]||0) + 1;
+    // Une table vient de se libérer : on révèle immédiatement le prochain
+    // match en attente sur cette table, pour garder un maximum de tables occupées.
+    if(wasUnplayed && round.pendingPairs && round.pendingPairs.length){
+      const [a,b] = round.pendingPairs.shift();
+      const counter = round.matches.length;
+      const capacite = round.capacite || seance.defisTerrains;
+      const table = (counter % capacite) + 1;
+      const vague = Math.floor(counter / capacite) + 1;
+      const students = STATE.allStudents.filter(s=>s.classe===cd.classe && !seance.absents.includes(s.id)).map(s=>s.id);
+      const playing = new Set([a,b]);
+      round.matches.forEach(m=>{ if(m.winner === null){ playing.add(m.a); playing.add(m.b); } });
+      const available = shuffleArray(students.filter(id=>!playing.has(id)));
+      round.matches.push({ a, b, winner:null, table, vague, referee: available.length ? available[0] : null });
+    }
   }
   saveState();
   renderActivityTab(activite);
@@ -984,6 +1097,18 @@ function renderActivityTab(activite){
         <div class="chip" style="background:var(--c6)"><b>${garcons}</b>Garçons</div>
       </div>`;
 
+    if(Object.keys(cd.wins).length){
+      html += `
+        <div class="card">
+          <div class="toolbar">
+            <h3>📊 Statistiques — Total des victoires cumulées (toutes séances)</h3>
+            <button class="btn secondary small" id="btnExportClassement">📊 Exporter Excel</button>
+          </div>
+          <p class="hint">Ce total est propre à la classe et se conserve d'une séance à l'autre (remis à zéro seulement si toutes les séances sont supprimées, ou via "Effacer les résultats").</p>
+          ${renderClassementTable(students, cd.wins)}
+        </div>`;
+    }
+
     html += `
       <div class="card">
         <div class="toolbar" style="margin-bottom:0;">
@@ -994,6 +1119,7 @@ function renderActivityTab(activite){
           </div>
           <div style="display:flex;gap:6px;">
             <button class="btn small secondary" id="btnNouvelleSeance">➕ Nouvelle séance</button>
+            ${cd.seances.length ? '<button class="btn small ghost" id="btnEffacerResultats">🧹 Effacer les résultats</button>' : ''}
             ${cd.seances.length ? '<button class="btn small danger" id="btnSupprimerSeance">🗑️ Supprimer la séance</button>' : ''}
           </div>
         </div>
@@ -1050,6 +1176,8 @@ function renderActivityTab(activite){
   if(btnNouvelleSeance) btnNouvelleSeance.addEventListener('click', ()=>addSeance(activite));
   const btnSupprimerSeance = document.getElementById('btnSupprimerSeance');
   if(btnSupprimerSeance) btnSupprimerSeance.addEventListener('click', ()=>deleteSeance(activite));
+  const btnEffacerResultats = document.getElementById('btnEffacerResultats');
+  if(btnEffacerResultats) btnEffacerResultats.addEventListener('click', ()=>clearSeanceResults(activite));
   panel.querySelectorAll('[data-seance-index]').forEach(btn=>{
     btn.addEventListener('click', ()=>switchSeance(activite, parseInt(btn.dataset.seanceIndex, 10)));
   });
@@ -1122,6 +1250,12 @@ function renderActivityTab(activite){
     btn.addEventListener('click', ()=>{
       const [matchIndex, winnerId] = btn.dataset.setWinner.split('::');
       enregistrerVainqueur(activite, parseInt(matchIndex,10), winnerId);
+    });
+  });
+  panel.querySelectorAll('[data-set-poule-winner]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const [matchIndex, winnerId] = btn.dataset.setPouleWinner.split('::');
+      setPouleMatchWinner(activite, parseInt(matchIndex,10), winnerId);
     });
   });
 }
@@ -1206,22 +1340,36 @@ function renderTeamsSection(activite){
 function renderPoulesSection(activite){
   const seance = currentSeance(activite);
   if(!seance.poules.length) return '';
+  const act = ACTIVITIES[activite];
   return `
     <div class="card">
       <h3>🏆 Poules</h3>
+      ${seance.matches.some(m=>m.winner) ? `<p class="hint">Classement basé sur les matchs déjà enregistrés — servira à la montée-descente de la prochaine séance.</p>` : ''}
       <div class="poules-grid">
-        ${seance.poules.map(p=>`
+        ${seance.poules.map(p=>{
+          const standing = computePouleStanding(seance, p);
+          const absentsDeLaPoule = p.members.filter(id=>seance.absents.includes(id));
+          return `
           <div class="poule-card">
             <h4>${p.nom} (${p.members.length})</h4>
             <ul>
-              ${p.members.map(mid=>`
-                <li>${participantLabel(activite, mid)}
+              ${standing.map((mid,rank)=>{
+                const w = seance.matches.filter(m=>m.poule===p.nom && m.winner===mid).length;
+                return `<li>${rank+1}. ${participantLabel(activite, mid)} <span class="muted">(${w}v)</span>
+                  <select data-move-participant="${mid}">
+                    ${seance.poules.map(p2=>`<option value="${p2.id}" ${p2.id===p.id?'selected':''}>${p2.nom}</option>`).join('')}
+                  </select>
+                </li>`;
+              }).join('')}
+              ${absentsDeLaPoule.map(mid=>`
+                <li style="opacity:.55;text-decoration:line-through;">${participantLabel(activite, mid)} (absent)
                   <select data-move-participant="${mid}">
                     ${seance.poules.map(p2=>`<option value="${p2.id}" ${p2.id===p.id?'selected':''}>${p2.nom}</option>`).join('')}
                   </select>
                 </li>`).join('')}
             </ul>
-          </div>`).join('')}
+          </div>`;
+        }).join('')}
       </div>
       <button class="btn secondary" id="btnGenererMatchs">📅 Générer les matchs</button>
     </div>`;
@@ -1231,13 +1379,18 @@ function renderMatchesSection(activite){
   const seance = currentSeance(activite);
   if(!seance.matches.length) return '';
   const act = ACTIVITIES[activite];
-  const sorted = seance.matches.slice().sort((a,b)=> a.tour-b.tour || a.vague-b.vague || a.table-b.table);
+  const withIndex = seance.matches.map((m,idx)=>Object.assign({}, m, {idx}));
+  const sorted = withIndex.sort((a,b)=> a.tour-b.tour || a.vague-b.vague || a.table-b.table);
   const rows = sorted.map(m=>`
     <tr>
       <td><span class="tour-badge">Tour ${m.tour}${m.vague>1?' · Vague '+m.vague:''}</span></td>
       <td><span class="table-badge">${act.terrainLabel.replace(/s$/,'')} ${m.table}</span></td>
       <td><span class="poule-tag">${m.poule}</span></td>
-      <td>${participantLabel(activite, m.a)} <b>vs</b> ${participantLabel(activite, m.b)}</td>
+      <td>
+        <button class="btn small ${m.winner===m.a?'':'ghost'}" data-set-poule-winner="${m.idx}::${m.a}">${participantLabel(activite, m.a)}</button>
+        <span class="hint" style="margin:0 4px;">vs</span>
+        <button class="btn small ${m.winner===m.b?'':'ghost'}" data-set-poule-winner="${m.idx}::${m.b}">${participantLabel(activite, m.b)}</button>
+      </td>
     </tr>`).join('');
   return `
     <div class="card">
@@ -1245,6 +1398,7 @@ function renderMatchesSection(activite){
         <h3>📅 Calendrier des matchs</h3>
         <button class="btn secondary small" id="btnExportMatchs">📊 Exporter Excel</button>
       </div>
+      <p class="hint">Cliquez sur le nom du vainqueur de chaque match — le classement des poules (ci-dessus) se met à jour automatiquement.</p>
       <div class="table-wrap">
         <table class="match-table">
           <thead><tr>
@@ -1315,21 +1469,12 @@ function renderDefisHasardSection(activite){
           <tbody>${rows}</tbody>
         </table>
       </div>
-    </div>
-    <div class="card">
-      <div class="toolbar">
-        <h3>🏅 Classement</h3>
-        <button class="btn secondary small" id="btnExportClassement">📊 Exporter Excel</button>
-      </div>
-      ${renderClassementTable(students, wins)}
     </div>`;
 }
 
 function renderDefisClassementSection(activite){
   const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
-  const students = STATE.allStudents.filter(s=>s.classe===cd.classe && !seance.absents.includes(s.id));
-  const wins = cd.wins || {};
   const act = ACTIVITIES[activite];
   const round = seance.rounds[seance.currentRoundIndex] || null;
   const hasWaves = round && round.matches.some(m=>m.vague>1);
@@ -1385,13 +1530,6 @@ function renderDefisClassementSection(activite){
       <p class="hint">À chaque tour, les élèves ayant le même nombre de victoires s'affrontent. Cliquez sur le nom du vainqueur de chaque match. S'il y a plus de matchs que de tables, les élèves non-joueurs de la vague officient comme arbitres.</p>
       ${byesHtml}
       ${round ? `<div class="poules-grid">${matchCards}</div>` : `<div class="empty-state">Aucun tour généré pour l'instant.</div>`}
-    </div>
-    <div class="card">
-      <div class="toolbar">
-        <h3>🏅 Classement</h3>
-        <button class="btn secondary small" id="btnExportClassement">📊 Exporter Excel</button>
-      </div>
-      ${renderClassementTable(students, wins)}
     </div>`;
 }
 

@@ -1415,9 +1415,10 @@ function remplirTablesClassement(activite){
     if(lastOpponent[m.a] === undefined) lastOpponent[m.a] = m.b;
     if(lastOpponent[m.b] === undefined) lastOpponent[m.b] = m.a;
   }
-  // Appariement STRICTEMENT à l'intérieur de chaque groupe de même nombre de
-  // victoires (jamais de report vers un groupe voisin) : un élève seul dans
-  // son groupe reste exempté (bye) en attendant un adversaire à égalité.
+  // Appariement PRIORITAIREMENT à l'intérieur de chaque groupe de même
+  // nombre de victoires (jamais de report vers un groupe voisin à ce stade) :
+  // un élève seul dans son groupe reste exempté (bye) en attendant un
+  // adversaire à égalité.
   const pairs = [];
   const byes = [];
   Object.keys(groups).map(Number).forEach(k=>{
@@ -1431,7 +1432,20 @@ function remplirTablesClassement(activite){
     }
     if(pool.length === 1) byes.push(pool[0]);
   });
-  seance.defisBye = byes;
+
+  // Repli de souplesse (priorité basse, seulement pour ne pas rester bloqué) :
+  // un élève encore seul après le passage ci-dessus peut exceptionnellement
+  // affronter quelqu'un ayant une victoire de plus ou de moins — jamais un
+  // écart plus grand. S'il n'y a même pas ça, il reste exempté.
+  const stillByes = [];
+  while(byes.length){
+    const a = byes.shift();
+    const idx = byes.findIndex(id => Math.abs((cd.wins[id]||0) - (cd.wins[a]||0)) === 1);
+    if(idx === -1){ stillByes.push(a); continue; }
+    const b = byes.splice(idx, 1)[0];
+    pairs.push([a, b]);
+  }
+  seance.defisBye = stillByes;
 
   // Priorité GLOBALE (tous groupes de victoires confondus) aux paires dont
   // les deux élèves ont joué le moins de matchs : sans ça, quand les tables
@@ -1445,12 +1459,12 @@ function remplirTablesClassement(activite){
     return m1 - m2;
   });
 
-  // On ne crée un match que si un arbitre dédié (unique, jamais partagé entre
-  // deux tables en même temps, jamais aussi joueur ailleurs) peut lui être
-  // garanti : chaque match mobilise 2 joueurs + 1 arbitre, donc au plus 1
-  // match pour 3 élèves disponibles.
-  const maxMatchesAvecArbitre = Math.floor(available.length / 3);
-  const matchesACreer = Math.min(freeTables.length, pairs.length, maxMatchesAvecArbitre);
+  // On privilégie un arbitre dédié (unique, jamais partagé entre deux tables
+  // en même temps, jamais aussi joueur ailleurs) quand assez d'élèves sont
+  // disponibles pour ça (2 joueurs + 1 arbitre). S'il n'en reste plus assez
+  // (typiquement : il ne reste que 2 élèves à égalité de victoires et
+  // personne d'autre), le match se joue quand même, en auto-arbitrage.
+  const matchesACreer = Math.min(freeTables.length, pairs.length);
   const chosenPairs = pairs.slice(0, matchesACreer);
 
   const usedInPairs = new Set();
@@ -1460,7 +1474,7 @@ function remplirTablesClassement(activite){
     const table = freeTables[i];
     const numA = defisMatchCount(seance,a) + 1;
     const numB = defisMatchCount(seance,b) + 1;
-    const referee = refPool[i]; // garanti disponible et unique (voir maxMatchesAvecArbitre)
+    const referee = refPool[i] || null; // undefined une fois le vivier épuisé -> auto-arbitrage
     seance.defisMatches.push({ table, a, b, winner:null, referee, numA, numB });
   });
   saveState();
@@ -1792,7 +1806,10 @@ function renderActivityTab(activite){
     const modePoints = typeCourant === 'poule';
     const totalMap = modePoints ? cd.poulePoints : cd.wins;
     const totalLabel = modePoints ? 'points' : 'victoires';
-    const tournoiActif = typeCourant === 'poule' || typeCourant === 'defisHasard' || typeCourant === 'defisClassement';
+    // Pour les défis (hasard/classement progressif), le classement total est
+    // déjà inclus (colonne "Total") dans la carte "Classement détaillé —
+    // victoires séance par séance" plus bas : pas besoin de le répéter ici.
+    const tournoiActif = typeCourant === 'poule';
     if(tournoiActif){
       const showTotal = !!cd.showClassementTotal;
       html += `
@@ -2316,7 +2333,7 @@ function renderDefisClassementSection(activite){
     const m = seance.defisMatches[i];
     const nomA = participantLabel(activite, m.a);
     const nomB = participantLabel(activite, m.b);
-    const refereeLabel = m.referee ? participantLabel(activite, m.referee) : '—';
+    const refereeLabel = m.referee ? participantLabel(activite, m.referee) : 'Auto-arbitrage';
     tableCards.push(`
       <div class="poule-card">
         <h4>${act.terrainLabel.replace(/s$/,'')} ${t}</h4>

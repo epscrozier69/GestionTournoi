@@ -1433,6 +1433,18 @@ function remplirTablesClassement(activite){
   });
   seance.defisBye = byes;
 
+  // Priorité GLOBALE (tous groupes de victoires confondus) aux paires dont
+  // les deux élèves ont joué le moins de matchs : sans ça, quand les tables
+  // manquent pour tout le monde, le groupe des 0 victoires (souvent le plus
+  // grand, avec les nouveaux entrants) passe toujours avant les groupes de
+  // victoires supérieures, qui finissent par prendre du retard en nombre de
+  // matchs joués.
+  pairs.sort((p1, p2)=>{
+    const m1 = Math.min(defisMatchCount(seance,p1[0]), defisMatchCount(seance,p1[1]));
+    const m2 = Math.min(defisMatchCount(seance,p2[0]), defisMatchCount(seance,p2[1]));
+    return m1 - m2;
+  });
+
   // On ne crée un match que si un arbitre dédié (unique, jamais partagé entre
   // deux tables en même temps, jamais aussi joueur ailleurs) peut lui être
   // garanti : chaque match mobilise 2 joueurs + 1 arbitre, donc au plus 1
@@ -2187,6 +2199,54 @@ function renderClassementTable(students, wins){
     </div>`;
 }
 
+// Victoires marquées lors d'une séance donnée (défis hasard ou défis
+// classement progressif) — utilisé pour reconstituer le détail séance par
+// séance du classement total, qui cumule les victoires d'une séance à
+// l'autre (voir cd.wins).
+function computeSeanceDefisWins(seance){
+  if(seance.tournamentType === 'defisHasard') return seance.hasardWins || {};
+  if(seance.tournamentType === 'defisClassement'){
+    const tally = {};
+    (seance.defisMatches||[]).forEach(m=>{ if(m.winner) tally[m.winner] = (tally[m.winner]||0) + 1; });
+    return tally;
+  }
+  return {};
+}
+// Classement détaillé : une colonne par séance de défis (hasard ou
+// classement progressif) jouée par cette classe, plus une colonne Total —
+// pour comprendre pourquoi deux élèves n'ont pas le même nombre de
+// victoires total (et donc pourquoi ils ne s'affrontent pas forcément) en
+// voyant d'où viennent leurs victoires séance par séance.
+function renderClassementParSeance(cd, students){
+  const seancesDefis = cd.seances.filter(s=> s.tournamentType==='defisHasard' || s.tournamentType==='defisClassement');
+  if(!seancesDefis.length) return '';
+  const perSeance = seancesDefis.map(s=>computeSeanceDefisWins(s));
+  const headerCols = seancesDefis.map(s=>`<th style="background:${PALETTE[3 + (s.numero % (PALETTE.length-3))]}">Séance ${s.numero}</th>`).join('');
+  const sorted = students.slice().sort((a,b)=> (cd.wins[b.id]||0) - (cd.wins[a.id]||0));
+  const rows = sorted.map((s,i)=>{
+    const cells = perSeance.map(map=>`<td>${map[s.id]||0}</td>`).join('');
+    return `
+      <tr>
+        <td><b>${i+1}</b></td>
+        <td>${s.nomPrenom}</td>
+        ${cells}
+        <td><b>${cd.wins[s.id]||0}</b></td>
+      </tr>`;
+  }).join('');
+  return `
+    <div class="table-wrap">
+      <table class="classement-table">
+        <thead><tr>
+          <th style="background:${PALETTE[0]}">Rang</th>
+          <th style="background:${PALETTE[1]}">Nom Prénom</th>
+          ${headerCols}
+          <th style="background:${PALETTE[2]}">Total</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
 function renderDefisHasardSection(activite){
   const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
@@ -2224,8 +2284,9 @@ function renderDefisHasardSection(activite){
       </div>
     </div>
     <div class="card">
-      <h3>🏅 Classement de cette séance (matchs de cette séance uniquement)</h3>
-      ${renderClassementTable(students, seance.hasardWins || {})}
+      <h3>🏅 Classement détaillé — victoires séance par séance</h3>
+      <p class="hint">Une colonne par séance de défis (hasard ou classement progressif), et le total cumulé à droite.</p>
+      ${renderClassementParSeance(cd, students)}
     </div>`;
 }
 
@@ -2302,6 +2363,11 @@ function renderDefisClassementSection(activite){
           ${renderClassementTable(students, seanceWins)}
         </div>
       </div>` : `<div class="empty-state">Choisissez le nombre de ${act.terrainLabel.toLowerCase()} puis cliquez sur « Démarrer les matchs ».</div>`}
+    </div>
+    <div class="card">
+      <h3>🏅 Classement détaillé — victoires séance par séance</h3>
+      <p class="hint">Une colonne par séance de défis (hasard ou classement progressif), et le total cumulé à droite. C'est ce total qui détermine qui affronte qui (seuls les élèves à égalité de victoires se rencontrent).</p>
+      ${renderClassementParSeance(cd, students)}
     </div>`;
 }
 

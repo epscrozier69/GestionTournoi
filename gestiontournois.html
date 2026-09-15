@@ -131,6 +131,10 @@
   .match-row:last-child{border-bottom:none;}
   .match-name{font-weight:600;}
   .match-name.winner{color:var(--ok);text-decoration:underline;}
+  .arbitre-label{
+    margin-top:8px;padding:5px 8px;border-radius:7px;background:#fff7ed;
+    color:#9a3412;font-size:.85rem;font-weight:600;
+  }
   .table-players-summary{
     display:flex;flex-wrap:wrap;gap:6px 14px;margin-bottom:8px;padding-bottom:8px;
     border-bottom:1px solid var(--line);font-size:.78rem;color:var(--muted);
@@ -332,11 +336,14 @@ function defaultSeance(numero, activite){
     absents:[], // ids d'élèves absents/dispensés pour cette séance
     teams:[], poules:[], matches:[],
     hasardWins:{}, // défis hasard : victoires de cette séance uniquement
-    defisMatches:[], defisBye:null, // défis classement progressif uniquement (flux continu)
+    defisMatches:[], defisBye:[], // défis classement progressif uniquement (flux continu)
   };
 }
 function defaultClasseData(classe, activite){
-  return { classe, wins:{}, seances:[defaultSeance(1, activite)], currentSeanceIndex:0, showClassementTotal:false };
+  return {
+    classe, wins:{}, poulePoints:{}, // wins = défis (hasard/classement) ; poulePoints = tournoi par poule
+    seances:[defaultSeance(1, activite)], currentSeanceIndex:0, showClassementTotal:false,
+  };
 }
 function defaultActivityData(){
   return { classes:{}, currentClasse:'' };
@@ -401,7 +408,7 @@ function deleteSeance(activite){
   cd.seances.splice(cd.currentSeanceIndex, 1);
   cd.currentSeanceIndex = Math.max(0, cd.currentSeanceIndex - 1);
   if(!cd.seances.length){
-    cd.wins = {}; // plus aucune séance : on repart de zéro
+    cd.wins = {}; cd.poulePoints = {}; // plus aucune séance : on repart de zéro
   }
   saveState();
   renderActivityTab(activite);
@@ -453,8 +460,9 @@ function clearSeanceResults(activite){
   seance.matches = [];
   seance.hasardWins = {};
   seance.defisMatches = [];
-  seance.defisBye = null;
+  seance.defisBye = [];
   cd.wins = {};
+  cd.poulePoints = {};
   saveState();
   renderActivityTab(activite);
   renderGeneral();
@@ -828,9 +836,13 @@ function exportFeuillesMatchsPDF(activite){
 function exportClassementExcel(activite){
   const cd = currentClasseData(activite);
   if(!cd) return;
+  const seance = currentSeance(activite);
+  const modePoints = seance && seance.tournamentType === 'poule';
+  const totalMap = modePoints ? cd.poulePoints : cd.wins;
+  const colLabel = modePoints ? 'Points cumulés' : 'Victoires cumulées';
   const students = STATE.allStudents.filter(s=>s.classe===cd.classe);
-  const sorted = students.slice().sort((a,b)=>(cd.wins[b.id]||0)-(cd.wins[a.id]||0));
-  const rows = sorted.map((s,i)=>({ 'Rang':i+1, 'Nom Prénom':s.nomPrenom, 'Victoires cumulées':cd.wins[s.id]||0 }));
+  const sorted = students.slice().sort((a,b)=>(totalMap[b.id]||0)-(totalMap[a.id]||0));
+  const rows = sorted.map((s,i)=>({ 'Rang':i+1, 'Nom Prénom':s.nomPrenom, [colLabel]:totalMap[s.id]||0 }));
   exportRowsToExcel(rows, `classement_cumule_${slug(activite)}_${slug(cd.classe)}.xlsx`, 'Classement');
 }
 
@@ -1076,6 +1088,19 @@ function closeScoreModal(){
   document.getElementById('scoreModal').hidden = true;
   scoreModalContext = null;
 }
+// Reporte l'écart entre les anciens et les nouveaux points d'un match dans le
+// total cumulé de la classe (cd.poulePoints), pour que le classement se
+// poursuive d'une séance à l'autre — uniquement pour les activités
+// individuelles (en équipe, les équipes sont reformées à chaque séance,
+// cumuler des points par équipe n'aurait pas de sens).
+function appliquerDeltaPoulePoints(activite, match, newPointsA, newPointsB){
+  if(ACTIVITIES[activite].type !== 'individuel') return;
+  const cd = currentClasseData(activite);
+  const oldA = (match.pointsA !== undefined && match.pointsA !== null) ? match.pointsA : 0;
+  const oldB = (match.pointsB !== undefined && match.pointsB !== null) ? match.pointsB : 0;
+  cd.poulePoints[match.a] = Math.max(0, (cd.poulePoints[match.a]||0) - oldA + newPointsA);
+  cd.poulePoints[match.b] = Math.max(0, (cd.poulePoints[match.b]||0) - oldB + newPointsB);
+}
 function validerScoreModal(){
   if(!scoreModalContext) return;
   const { activite, matchIndex } = scoreModalContext;
@@ -1087,6 +1112,7 @@ function validerScoreModal(){
   if(isNaN(scoreA) || isNaN(scoreB) || scoreA < 0 || scoreB < 0){ alert('Entrez les deux scores.'); return; }
   const result = computeMatchPoints(scoreA, scoreB);
   if(!result){ alert('Les deux scores ne peuvent pas être égaux : il doit y avoir un vainqueur.'); return; }
+  appliquerDeltaPoulePoints(activite, match, result.pointsA, result.pointsB);
   match.scoreA = scoreA; match.scoreB = scoreB;
   match.pointsA = result.pointsA; match.pointsB = result.pointsB;
   match.winner = result.winnerIsA ? match.a : match.b;
@@ -1103,11 +1129,11 @@ function abandonScoreModal(who){
   const seance = currentSeance(activite);
   const match = seance.matches[matchIndex];
   if(!match) return;
-  if(who === 'a'){
-    match.pointsA = 0; match.pointsB = 5; match.winner = match.b;
-  } else {
-    match.pointsB = 0; match.pointsA = 5; match.winner = match.a;
-  }
+  const newPointsA = who === 'a' ? 0 : 5;
+  const newPointsB = who === 'a' ? 5 : 0;
+  appliquerDeltaPoulePoints(activite, match, newPointsA, newPointsB);
+  match.pointsA = newPointsA; match.pointsB = newPointsB;
+  match.winner = who === 'a' ? match.b : match.a;
   match.scoreA = null; match.scoreB = null;
   match.abandon = who;
   saveState();
@@ -1257,8 +1283,13 @@ function remplirTablesClassement(activite){
 
   const unresolved = seance.defisMatches.filter(m=>m.winner===null);
   const occupiedTables = new Set(unresolved.map(m=>m.table));
+  // Un élève déjà joueur OU déjà arbitre d'un match en cours n'est disponible
+  // ni pour jouer ni pour arbitrer ailleurs tant que ce match n'est pas résolu.
   const busy = new Set();
-  unresolved.forEach(m=>{ busy.add(m.a); busy.add(m.b); });
+  unresolved.forEach(m=>{
+    busy.add(m.a); busy.add(m.b);
+    if(m.referee) busy.add(m.referee);
+  });
 
   const freeTables = [];
   for(let t=1; t<=capacite; t++){ if(!occupiedTables.has(t)) freeTables.push(t); }
@@ -1274,22 +1305,39 @@ function remplirTablesClassement(activite){
     // priorité à ceux qui ont joué le moins de matchs, pour égaliser le nombre de matchs de chacun
     groups[k] = shuffleArray(groups[k]).sort((x,y)=> defisMatchCount(seance,x) - defisMatchCount(seance,y));
   });
-  const sortedKeys = Object.keys(groups).map(Number).sort((a,b)=>a-b);
-  let leftover = null;
+  // Dernier adversaire rencontré par chaque élève (pour éviter une revanche
+  // immédiate, le même duel deux fois de suite).
+  const lastOpponent = {};
+  for(let i = seance.defisMatches.length - 1; i >= 0; i--){
+    const m = seance.defisMatches[i];
+    if(lastOpponent[m.a] === undefined) lastOpponent[m.a] = m.b;
+    if(lastOpponent[m.b] === undefined) lastOpponent[m.b] = m.a;
+  }
+  // Appariement STRICTEMENT à l'intérieur de chaque groupe de même nombre de
+  // victoires (jamais de report vers un groupe voisin) : un élève seul dans
+  // son groupe reste exempté (bye) en attendant un adversaire à égalité.
   const pairs = [];
-  sortedKeys.forEach(k=>{
-    let pool = groups[k].slice();
-    if(leftover){ pool = [leftover, ...pool]; leftover = null; }
-    while(pool.length>=2){ pairs.push([pool.shift(), pool.shift()]); }
-    if(pool.length===1){ leftover = pool[0]; }
+  const byes = [];
+  Object.keys(groups).map(Number).forEach(k=>{
+    const pool = groups[k];
+    while(pool.length >= 2){
+      const a = pool.shift();
+      let idx = pool.findIndex(id => lastOpponent[a] !== id);
+      if(idx === -1) idx = 0; // pas d'autre choix : on rejoue le même duel
+      const b = pool.splice(idx, 1)[0];
+      pairs.push([a, b]);
+    }
+    if(pool.length === 1) byes.push(pool[0]);
   });
+  seance.defisBye = byes;
+
   // On ne crée un match que si un arbitre dédié (unique, jamais partagé entre
-  // deux tables en même temps) peut lui être garanti : chaque match mobilise
-  // 2 joueurs + 1 arbitre, donc au plus 1 match pour 3 élèves disponibles.
+  // deux tables en même temps, jamais aussi joueur ailleurs) peut lui être
+  // garanti : chaque match mobilise 2 joueurs + 1 arbitre, donc au plus 1
+  // match pour 3 élèves disponibles.
   const maxMatchesAvecArbitre = Math.floor(available.length / 3);
   const matchesACreer = Math.min(freeTables.length, pairs.length, maxMatchesAvecArbitre);
   const chosenPairs = pairs.slice(0, matchesACreer);
-  seance.defisBye = leftover;
 
   const usedInPairs = new Set();
   chosenPairs.forEach(([a,b])=>{ usedInPairs.add(a); usedInPairs.add(b); });
@@ -1619,20 +1667,44 @@ function renderActivityTab(activite){
         <div class="chip" style="background:var(--c6)"><b>${garcons}</b>Garçons</div>
       </div>`;
 
-    if(Object.keys(cd.wins).length){
+    // Le classement total cumule d'une séance à l'autre : les victoires
+    // (cd.wins) pour les défis, les points marqués (cd.poulePoints) pour le
+    // tournoi par poule — selon le type de tournoi en cours dans la séance
+    // actuelle. Sert aussi à la continuité (montée-descente / appariement
+    // par nombre de victoires) d'une séance à l'autre.
+    const seancePourClassement = currentSeance(activite);
+    const modePoints = seancePourClassement && seancePourClassement.tournamentType === 'poule';
+    const totalMap = modePoints ? cd.poulePoints : cd.wins;
+    const totalLabel = modePoints ? 'points' : 'victoires';
+    if(Object.keys(totalMap).length){
       const showTotal = !!cd.showClassementTotal;
       html += `
         <div class="card">
           <div class="toolbar">
-            <h3>📊 Classement total — victoires depuis le début du cycle</h3>
+            <h3>📊 Classement total — ${totalLabel} depuis le début du cycle</h3>
             <div style="display:flex;gap:6px;">
               ${showTotal ? '<button class="btn secondary small" id="btnExportClassement">📊 Exporter Excel</button>' : ''}
               <button class="btn ghost small" id="btnToggleClassementTotal">${showTotal ? '🙈 Masquer' : '👁️ Afficher'}</button>
             </div>
           </div>
           ${showTotal ? `
-          <p class="hint">Ce total additionne les victoires de toutes les séances de cette classe depuis le début du cycle (remis à zéro seulement si toutes les séances sont supprimées, ou via "Effacer les résultats").</p>
-          ${renderClassementTable(students, cd.wins)}` : ''}
+          <p class="hint">Ce total additionne les ${totalLabel} de toutes les séances de cette classe depuis le début du cycle (remis à zéro seulement si toutes les séances sont supprimées, ou via "Effacer les résultats").</p>
+          ${renderClassementTable(students, totalMap)}` : ''}
+        </div>`;
+    }
+
+    // Classement de la séance en cours uniquement (2e colonne demandée),
+    // agrégé sur toutes les poules de la classe pour le tournoi par poule.
+    if(modePoints && seancePourClassement.poules && seancePourClassement.poules.length){
+      const seanceTotals = {};
+      seancePourClassement.poules.forEach(p=>{
+        const pts = computePoulePoints(seancePourClassement, p);
+        Object.keys(pts).forEach(id=>{ seanceTotals[id] = (seanceTotals[id]||0) + pts[id]; });
+      });
+      html += `
+        <div class="card">
+          <h3>🏅 Classement de cette séance (points de cette séance uniquement)</h3>
+          ${renderClassementTable(students, seanceTotals)}
         </div>`;
     }
 
@@ -2078,12 +2150,13 @@ function renderDefisClassementSection(activite){
         <div class="hint" style="text-align:center;margin:4px 0;">contre</div>
         <div class="hint" style="text-align:center;">${ordinalMatch(m.numB)}</div>
         <button class="btn ${m.winner===m.b?'':'ghost'}" data-set-winner="${i}::${m.b}">${nomB}</button>
-        <div class="hint" style="margin-top:6px;">🧑‍⚖️ Arbitre : ${refereeLabel}</div>
+        <div class="arbitre-label">🧑‍⚖️ Arbitre : <b>${refereeLabel}</b></div>
       </div>`);
   }
 
-  const byeHtml = seance.defisBye
-    ? `<p class="hint">Exempté(e) pour l'instant, en attente d'un adversaire au même nombre de victoires : ${participantLabel(activite, seance.defisBye)}</p>`
+  const byeList = Array.isArray(seance.defisBye) ? seance.defisBye : (seance.defisBye ? [seance.defisBye] : []);
+  const byeHtml = byeList.length
+    ? `<p class="hint">Exempté(e)(s) pour l'instant, en attente d'un adversaire au même nombre de victoires : ${byeList.map(id=>participantLabel(activite, id)).join(', ')}</p>`
     : '';
 
   const demiTerrainToggle = isBadminton ? `

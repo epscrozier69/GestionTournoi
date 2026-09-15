@@ -88,9 +88,18 @@
   .hint{font-size:.7rem;color:var(--muted);margin-top:3px;}
   .muted{color:var(--muted);font-size:.78rem;}
 
-  /* Carte d'import de classe et carte des classes déjà importées, côte à côte */
+  /* Classement total : carte mise en évidence par une couleur dédiée */
+  .classement-total-card{
+    border-left:6px solid var(--c8);
+    background:linear-gradient(135deg, #fffbeb, var(--panel) 55%);
+  }
+  .classement-total-card h3{color:var(--c8);}
+
+  /* Carte d'import de classe (plus étroite) et carte des classes déjà importées, côte à côte */
   .activity-header-layout{display:flex;gap:14px;flex-wrap:wrap;align-items:stretch;}
-  .activity-header-layout > .card{flex:1;min-width:260px;}
+  .activity-header-layout > .card{min-width:260px;}
+  .activity-header-layout > .card:first-child{flex:0 1 320px;}
+  .activity-header-layout > .card:last-child{flex:2 1 400px;}
 
   /* Classes et séances (sous-onglets) */
   .seance-tabs{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
@@ -102,9 +111,9 @@
   .seance-tabs button.active{background:var(--c7);color:#fff;box-shadow:0 3px 10px rgba(37,99,235,.3);}
   /* La classe active est le repère principal de l'onglet : on la met bien en avant */
   .classe-tabs button{
-    font-size:1.15rem;font-weight:800;padding:12px 26px;letter-spacing:.02em;
+    font-size:1.15rem;font-weight:800;padding:12px 26px;letter-spacing:.02em;color:#fff;opacity:.55;
   }
-  .classe-tabs button.active{background:var(--c3);box-shadow:0 4px 14px rgba(0,0,0,.18);transform:scale(1.03);}
+  .classe-tabs button.active{opacity:1;box-shadow:0 4px 14px rgba(0,0,0,.18);transform:scale(1.03);}
 
   /* Teams / Poules grids */
   .teams-grid, .poules-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-bottom:14px;}
@@ -1727,7 +1736,7 @@ function renderActivityTab(activite){
       <div class="card">
         <h3>Classes importées</h3>
         <div class="seance-tabs classe-tabs">
-          ${classesChargees.map(c=>`<button class="${c===data.currentClasse?'active':''}" data-classe-select="${c}">${c}</button>`).join('')}
+          ${classesChargees.map((c,i)=>`<button class="${c===data.currentClasse?'active':''}" style="background:${PALETTE[i % PALETTE.length]}" data-classe-select="${c}">${c}</button>`).join('')}
         </div>
       </div>` : ''}
     </div>`;
@@ -1760,10 +1769,11 @@ function renderActivityTab(activite){
       : typeCourant === 'defisClassement' ? cd.classementWins
       : cd.wins;
     const totalLabel = modePoints ? 'points' : 'victoires';
-    if(Object.keys(totalMap).length){
+    const tournoiActif = typeCourant === 'poule' || typeCourant === 'defisHasard' || typeCourant === 'defisClassement';
+    if(tournoiActif){
       const showTotal = !!cd.showClassementTotal;
       html += `
-        <div class="card">
+        <div class="card classement-total-card">
           <div class="toolbar">
             <h3>📊 Classement total — ${totalLabel} depuis le début du cycle</h3>
             <div style="display:flex;gap:6px;">

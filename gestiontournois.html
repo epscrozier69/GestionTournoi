@@ -383,7 +383,7 @@ function defaultSeance(numero, activite){
     absentReasons:{}, // studentId -> 'absent' | 'materiel' | 'dispense' (motif affiché sur la pastille)
     teams:[], poules:[], matches:[],
     hasardWins:{}, // défis hasard : victoires de cette séance uniquement
-    defisMatches:[], defisBye:[], // défis classement progressif uniquement (flux continu)
+    defisMatches:[], defisBye:[], lastAction:null, // défis classement progressif uniquement (flux continu)
   };
 }
 function defaultClasseData(classe, activite){
@@ -425,6 +425,7 @@ function ensureActivityData(){
       cd.seances.forEach(s=>{
         if(!s.hasardWins) s.hasardWins = {};
         if(!s.absentReasons) s.absentReasons = {};
+        if(s.lastAction === undefined) s.lastAction = null;
       });
     });
   });
@@ -537,6 +538,7 @@ function clearSeanceResults(activite){
   seance.hasardWins = {};
   seance.defisMatches = [];
   seance.defisBye = [];
+  seance.lastAction = null;
   cd.wins = {};
   cd.poulePoints = {};
   saveState();
@@ -1486,14 +1488,50 @@ function enregistrerVainqueur(activite, matchIndex, winnerId){
   if(!match) return;
   if(match.winner === winnerId){
     match.winner = null; // reclique sur le même = annule
-  } else {
-    if(match.winner) cd.wins[match.winner] = Math.max(0, (cd.wins[match.winner]||0) - 1);
-    match.winner = winnerId;
-    cd.wins[winnerId] = (cd.wins[winnerId]||0) + 1;
+    seance.lastAction = null;
+    saveState();
+    renderActivityTab(activite);
+    renderGeneral();
+    return;
   }
-  // La table vient de se libérer (ou de se ré-occuper après annulation) :
-  // on tente aussitôt d'organiser un nouveau match sur les tables libres.
+  const previousWinner = match.winner;
+  if(previousWinner) cd.wins[previousWinner] = Math.max(0, (cd.wins[previousWinner]||0) - 1);
+  match.winner = winnerId;
+  cd.wins[winnerId] = (cd.wins[winnerId]||0) + 1;
+  // La table vient de se libérer : on tente aussitôt d'organiser un nouveau
+  // match sur les tables libres. On retient tout ce qui vient de se passer
+  // (ancien/nouveau vainqueur, matchs créés en cascade) pour pouvoir tout
+  // annuler d'un coup avec le bouton "Annuler le dernier résultat".
+  const countBefore = seance.defisMatches.length;
   remplirTablesClassement(activite);
+  const createdIndexes = [];
+  for(let i=countBefore; i<seance.defisMatches.length; i++) createdIndexes.push(i);
+  seance.lastAction = { matchIndex, previousWinner, newWinner: winnerId, createdIndexes };
+  saveState();
+  renderActivityTab(activite);
+  renderGeneral();
+}
+// Annule le dernier résultat enregistré en défis classement progressif :
+// supprime le(s) match(s) créé(s) en cascade suite à ce résultat, restaure
+// le vainqueur précédent du match concerné (ou le remet non-joué) et
+// réajuste le total de victoires en conséquence. Ne permet d'annuler que la
+// toute dernière action (pas d'historique multi-niveaux).
+function undoLastDefisAction(activite){
+  const seance = currentSeance(activite);
+  const cd = currentClasseData(activite);
+  const action = seance.lastAction;
+  if(!action) return;
+  action.createdIndexes.slice().sort((a,b)=>b-a).forEach(idx=>{
+    seance.defisMatches.splice(idx, 1);
+  });
+  const match = seance.defisMatches[action.matchIndex];
+  if(match){
+    cd.wins[action.newWinner] = Math.max(0, (cd.wins[action.newWinner]||0) - 1);
+    if(action.previousWinner) cd.wins[action.previousWinner] = (cd.wins[action.previousWinner]||0) + 1;
+    match.winner = action.previousWinner || null;
+  }
+  seance.lastAction = null;
+  saveState();
   renderActivityTab(activite);
   renderGeneral();
 }
@@ -1827,6 +1865,27 @@ function renderActivityTab(activite){
         </div>`;
     }
 
+    // Classement détaillé des défis (hasard/classement progressif) : une
+    // colonne par séance + le total, affiché tout en haut (au-dessus des
+    // onglets de séance) pour qu'il soit visible quelle que soit la séance
+    // consultée, avec la même possibilité de masquer que le classement total.
+    if(typeCourant === 'defisHasard' || typeCourant === 'defisClassement'){
+      const showTotal = !!cd.showClassementTotal;
+      html += `
+        <div class="card classement-total-card">
+          <div class="toolbar">
+            <h3>🏅 Classement détaillé — victoires séance par séance</h3>
+            <div style="display:flex;gap:6px;">
+              ${showTotal ? '<button class="btn secondary small" id="btnExportClassement">📊 Exporter Excel</button>' : ''}
+              <button class="btn ghost small" id="btnToggleClassementTotal">${showTotal ? '🙈 Masquer' : '👁️ Afficher'}</button>
+            </div>
+          </div>
+          ${showTotal ? `
+          <p class="hint">Une colonne par séance de défis (hasard ou classement progressif), et le total cumulé à droite. C'est ce total qui détermine qui affronte qui (seuls les élèves à égalité de victoires se rencontrent).</p>
+          ${renderClassementParSeance(cd, students)}` : ''}
+        </div>`;
+    }
+
     // Classement de la séance en cours uniquement (2e colonne demandée),
     // agrégé sur toutes les poules de la classe pour le tournoi par poule.
     if(modePoints && seancePourClassement.poules && seancePourClassement.poules.length){
@@ -1999,6 +2058,8 @@ function renderActivityTab(activite){
     remplirTablesClassement(activite);
     renderActivityTab(activite);
   });
+  const btnAnnulerDernierResultat = document.getElementById('btnAnnulerDernierResultat');
+  if(btnAnnulerDernierResultat) btnAnnulerDernierResultat.addEventListener('click', ()=>undoLastDefisAction(activite));
   panel.querySelectorAll('[data-set-winner]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const [matchIndex, winnerId] = btn.dataset.setWinner.split('::');
@@ -2299,11 +2360,6 @@ function renderDefisHasardSection(activite){
           <tbody>${rows}</tbody>
         </table>
       </div>
-    </div>
-    <div class="card">
-      <h3>🏅 Classement détaillé — victoires séance par séance</h3>
-      <p class="hint">Une colonne par séance de défis (hasard ou classement progressif), et le total cumulé à droite.</p>
-      ${renderClassementParSeance(cd, students)}
     </div>`;
 }
 
@@ -2366,6 +2422,7 @@ function renderDefisClassementSection(activite){
       <div class="toolbar">
         <h3>📈 Défis classement progressif</h3>
         ${!started ? `<button class="btn" id="btnDemarrerDefis">▶️ Démarrer les matchs</button>` : ''}
+        ${seance.lastAction ? `<button class="btn danger small" id="btnAnnulerDernierResultat">↩️ Annuler le dernier résultat</button>` : ''}
       </div>
       ${checkboxRangeHtml('defisTerrainCbGroup', act.terrainLabel+' disponibles', act.defisTerrainMin, act.defisTerrainMax, seance.defisTerrains || act.defisTerrainMin)}
       ${demiTerrainToggle}
@@ -2380,11 +2437,6 @@ function renderDefisClassementSection(activite){
           ${renderClassementTable(students, seanceWins)}
         </div>
       </div>` : `<div class="empty-state">Choisissez le nombre de ${act.terrainLabel.toLowerCase()} puis cliquez sur « Démarrer les matchs ».</div>`}
-    </div>
-    <div class="card">
-      <h3>🏅 Classement détaillé — victoires séance par séance</h3>
-      <p class="hint">Une colonne par séance de défis (hasard ou classement progressif), et le total cumulé à droite. C'est ce total qui détermine qui affronte qui (seuls les élèves à égalité de victoires se rencontrent).</p>
-      ${renderClassementParSeance(cd, students)}
     </div>`;
 }
 

@@ -89,14 +89,18 @@
   .muted{color:var(--muted);font-size:.78rem;}
 
   /* Classes et séances (sous-onglets) */
-  .seance-tabs{display:flex;gap:6px;flex-wrap:wrap;align-items:center;}
+  .seance-tabs{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
   .seance-tabs button{
-    border:none;background:#f1f5f9;color:var(--muted);padding:7px 14px;border-radius:999px;cursor:pointer;
-    font-weight:600;font-size:.8rem;transition:.15s;
+    border:none;background:#f1f5f9;color:var(--muted);padding:9px 18px;border-radius:999px;cursor:pointer;
+    font-weight:700;font-size:.92rem;transition:.15s;
   }
   .seance-tabs button:hover{color:var(--ink);}
-  .seance-tabs button.active{background:var(--c7);color:#fff;}
-  .classe-tabs button.active{background:var(--c3);}
+  .seance-tabs button.active{background:var(--c7);color:#fff;box-shadow:0 3px 10px rgba(37,99,235,.3);}
+  /* La classe active est le repère principal de l'onglet : on la met bien en avant */
+  .classe-tabs button{
+    font-size:1.15rem;font-weight:800;padding:12px 26px;letter-spacing:.02em;
+  }
+  .classe-tabs button.active{background:var(--c3);box-shadow:0 4px 14px rgba(0,0,0,.18);transform:scale(1.03);}
 
   /* Teams / Poules grids */
   .teams-grid, .poules-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-bottom:14px;}
@@ -117,6 +121,13 @@
   @media (max-width:560px){
     .defis-tables-grid{grid-template-columns:1fr;}
   }
+  /* Texte plus grand dans les vignettes de table, sans agrandir la vignette :
+     on compense en resserrant les marges/paddings autour. */
+  .defis-tables-grid .poule-card{padding:8px;}
+  .defis-tables-grid .poule-card h4{font-size:1.05rem;margin-bottom:4px;}
+  .defis-tables-grid .poule-card .hint{font-size:.82rem;margin:2px 0;}
+  .defis-tables-grid .poule-card .btn{font-size:1.05rem;padding:6px 10px;}
+  .defis-tables-grid .poule-card .arbitre-label{font-size:.92rem;padding:4px 7px;margin-top:4px;}
   .team-card, .poule-card{
     border:2px solid var(--line);border-radius:12px;padding:10px;background:#f8fafc;
   }
@@ -343,7 +354,11 @@ function defaultSeance(numero, activite){
 }
 function defaultClasseData(classe, activite){
   return {
-    classe, wins:{}, poulePoints:{}, // wins = défis (hasard/classement) ; poulePoints = tournoi par poule
+    // wins = défis hasard ; classementWins = défis classement progressif ;
+    // poulePoints = tournoi par poule. Trois compteurs séparés (même s'ils
+    // portent tous sur la même classe) pour qu'annuler un résultat dans un
+    // mode ne fausse jamais le total d'un autre mode.
+    classe, wins:{}, classementWins:{}, poulePoints:{},
     seances:[defaultSeance(1, activite)], currentSeanceIndex:0, showClassementTotal:false,
   };
 }
@@ -359,6 +374,17 @@ function ensureActivityData(){
     if(!STATE.activityData[a]) STATE.activityData[a] = defaultActivityData();
     if(!STATE.activityData[a].classes) STATE.activityData[a].classes = {};
     if(typeof STATE.activityData[a].currentClasse !== 'string') STATE.activityData[a].currentClasse = '';
+    // Rattrapage pour les données enregistrées avant l'ajout de ces champs :
+    // sans ça, les annulations de résultats en défis classement progressif
+    // pouvaient faire baisser à tort le total des défis hasard (même champ
+    // cd.wins partagé par erreur). classementWins démarre à zéro : les
+    // parties/défis classement progressif déjà en cours repartent avec un
+    // nombre de victoires à zéro pour tous (l'appariement reste correct).
+    Object.values(STATE.activityData[a].classes).forEach(cd=>{
+      if(!cd.classementWins) cd.classementWins = {};
+      if(!cd.poulePoints) cd.poulePoints = {};
+      cd.seances.forEach(s=>{ if(!s.hasardWins) s.hasardWins = {}; });
+    });
   });
 }
 function currentClasseData(activite){
@@ -410,7 +436,7 @@ function deleteSeance(activite){
   cd.seances.splice(cd.currentSeanceIndex, 1);
   cd.currentSeanceIndex = Math.max(0, cd.currentSeanceIndex - 1);
   if(!cd.seances.length){
-    cd.wins = {}; cd.poulePoints = {}; // plus aucune séance : on repart de zéro
+    cd.wins = {}; cd.classementWins = {}; cd.poulePoints = {}; // plus aucune séance : on repart de zéro
   }
   saveState();
   renderActivityTab(activite);
@@ -464,6 +490,7 @@ function clearSeanceResults(activite){
   seance.defisMatches = [];
   seance.defisBye = [];
   cd.wins = {};
+  cd.classementWins = {};
   cd.poulePoints = {};
   saveState();
   renderActivityTab(activite);
@@ -839,8 +866,11 @@ function exportClassementExcel(activite){
   const cd = currentClasseData(activite);
   if(!cd) return;
   const seance = currentSeance(activite);
-  const modePoints = seance && seance.tournamentType === 'poule';
-  const totalMap = modePoints ? cd.poulePoints : cd.wins;
+  const typeCourant = seance ? seance.tournamentType : '';
+  const modePoints = typeCourant === 'poule';
+  const totalMap = typeCourant === 'poule' ? cd.poulePoints
+    : typeCourant === 'defisClassement' ? cd.classementWins
+    : cd.wins;
   const colLabel = modePoints ? 'Points cumulés' : 'Victoires cumulées';
   const students = STATE.allStudents.filter(s=>s.classe===cd.classe);
   const sorted = students.slice().sort((a,b)=>(totalMap[b.id]||0)-(totalMap[a.id]||0));
@@ -931,8 +961,9 @@ function getPouleLabelForClasse(activite, cd, student){
     return p ? `${p.nom} (${team.nom})` : '';
   }
   if(seance.tournamentType === 'defisHasard' || seance.tournamentType === 'defisClassement'){
-    const w = cd.wins[student.id] || 0;
-    const label = seance.tournamentType === 'defisHasard' ? 'Défis hasard' : 'Défis classement';
+    const isHasard = seance.tournamentType === 'defisHasard';
+    const w = (isHasard ? cd.wins[student.id] : cd.classementWins[student.id]) || 0;
+    const label = isHasard ? 'Défis hasard' : 'Défis classement';
     return `${label} — ${w} victoire${w>1?'s':''}`;
   }
   return '';
@@ -999,8 +1030,8 @@ function onGenererPoules(activite){
       });
       seance.poules = groups.map((members,i)=>({ id:'poule'+(i+1), nom:'Poule '+(i+1), members: shuffleArray(members) }));
     } else {
-      // Pas de séance de poule précédente exploitable : classement global (cd.wins) ou aléatoire.
-      seance.poules = generatePoules(studentIds, taillePoule, cd.wins, act.pouleMin, act.pouleMax);
+      // Pas de séance de poule précédente exploitable : classement global (cd.poulePoints) ou aléatoire.
+      seance.poules = generatePoules(studentIds, taillePoule, cd.poulePoints, act.pouleMin, act.pouleMax);
     }
   }
   seance.matches = [];
@@ -1300,7 +1331,7 @@ function remplirTablesClassement(activite){
   const available = students.filter(id=>!busy.has(id));
   const groups = {};
   available.forEach(id=>{
-    const w = cd.wins[id]||0;
+    const w = cd.classementWins[id]||0;
     (groups[w] = groups[w]||[]).push(id);
   });
   Object.keys(groups).forEach(k=>{
@@ -1361,9 +1392,9 @@ function enregistrerVainqueur(activite, matchIndex, winnerId){
   if(match.winner === winnerId){
     match.winner = null; // reclique sur le même = annule
   } else {
-    if(match.winner) cd.wins[match.winner] = Math.max(0, (cd.wins[match.winner]||0) - 1);
+    if(match.winner) cd.classementWins[match.winner] = Math.max(0, (cd.classementWins[match.winner]||0) - 1);
     match.winner = winnerId;
-    cd.wins[winnerId] = (cd.wins[winnerId]||0) + 1;
+    cd.classementWins[winnerId] = (cd.classementWins[winnerId]||0) + 1;
   }
   // La table vient de se libérer (ou de se ré-occuper après annulation) :
   // on tente aussitôt d'organiser un nouveau match sur les tables libres.
@@ -1599,8 +1630,6 @@ function renderGeneral(){
     {key:'nomPrenom', label:'Nom Prénom', getValue:r=>r.nomPrenom},
     {key:'classe', label:'Classe', getValue:r=>r.classe, filterType:'select', filterOptions:[...new Set(activeStudents.map(s=>s.classe))].sort((a,b)=>a.localeCompare(b,'fr'))},
     {key:'sexe', label:'Sexe', getValue:r=>r.sexe, render:r=>sexeBadge(r.sexe), filterType:'select', filterOptions:['F','G']},
-    {key:'activite', label:'Activité', getValue:r=>getStudentAssignment(r).activite, filterType:'select', filterOptions:Object.keys(ACTIVITIES)},
-    {key:'poule', label:'Poule', getValue:r=>getStudentAssignment(r).poule},
   ];
 
   const html = buildTable('general', columns, activeStudents);
@@ -1669,14 +1698,20 @@ function renderActivityTab(activite){
         <div class="chip" style="background:var(--c6)"><b>${garcons}</b>Garçons</div>
       </div>`;
 
-    // Le classement total cumule d'une séance à l'autre : les victoires
-    // (cd.wins) pour les défis, les points marqués (cd.poulePoints) pour le
-    // tournoi par poule — selon le type de tournoi en cours dans la séance
-    // actuelle. Sert aussi à la continuité (montée-descente / appariement
-    // par nombre de victoires) d'une séance à l'autre.
+    // Le classement total cumule d'une séance à l'autre : chaque mode de
+    // tournoi a son propre compteur (jamais partagé entre modes, pour
+    // qu'annuler un résultat dans l'un ne fausse jamais le total d'un
+    // autre) — victoires (cd.wins) pour les défis hasard, victoires
+    // (cd.classementWins) pour les défis classement progressif, points
+    // (cd.poulePoints) pour le tournoi par poule. Sert aussi à la
+    // continuité (montée-descente / appariement par nombre de victoires)
+    // d'une séance à l'autre.
     const seancePourClassement = currentSeance(activite);
-    const modePoints = seancePourClassement && seancePourClassement.tournamentType === 'poule';
-    const totalMap = modePoints ? cd.poulePoints : cd.wins;
+    const typeCourant = seancePourClassement ? seancePourClassement.tournamentType : '';
+    const modePoints = typeCourant === 'poule';
+    const totalMap = typeCourant === 'poule' ? cd.poulePoints
+      : typeCourant === 'defisClassement' ? cd.classementWins
+      : cd.wins;
     const totalLabel = modePoints ? 'points' : 'victoires';
     if(Object.keys(totalMap).length){
       const showTotal = !!cd.showClassementTotal;

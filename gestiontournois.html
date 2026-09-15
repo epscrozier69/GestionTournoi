@@ -162,9 +162,10 @@
   .chip{border-radius:10px;padding:6px 10px;color:#fff;font-size:.72rem;box-shadow:var(--shadow);text-align:center;}
   .chip b{display:block;font-size:1rem;}
 
-  /* Tournoi défis : colonnes resserrées pour que le nom ne prenne pas toute la place */
+  /* Tournoi défis : colonnes resserrées et lignes compactes pour que toute
+     la classe tienne sur un écran sans avoir à scroller */
   .defis-table, .classement-table{table-layout:fixed;}
-  .defis-table th, .defis-table td{text-align:center;}
+  .defis-table th, .defis-table td{text-align:center;padding:2px 6px;font-size:.78rem;}
   .defis-name{
     text-align:left !important;display:flex;align-items:center;gap:6px;
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
@@ -174,6 +175,7 @@
   .defis-row:hover{background:#dbeafe;}
   .defis-cell{width:26px;font-weight:800;color:var(--ok);}
   .defis-undo{opacity:.6;flex:0 0 auto;}
+  .btn.small.defis-undo{padding:2px 6px;}
   .defis-undo:hover{opacity:1;}
   .classement-table th:nth-child(1), .classement-table td:nth-child(1){width:60px;}
   .classement-table th:nth-child(2), .classement-table td:nth-child(2){width:180px;overflow:hidden;text-overflow:ellipsis;}

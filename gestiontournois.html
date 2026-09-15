@@ -88,6 +88,10 @@
   .hint{font-size:.7rem;color:var(--muted);margin-top:3px;}
   .muted{color:var(--muted);font-size:.78rem;}
 
+  /* Carte d'import de classe et carte des classes déjà importées, côte à côte */
+  .activity-header-layout{display:flex;gap:14px;flex-wrap:wrap;align-items:stretch;}
+  .activity-header-layout > .card{flex:1;min-width:260px;}
+
   /* Classes et séances (sous-onglets) */
   .seance-tabs{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
   .seance-tabs button{
@@ -199,6 +203,8 @@
     background:#f8fafc;cursor:pointer;color:var(--ink);
   }
   .presence-chip.absent{background:#fee2e2;color:var(--bad);border-color:var(--bad);text-decoration:line-through;}
+  .presence-chip.materiel{background:#fef3c7;color:#92400e;border-color:#d97706;text-decoration:line-through;}
+  .presence-chip.dispense{background:#e0e7ff;color:#3730a3;border-color:#4f46e5;text-decoration:line-through;}
   .demi-terrain-toggle{
     display:inline-flex;align-items:center;gap:8px;margin-bottom:10px;font-size:.82rem;font-weight:600;
     cursor:pointer;background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:8px 12px;
@@ -294,6 +300,18 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="presenceModal" hidden>
+  <div class="modal-box">
+    <h3 id="presenceModalNom">Statut de présence</h3>
+    <div class="modal-actions" style="justify-content:center;flex-wrap:wrap;">
+      <button class="btn" id="btnStatutPresent">✅ Présent</button>
+      <button class="btn danger" id="btnStatutAbsent">🚫 Absent</button>
+      <button class="btn secondary" id="btnStatutMateriel">🎽 Matériel (pas de raquette)</button>
+      <button class="btn ghost" id="btnStatutDispense">📄 Dispensé</button>
+    </div>
+  </div>
+</div>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 'use strict';
@@ -346,7 +364,8 @@ function defaultSeance(numero, activite){
   return {
     numero, tournamentType:'', config:{}, defisTerrains:defaultT, pouleTerrains:defaultT,
     demiTerrain:false, // Badminton uniquement : double la capacité de terrains simultanés
-    absents:[], // ids d'élèves absents/dispensés pour cette séance
+    absents:[], // ids d'élèves exclus des poules/défis pour cette séance (quelle qu'en soit la raison)
+    absentReasons:{}, // studentId -> 'absent' | 'materiel' | 'dispense' (motif affiché sur la pastille)
     teams:[], poules:[], matches:[],
     hasardWins:{}, // défis hasard : victoires de cette séance uniquement
     defisMatches:[], defisBye:[], // défis classement progressif uniquement (flux continu)
@@ -383,7 +402,10 @@ function ensureActivityData(){
     Object.values(STATE.activityData[a].classes).forEach(cd=>{
       if(!cd.classementWins) cd.classementWins = {};
       if(!cd.poulePoints) cd.poulePoints = {};
-      cd.seances.forEach(s=>{ if(!s.hasardWins) s.hasardWins = {}; });
+      cd.seances.forEach(s=>{
+        if(!s.hasardWins) s.hasardWins = {};
+        if(!s.absentReasons) s.absentReasons = {};
+      });
     });
   });
 }
@@ -442,21 +464,26 @@ function deleteSeance(activite){
   renderActivityTab(activite);
   renderGeneral();
 }
-// Raye (absent/dispensé/puni) ou réintègre un élève en cours de séance.
-// En défis classement progressif, rayer un élève en plein match annule
-// aussitôt ce match (la table et son éventuel adversaire se libèrent) ; le
-// réintégrer lui redonne aussitôt un match dès qu'une table se libère.
-function toggleAbsent(activite, studentId){
+// Fixe le statut de présence d'un élève pour cette séance : null (présent),
+// 'absent', 'materiel' (pas de raquette/équipement) ou 'dispense'. Les trois
+// motifs d'exclusion ont le même effet sur les poules/défis (l'élève ne
+// joue pas), seul le libellé affiché change. En défis classement progressif,
+// exclure un élève en plein match annule aussitôt ce match (la table et son
+// éventuel adversaire se libèrent) ; le remettre présent lui redonne
+// aussitôt un match dès qu'une table se libère.
+function setPresenceStatus(activite, studentId, status){
   const seance = currentSeance(activite);
   const act = ACTIVITIES[activite];
-  const idx = seance.absents.indexOf(studentId);
-  if(idx >= 0){
-    seance.absents.splice(idx, 1);
+  if(!seance.absentReasons) seance.absentReasons = {};
+  const wasAbsent = seance.absents.includes(studentId);
+  if(status === null){
+    if(wasAbsent) seance.absents.splice(seance.absents.indexOf(studentId), 1);
+    delete seance.absentReasons[studentId];
     // Réintégration : si un tournoi par poule est en cours et que cet élève
-    // n'appartient encore à aucune poule (il était absent au moment de la
+    // n'appartient encore à aucune poule (il était exclu au moment de la
     // génération), on l'ajoute à la poule la moins remplie au lieu de le
     // laisser orphelin (sans quoi il resterait "présent" sans jouer nulle part).
-    if(seance.tournamentType === 'poule' && act.type === 'individuel' && seance.poules.length){
+    if(wasAbsent && seance.tournamentType === 'poule' && act.type === 'individuel' && seance.poules.length){
       const dejaMembre = seance.poules.some(p=>p.members.includes(studentId));
       if(!dejaMembre){
         let target = seance.poules[0], min = Infinity;
@@ -466,7 +493,8 @@ function toggleAbsent(activite, studentId){
       }
     }
   } else {
-    seance.absents.push(studentId);
+    if(!wasAbsent) seance.absents.push(studentId);
+    seance.absentReasons[studentId] = status;
     if(seance.defisMatches && seance.defisMatches.length){
       seance.defisMatches = seance.defisMatches.filter(m=>!(m.winner===null && (m.a===studentId || m.b===studentId)));
       seance.defisMatches.forEach(m=>{ if(m.referee===studentId) m.referee = null; });
@@ -1121,6 +1149,25 @@ function closeScoreModal(){
   document.getElementById('scoreModal').hidden = true;
   scoreModalContext = null;
 }
+
+/* ---------------------------------------------- MODALE DE PRÉSENCE ---- */
+let presenceModalContext = null;
+function openPresenceModal(activite, studentId){
+  const s = STATE.allStudents.find(s=>s.id===studentId);
+  presenceModalContext = { activite, studentId };
+  document.getElementById('presenceModalNom').textContent = s ? s.nomPrenom : 'Statut de présence';
+  document.getElementById('presenceModal').hidden = false;
+}
+function closePresenceModal(){
+  document.getElementById('presenceModal').hidden = true;
+  presenceModalContext = null;
+}
+function choisirStatutPresence(status){
+  if(!presenceModalContext) return;
+  const { activite, studentId } = presenceModalContext;
+  setPresenceStatus(activite, studentId, status);
+  closePresenceModal();
+}
 // Reporte l'écart entre les anciens et les nouveaux points d'un match dans le
 // total cumulé de la classe (cd.poulePoints), pour que le classement se
 // poursuive d'une séance à l'autre — uniquement pour les activités
@@ -1661,29 +1708,29 @@ function renderActivityTab(activite){
   const classesChargees = Object.keys(data.classes).sort((a,b)=>a.localeCompare(b,'fr'));
 
   let html = `
-    <div class="card">
-      <h3>${act.icon} ${activite}</h3>
-      <div class="config-grid">
-        <div class="field">
-          <label>Classe à importer</label>
-          <select id="selectClasse" ${!classesDisponibles.length?'disabled':''}>
-            <option value="">— Choisir —</option>
-            ${classesDisponibles.map(c=>`<option value="${c}">${c}</option>`).join('')}
-          </select>
-        </div>
-      </div>
-      <button class="btn" id="btnImporterClasse" ${!classesDisponibles.length?'disabled':''}>Charger cette classe</button>
-      ${!classesDisponibles.length ? '<div class="hint">Chargez d\'abord la liste des élèves depuis l\'onglet Général.</div>' : ''}
-    </div>`;
-
-  if(classesChargees.length){
-    html += `
+    <div class="activity-header-layout">
       <div class="card">
+        <h3>${act.icon} ${activite}</h3>
+        <div class="config-grid">
+          <div class="field">
+            <label>Classe à importer</label>
+            <select id="selectClasse" ${!classesDisponibles.length?'disabled':''}>
+              <option value="">— Choisir —</option>
+              ${classesDisponibles.map(c=>`<option value="${c}">${c}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <button class="btn" id="btnImporterClasse" ${!classesDisponibles.length?'disabled':''}>Charger cette classe</button>
+        ${!classesDisponibles.length ? '<div class="hint">Chargez d\'abord la liste des élèves depuis l\'onglet Général.</div>' : ''}
+      </div>
+      ${classesChargees.length ? `
+      <div class="card">
+        <h3>Classes importées</h3>
         <div class="seance-tabs classe-tabs">
           ${classesChargees.map(c=>`<button class="${c===data.currentClasse?'active':''}" data-classe-select="${c}">${c}</button>`).join('')}
         </div>
-      </div>`;
-  }
+      </div>` : ''}
+    </div>`;
 
   const cd = currentClasseData(activite);
   if(cd){
@@ -1817,8 +1864,8 @@ function renderActivityTab(activite){
   panel.querySelectorAll('[data-seance-index]').forEach(btn=>{
     btn.addEventListener('click', ()=>switchSeance(activite, parseInt(btn.dataset.seanceIndex, 10)));
   });
-  panel.querySelectorAll('[data-toggle-absent]').forEach(btn=>{
-    btn.addEventListener('click', ()=>toggleAbsent(activite, btn.dataset.toggleAbsent));
+  panel.querySelectorAll('[data-open-presence]').forEach(btn=>{
+    btn.addEventListener('click', ()=>openPresenceModal(activite, btn.dataset.openPresence));
   });
 
   panel.querySelectorAll('[data-tournament-type]').forEach(btn=>{
@@ -1913,16 +1960,25 @@ function renderActivityTab(activite){
   });
 }
 
+// Chaque motif d'exclusion a le même effet (l'élève ne joue pas) mais un
+// libellé/couleur différent sur la pastille, pour garder une trace du motif.
+const PRESENCE_STATUTS = {
+  absent: { icon:'🚫', label:'ABS', cls:'absent' },
+  materiel: { icon:'🎽', label:'MAT', cls:'materiel' },
+  dispense: { icon:'📄', label:'DISP', cls:'dispense' },
+};
 function renderPresenceCard(activite, students, seance){
   const presents = students.filter(s=>!seance.absents.includes(s.id)).length;
+  const reasons = seance.absentReasons || {};
   return `
     <div class="card">
       <h3>🧍 Présence — Séance ${seance.numero} <span class="muted">(${presents}/${students.length} présents)</span></h3>
-      <p class="hint">Cliquez sur un élève absent ou dispensé pour l'exclure des poules/défis de cette séance.</p>
+      <p class="hint">Cliquez sur un élève pour choisir son statut (absent, matériel manquant, dispensé) et l'exclure des poules/défis de cette séance.</p>
       <div class="presence-list">
         ${students.map(s=>{
-          const absent = seance.absents.includes(s.id);
-          return `<button class="presence-chip ${absent?'absent':''}" data-toggle-absent="${s.id}">${absent?'🚫':'✅'} ${s.nomPrenom}</button>`;
+          const statut = reasons[s.id] && PRESENCE_STATUTS[reasons[s.id]];
+          const label = statut ? `${statut.icon} ${statut.label}` : '✅';
+          return `<button class="presence-chip ${statut?statut.cls:''}" data-open-presence="${s.id}">${label} ${s.nomPrenom}</button>`;
         }).join('')}
       </div>
     </div>`;
@@ -2239,6 +2295,13 @@ document.addEventListener('DOMContentLoaded', async ()=>{
   document.getElementById('btnAbandonB').addEventListener('click', ()=>abandonScoreModal('b'));
   document.getElementById('scoreModal').addEventListener('click', (e)=>{
     if(e.target.id === 'scoreModal') closeScoreModal();
+  });
+  document.getElementById('btnStatutPresent').addEventListener('click', ()=>choisirStatutPresence(null));
+  document.getElementById('btnStatutAbsent').addEventListener('click', ()=>choisirStatutPresence('absent'));
+  document.getElementById('btnStatutMateriel').addEventListener('click', ()=>choisirStatutPresence('materiel'));
+  document.getElementById('btnStatutDispense').addEventListener('click', ()=>choisirStatutPresence('dispense'));
+  document.getElementById('presenceModal').addEventListener('click', (e)=>{
+    if(e.target.id === 'presenceModal') closePresenceModal();
   });
 });
 </script>

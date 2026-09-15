@@ -22,6 +22,12 @@
   }
   header h1{margin:0;font-size:1.3rem;font-weight:700;}
   header .sub{font-size:.78rem;opacity:.9;}
+  .sync-status{
+    font-size:.75rem;font-weight:600;padding:5px 12px;border-radius:999px;
+    background:rgba(255,255,255,.2);color:#fff;white-space:nowrap;
+  }
+  .sync-status.error{background:#fee2e2;color:#7f1d1d;}
+  .sync-status.ok{background:rgba(255,255,255,.25);}
 
   nav.tabs{
     display:flex;gap:6px;padding:10px 16px;background:#e9edf5;flex-wrap:wrap;position:sticky;top:62px;z-index:40;
@@ -233,6 +239,7 @@
     <h1>EPS Gestion des tournois</h1>
     <div class="sub">Poules, défis et calendriers de matchs par activité</div>
   </div>
+  <div class="sync-status" id="syncStatus" title="Statut de la synchronisation en ligne"></div>
 </header>
 
 <nav class="tabs" id="tabsNav"></nav>
@@ -277,6 +284,13 @@
 /* ---------------------------------------------------------- CONFIG ---- */
 const SHEET_ID = '1UpkwkrQ7L6BdOGIg2T1OSAHybTdLNp7jutEHqjyNqj8';
 const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&gid=0`;
+// URL du Web App Google Apps Script (voir GoogleAppsScript.gs) qui sert de
+// stockage central : une fois déployé, collez ici l'URL /exec fournie par
+// Google. Avec cette URL renseignée, les données se synchronisent
+// automatiquement en ligne et sont donc retrouvées sur n'importe quel
+// appareil ouvrant ce même fichier (tablette, ordi perso, ordi du collège...).
+// Tant que c'est vide, l'appli fonctionne normalement mais uniquement en local.
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxPeUIo_RZ1c5OTdV_YuOZkPzt4e3xl8J6crst_VbA_2db3ffACGJReGWAIW1OEim27/exec';
 
 const ACTIVITIES = {
   'Tennis de table': {
@@ -478,13 +492,76 @@ function clamp(v,min,max){ return Math.min(max, Math.max(min, v)); }
 
 function saveState(){
   localStorage.setItem('gt_state', JSON.stringify(STATE));
+  scheduleCloudSync();
 }
-function loadState(){
+async function loadState(){
   try{
     const raw = localStorage.getItem('gt_state');
     if(raw) STATE = Object.assign(STATE, JSON.parse(raw));
   }catch(e){ /* garde l'état par défaut */ }
   ensureActivityData();
+  await loadCloudStateIfAvailable();
+}
+
+/* ------------------------------------------------- SYNCHRONISATION CLOUD */
+// Avec APPS_SCRIPT_URL renseigné (voir GoogleAppsScript.gs), les données se
+// synchronisent automatiquement avec un Google Sheet : à l'ouverture de
+// l'appli, la version la plus récente en ligne remplace la version locale
+// (si elle est joignable) ; à chaque modification, la nouvelle version est
+// envoyée en ligne quelques secondes plus tard (pour ne pas multiplier les
+// envois à chaque clic). Fonctionne hors-ligne : sans réseau, l'appli
+// continue avec la dernière version connue localement.
+let cloudSyncTimer = null;
+function setSyncStatus(state){
+  const el = document.getElementById('syncStatus');
+  if(!el) return;
+  if(!APPS_SCRIPT_URL){ el.textContent = ''; el.className = 'sync-status'; return; }
+  const labels = {
+    loading: '🔄 Chargement…', ok: '☁️ Synchronisé', saving: '🔄 Enregistrement…',
+    error: '⚠️ Hors ligne (données locales)',
+  };
+  el.textContent = labels[state] || '';
+  el.className = 'sync-status' + (state === 'error' ? ' error' : (state === 'ok' ? ' ok' : ''));
+}
+function fetchWithTimeout(url, options, ms){
+  return Promise.race([
+    fetch(url, options),
+    new Promise((_, reject)=> setTimeout(()=>reject(new Error('Délai dépassé')), ms)),
+  ]);
+}
+async function loadCloudStateIfAvailable(){
+  if(!APPS_SCRIPT_URL) return;
+  setSyncStatus('loading');
+  try{
+    const res = await fetchWithTimeout(APPS_SCRIPT_URL + '?action=load', {}, 8000);
+    const json = await res.json();
+    if(json && json.ok && json.data){
+      STATE = json.data;
+      ensureActivityData();
+      localStorage.setItem('gt_state', JSON.stringify(STATE));
+    }
+    setSyncStatus('ok');
+  }catch(e){
+    setSyncStatus('error');
+  }
+}
+function scheduleCloudSync(){
+  if(!APPS_SCRIPT_URL) return;
+  clearTimeout(cloudSyncTimer);
+  setSyncStatus('saving');
+  cloudSyncTimer = setTimeout(pushCloudState, 2500);
+}
+async function pushCloudState(){
+  try{
+    await fetchWithTimeout(APPS_SCRIPT_URL, {
+      method:'POST',
+      headers:{'Content-Type':'text/plain;charset=utf-8'}, // évite le préflight CORS
+      body: JSON.stringify({ action:'save', data: STATE }),
+    }, 10000);
+    setSyncStatus('ok');
+  }catch(e){
+    setSyncStatus('error');
+  }
 }
 
 /* --------------------------------------------------------- CSV IMPORT - */
@@ -1376,6 +1453,68 @@ function wireCheckboxRange(groupId, onSelect){
   });
 }
 
+/* --------------------------------------------------------- SAUVEGARDE - */
+// Les données sont stockées uniquement dans le navigateur de cet ordinateur
+// (localStorage) : elles ne se transfèrent pas automatiquement vers un autre
+// ordinateur. Ces deux fonctions permettent d'exporter un fichier de
+// sauvegarde (à envoyer par email/clé USB/OneDrive) puis de le recharger sur
+// un autre poste pour retrouver l'intégralité des données.
+function exportBackupJSON(){
+  const blob = new Blob([JSON.stringify(STATE, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const date = new Date().toISOString().slice(0,10);
+  a.href = url;
+  a.download = `sauvegarde_gestion_tournois_${date}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+function importBackupJSON(file){
+  if(!file) return;
+  if(!confirm("Restaurer cette sauvegarde va remplacer toutes les données actuellement enregistrées sur cet ordinateur. Continuer ?")) return;
+  const reader = new FileReader();
+  reader.onload = ()=>{
+    try{
+      const data = JSON.parse(reader.result);
+      if(!data || typeof data !== 'object' || !Array.isArray(data.allStudents)){
+        alert("Ce fichier ne ressemble pas à une sauvegarde valide.");
+        return;
+      }
+      STATE = data;
+      saveState();
+      renderTabs();
+      renderAll();
+      alert('Sauvegarde restaurée avec succès.');
+    } catch(e){
+      alert("Impossible de lire ce fichier : " + e.message);
+    }
+  };
+  reader.readAsText(file);
+}
+function renderSauvegardeCard(){
+  return `
+    <div class="card">
+      <h3>💾 Sauvegarde et transfert vers un autre ordinateur</h3>
+      <p class="hint">Les données sont enregistrées uniquement sur cet ordinateur (dans ce navigateur). Pour les récupérer sur un autre poste : exportez un fichier ici, transférez-le (clé USB, email, OneDrive...), puis importez-le sur l'autre ordinateur.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn secondary" id="btnExportBackup">⬇️ Exporter une sauvegarde</button>
+        <button class="btn ghost" id="btnImportBackupTrigger">⬆️ Importer une sauvegarde</button>
+        <input type="file" id="inputImportBackup" accept="application/json" hidden>
+      </div>
+    </div>`;
+}
+function wireSauvegardeCard(){
+  document.getElementById('btnExportBackup').addEventListener('click', exportBackupJSON);
+  const input = document.getElementById('inputImportBackup');
+  document.getElementById('btnImportBackupTrigger').addEventListener('click', ()=>input.click());
+  input.addEventListener('change', ()=>{
+    if(input.files[0]) importBackupJSON(input.files[0]);
+    input.value = '';
+  });
+}
+
 /* ---- Général ---- */
 function renderGeneral(){
   const panel = document.getElementById('panel-general');
@@ -1387,8 +1526,10 @@ function renderGeneral(){
       <div class="card">
         <div class="toolbar"><div></div>${loadBtn}</div>
         <div class="empty-state">Aucune liste chargée. Cliquez sur le bouton pour récupérer les élèves du collège, puis choisissez une classe dans chaque onglet d'activité.</div>
-      </div>`;
+      </div>
+      ${renderSauvegardeCard()}`;
     document.getElementById('btnChargerListe').addEventListener('click', onChargerListe);
+    wireSauvegardeCard();
     return;
   }
 
@@ -1397,8 +1538,10 @@ function renderGeneral(){
       <div class="card">
         <div class="toolbar"><div class="muted">${STATE.allStudents.length} élève(s) disponible(s) dans ${new Set(STATE.allStudents.map(s=>s.classe)).size} classe(s)</div>${loadBtn}</div>
         <div class="empty-state">Aucune classe encore choisie. Rendez-vous dans un onglet d'activité pour en sélectionner une.</div>
-      </div>`;
+      </div>
+      ${renderSauvegardeCard()}`;
     document.getElementById('btnChargerListe').addEventListener('click', onChargerListe);
+    wireSauvegardeCard();
     return;
   }
 
@@ -1421,10 +1564,12 @@ function renderGeneral(){
         </div>
       </div>
       ${html}
-    </div>`;
+    </div>
+    ${renderSauvegardeCard()}`;
   wireTable(panel, 'general', columns, renderGeneral);
   document.getElementById('btnChargerListe').addEventListener('click', onChargerListe);
   document.getElementById('btnExportGeneral').addEventListener('click', exportGeneralExcel);
+  wireSauvegardeCard();
 }
 
 /* ---- Onglet d'activité ---- */
@@ -1974,8 +2119,8 @@ function renderDefisClassementSection(activite){
 }
 
 /* -------------------------------------------------------------- INIT -- */
-document.addEventListener('DOMContentLoaded', ()=>{
-  loadState();
+document.addEventListener('DOMContentLoaded', async ()=>{
+  await loadState();
   renderTabs();
   renderAll();
   document.getElementById('btnValiderScore').addEventListener('click', validerScoreModal);

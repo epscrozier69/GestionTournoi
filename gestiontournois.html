@@ -1438,11 +1438,16 @@ function remplirTablesClassement(activite){
   // Repli de souplesse (priorité basse, seulement pour ne pas rester bloqué) :
   // un élève encore seul après le passage ci-dessus peut exceptionnellement
   // affronter quelqu'un ayant une victoire de plus ou de moins — jamais un
-  // écart plus grand. S'il n'y a même pas ça, il reste exempté.
+  // écart plus grand. S'il n'y a même pas ça, il reste exempté. Comme pour
+  // l'appariement strict, on évite la revanche immédiate contre le dernier
+  // adversaire dès qu'un autre choix à ±1 victoire existe — sans ça, deux
+  // élèves isolés à eux deux se retrouvaient rejoués en boucle l'un contre
+  // l'autre à chaque match.
   const stillByes = [];
   while(byes.length){
     const a = byes.shift();
-    const idx = byes.findIndex(id => Math.abs((cd.wins[id]||0) - (cd.wins[a]||0)) === 1);
+    let idx = byes.findIndex(id => Math.abs((cd.wins[id]||0) - (cd.wins[a]||0)) === 1 && lastOpponent[a] !== id);
+    if(idx === -1) idx = byes.findIndex(id => Math.abs((cd.wins[id]||0) - (cd.wins[a]||0)) === 1);
     if(idx === -1){ stillByes.push(a); continue; }
     const b = byes.splice(idx, 1)[0];
     pairs.push([a, b]);

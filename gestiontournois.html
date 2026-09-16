@@ -95,11 +95,11 @@
   }
   .classement-total-card h3{color:var(--c8);}
 
-  /* Carte d'import de classe (plus étroite) et carte des classes déjà importées, côte à côte */
+  /* Carte d'import de classe et une vignette séparée par classe importée,
+     toutes côte à côte comme des cartes indépendantes (pas regroupées dans
+     un conteneur commun). */
   .activity-header-layout{display:flex;gap:14px;flex-wrap:wrap;align-items:stretch;}
-  .activity-header-layout > .card{min-width:260px;}
-  .activity-header-layout > .card:first-child{flex:0 1 320px;}
-  .activity-header-layout > .card:last-child{flex:2 1 400px;}
+  .activity-import-card{flex:0 1 320px;min-width:260px;}
 
   /* Classes et séances (sous-onglets) */
   .seance-tabs{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
@@ -109,14 +109,13 @@
   }
   .seance-tabs button:hover{color:var(--ink);}
   .seance-tabs button.active{background:var(--c7);color:#fff;box-shadow:0 3px 10px rgba(37,99,235,.3);}
-  /* Chaque classe importée est une vignette (même gabarit que les cartes de
-     l'appli), pas une pastille : plus visible, et la classe active se
-     distingue par sa pleine opacité + un léger zoom. */
-  .classe-cards-grid{display:flex;gap:12px;flex-wrap:wrap;}
+  /* Chaque classe importée est sa propre vignette (même gabarit que les
+     cartes de l'appli : coins arrondis, ombre), plutôt qu'une pastille dans
+     un conteneur partagé. La classe active se distingue par sa pleine
+     opacité + un léger zoom. */
   .classe-card{
-    border:none;border-radius:var(--radius);box-shadow:var(--shadow);
-    padding:16px 24px;font-size:1.1rem;font-weight:800;letter-spacing:.02em;
-    color:#fff;cursor:pointer;opacity:.55;transition:.15s;
+    flex:0 0 auto;border:none;font-size:1.1rem;font-weight:800;letter-spacing:.02em;
+    color:#fff;cursor:pointer;opacity:.55;transition:.15s;align-self:flex-start;
   }
   .classe-card:hover{opacity:.8;}
   .classe-card.active{opacity:1;box-shadow:0 6px 18px rgba(0,0,0,.2);transform:scale(1.03);}
@@ -209,7 +208,9 @@
   .defis-undo:hover{opacity:1;}
   .classement-table th:nth-child(1), .classement-table td:nth-child(1){width:60px;}
   .classement-table th:nth-child(2), .classement-table td:nth-child(2){width:180px;overflow:hidden;text-overflow:ellipsis;}
-  .classement-table th:nth-child(3), .classement-table td:nth-child(3){width:90px;}
+  /* Toutes les colonnes de chiffres (Séance 1, Séance 2..., Total) gardent la
+     même largeur resserrée, quel que soit le nombre de séances affichées. */
+  .classement-table th:nth-child(n+3), .classement-table td:nth-child(n+3){width:90px;}
 
   /* Présence */
   .presence-list{display:flex;flex-wrap:wrap;gap:6px;}
@@ -1800,7 +1801,7 @@ function renderActivityTab(activite){
 
   let html = `
     <div class="activity-header-layout">
-      <div class="card">
+      <div class="card activity-import-card">
         <h3>${act.icon} ${activite}</h3>
         <div class="config-grid">
           <div class="field">
@@ -1814,13 +1815,7 @@ function renderActivityTab(activite){
         <button class="btn" id="btnImporterClasse" ${!classesDisponibles.length?'disabled':''}>Charger cette classe</button>
         ${!classesDisponibles.length ? '<div class="hint">Chargez d\'abord la liste des élèves depuis l\'onglet Général.</div>' : ''}
       </div>
-      ${classesChargees.length ? `
-      <div class="card">
-        <h3>Classes importées</h3>
-        <div class="classe-cards-grid">
-          ${classesChargees.map((c,i)=>`<button class="classe-card ${c===data.currentClasse?'active':''}" style="background:${PALETTE[i % PALETTE.length]}" data-classe-select="${c}">${c}</button>`).join('')}
-        </div>
-      </div>` : ''}
+      ${classesChargees.map((c,i)=>`<button class="card classe-card ${c===data.currentClasse?'active':''}" style="background:${PALETTE[i % PALETTE.length]}" data-classe-select="${c}">${c}</button>`).join('')}
     </div>`;
 
   const cd = currentClasseData(activite);

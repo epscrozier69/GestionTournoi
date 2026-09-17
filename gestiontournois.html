@@ -920,21 +920,50 @@ function exportFeuillesMatchsPDF(activite){
   w.focus();
   setTimeout(()=>{ w.print(); }, 300);
 }
+// Export Excel de l'historique des matchs de défis classement progressif de
+// la séance en cours (un match par ligne, dans l'ordre où ils ont été joués).
+function exportDefisMatchesExcel(activite){
+  const cd = currentClasseData(activite);
+  const seance = currentSeance(activite);
+  if(!cd || !seance || !seance.defisMatches || !seance.defisMatches.length) return;
+  const rows = seance.defisMatches.map(m=>({
+    'Table': m.table,
+    'Joueur A': participantLabel(activite, m.a),
+    'Joueur B': participantLabel(activite, m.b),
+    'Vainqueur': m.winner ? participantLabel(activite, m.winner) : '',
+    'Arbitre': m.referee ? participantLabel(activite, m.referee) : 'Auto-arbitrage',
+  }));
+  exportRowsToExcel(rows, `defis_classement_${slug(activite)}_${slug(cd.classe)}_seance${seance.numero}.xlsx`, 'Matchs');
+}
 function exportClassementExcel(activite){
   const cd = currentClasseData(activite);
   if(!cd) return;
   const seance = currentSeance(activite);
   const typeCourant = seance ? seance.tournamentType : '';
   const modePoints = typeCourant === 'poule';
-  // Les défis hasard et défis classement progressif cumulent le même total
-  // de victoires (cd.wins) : seul le tournoi par poule a son propre système
-  // de points (cd.poulePoints), car il ne compte pas les résultats de la
-  // même façon (barème selon l'écart de score).
-  const totalMap = modePoints ? cd.poulePoints : cd.wins;
-  const colLabel = modePoints ? 'Points cumulés' : 'Victoires cumulées';
   const students = STATE.allStudents.filter(s=>s.classe===cd.classe);
-  const sorted = students.slice().sort((a,b)=>(totalMap[b.id]||0)-(totalMap[a.id]||0));
-  const rows = sorted.map((s,i)=>({ 'Rang':i+1, 'Nom Prénom':s.nomPrenom, [colLabel]:totalMap[s.id]||0 }));
+
+  if(!modePoints){
+    // Défis (hasard/classement progressif) : même détail que la carte à
+    // l'écran, avec une colonne par séance de défis + le total.
+    const seancesDefis = cd.seances.filter(s=> s.tournamentType==='defisHasard' || s.tournamentType==='defisClassement');
+    const perSeance = seancesDefis.map(s=>computeSeanceDefisWins(s));
+    const sorted = students.slice().sort((a,b)=>(cd.wins[b.id]||0)-(cd.wins[a.id]||0));
+    const rows = sorted.map((s,i)=>{
+      const row = { 'Rang':i+1, 'Nom Prénom':s.nomPrenom };
+      seancesDefis.forEach((sc,idx)=>{ row['Séance '+sc.numero] = perSeance[idx][s.id]||0; });
+      row['Total'] = cd.wins[s.id]||0;
+      return row;
+    });
+    exportRowsToExcel(rows, `classement_cumule_${slug(activite)}_${slug(cd.classe)}.xlsx`, 'Classement');
+    return;
+  }
+
+  // Tournoi par poule : son propre système de points (cd.poulePoints), qui
+  // ne compte pas les résultats de la même façon (barème selon l'écart de
+  // score) et n'a pas de détail séance par séance.
+  const sorted = students.slice().sort((a,b)=>(cd.poulePoints[b.id]||0)-(cd.poulePoints[a.id]||0));
+  const rows = sorted.map((s,i)=>({ 'Rang':i+1, 'Nom Prénom':s.nomPrenom, 'Points cumulés':cd.poulePoints[s.id]||0 }));
   exportRowsToExcel(rows, `classement_cumule_${slug(activite)}_${slug(cd.classe)}.xlsx`, 'Classement');
 }
 
@@ -2105,6 +2134,8 @@ function renderActivityTab(activite){
   });
   const btnAnnulerDernierResultat = document.getElementById('btnAnnulerDernierResultat');
   if(btnAnnulerDernierResultat) btnAnnulerDernierResultat.addEventListener('click', ()=>undoLastDefisAction(activite));
+  const btnExportDefisMatchs = document.getElementById('btnExportDefisMatchs');
+  if(btnExportDefisMatchs) btnExportDefisMatchs.addEventListener('click', ()=>exportDefisMatchesExcel(activite));
   panel.querySelectorAll('[data-set-winner]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const [matchIndex, winnerId] = btn.dataset.setWinner.split('::');
@@ -2466,8 +2497,11 @@ function renderDefisClassementSection(activite){
     <div class="card">
       <div class="toolbar">
         <h3>📈 Défis classement progressif</h3>
-        ${!started ? `<button class="btn" id="btnDemarrerDefis">▶️ Démarrer les matchs</button>` : ''}
-        ${seance.lastAction ? `<button class="btn danger small" id="btnAnnulerDernierResultat">↩️ Annuler le dernier résultat</button>` : ''}
+        <div style="display:flex;gap:6px;">
+          ${!started ? `<button class="btn" id="btnDemarrerDefis">▶️ Démarrer les matchs</button>` : ''}
+          ${seance.lastAction ? `<button class="btn danger small" id="btnAnnulerDernierResultat">↩️ Annuler le dernier résultat</button>` : ''}
+          ${started ? `<button class="btn secondary small" id="btnExportDefisMatchs">📊 Exporter Excel</button>` : ''}
+        </div>
       </div>
       ${checkboxRangeHtml('defisTerrainCbGroup', act.terrainLabel+' disponibles', act.defisTerrainMin, act.defisTerrainMax, seance.defisTerrains || act.defisTerrainMin)}
       ${demiTerrainToggle}

@@ -530,7 +530,7 @@ function setPresenceStatus(activite, studentId, status){
     }
   }
   saveState();
-  if(seance.tournamentType === 'defisClassement' && seance.defisMatches && seance.defisMatches.length){
+  if(seance.tournamentType === 'defisClassement' && seance.defisMatches && seance.defisMatches.length && rotationClassementTerminee(seance)){
     remplirTablesClassement(activite);
   }
   renderActivityTab(activite);
@@ -1440,6 +1440,13 @@ function defisCapacite(seance){
 function defisMatchCount(seance, studentId){
   return seance.defisMatches.filter(m=>m.a===studentId || m.b===studentId).length;
 }
+// Vrai si tous les matchs déjà créés cette séance ont un vainqueur (donc
+// aucune table n'est encore occupée) : on n'organise la rotation suivante
+// qu'une fois la rotation en cours entièrement terminée par tout le monde,
+// plutôt que de faire avancer chaque table indépendamment à son rythme.
+function rotationClassementTerminee(seance){
+  return seance.defisMatches.every(m=>m.winner !== null);
+}
 function remplirTablesClassement(activite){
   const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
@@ -1566,12 +1573,16 @@ function enregistrerVainqueur(activite, matchIndex, winnerId){
   if(previousWinner) cd.wins[previousWinner] = Math.max(0, (cd.wins[previousWinner]||0) - 1);
   match.winner = winnerId;
   cd.wins[winnerId] = (cd.wins[winnerId]||0) + 1;
-  // La table vient de se libérer : on tente aussitôt d'organiser un nouveau
-  // match sur les tables libres. On retient tout ce qui vient de se passer
-  // (ancien/nouveau vainqueur, matchs créés en cascade) pour pouvoir tout
+  // On attend que TOUTE la rotation en cours soit terminée (plus aucun match
+  // sans vainqueur) avant d'organiser la rotation suivante pour tout le
+  // monde d'un coup — plus simple à suivre que des tables qui avancent
+  // chacune à leur rythme. On retient ce qui vient de se passer (ancien/
+  // nouveau vainqueur, matchs créés le cas échéant) pour pouvoir tout
   // annuler d'un coup avec le bouton "Annuler le dernier résultat".
   const countBefore = seance.defisMatches.length;
-  remplirTablesClassement(activite);
+  if(rotationClassementTerminee(seance)){
+    remplirTablesClassement(activite);
+  }
   const createdIndexes = [];
   for(let i=countBefore; i<seance.defisMatches.length; i++) createdIndexes.push(i);
   seance.lastAction = { matchIndex, previousWinner, newWinner: winnerId, createdIndexes };
@@ -2066,7 +2077,7 @@ function renderActivityTab(activite){
   wireCheckboxRange('defisTerrainCbGroup', (v)=>{
     const s = currentSeance(activite);
     s.defisTerrains = v;
-    if(s.tournamentType === 'defisClassement' && s.defisMatches && s.defisMatches.length){
+    if(s.tournamentType === 'defisClassement' && s.defisMatches && s.defisMatches.length && rotationClassementTerminee(s)){
       remplirTablesClassement(activite);
       renderActivityTab(activite);
     } else {
@@ -2078,7 +2089,7 @@ function renderActivityTab(activite){
     chkDemiTerrain.addEventListener('change', ()=>{
       const s = currentSeance(activite);
       s.demiTerrain = chkDemiTerrain.checked;
-      if(s.tournamentType === 'defisClassement' && s.defisMatches && s.defisMatches.length){
+      if(s.tournamentType === 'defisClassement' && s.defisMatches && s.defisMatches.length && rotationClassementTerminee(s)){
         remplirTablesClassement(activite);
       } else {
         saveState();
@@ -2493,6 +2504,14 @@ function renderDefisClassementSection(activite){
   const seanceWins = {};
   seance.defisMatches.forEach(m=>{ if(m.winner) seanceWins[m.winner] = (seanceWins[m.winner]||0) + 1; });
 
+  // Progression de la rotation en cours (le dernier match connu de chaque
+  // table) : la rotation suivante n'est générée que lorsque tout est à 100%.
+  const rotationMatches = Object.values(parTable).map(i=>seance.defisMatches[i]);
+  const rotationTerminees = rotationMatches.filter(m=>m.winner!==null).length;
+  const rotationHtml = rotationMatches.length
+    ? `<p class="hint">Rotation en cours : <b>${rotationTerminees}/${rotationMatches.length}</b> matchs terminés.</p>`
+    : '';
+
   return `
     <div class="card">
       <div class="toolbar">
@@ -2505,7 +2524,8 @@ function renderDefisClassementSection(activite){
       </div>
       ${checkboxRangeHtml('defisTerrainCbGroup', act.terrainLabel+' disponibles', act.defisTerrainMin, act.defisTerrainMax, seance.defisTerrains || act.defisTerrainMin)}
       ${demiTerrainToggle}
-      <p class="hint">Les élèves ayant le même nombre de victoires s'affrontent. Cliquez sur le nom du vainqueur : la table se libère aussitôt et un nouveau match s'y organise automatiquement, en gardant le même nombre de matchs joués pour chacun. S'il y a plus d'élèves que de tables, les non-joueurs officient comme arbitres.</p>
+      <p class="hint">Les élèves ayant le même nombre de victoires s'affrontent. Cliquez sur le nom du vainqueur de chaque match. La rotation suivante s'organise automatiquement pour tout le monde une fois que <b>tous</b> les matchs de la rotation en cours sont terminés (pas de table qui avance plus vite qu'une autre). S'il y a plus d'élèves que de tables, les non-joueurs officient comme arbitres.</p>
+      ${rotationHtml}
       ${byeHtml}
       ${started ? `
       <div class="defis-layout">

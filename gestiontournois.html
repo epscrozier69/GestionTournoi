@@ -86,6 +86,7 @@
     width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;font-size:.85rem;background:#fff;
   }
   .hint{font-size:.7rem;color:var(--muted);margin-top:3px;}
+  .rotation-progress{font-size:1.05rem;font-weight:700;color:var(--ink);margin:6px 0;}
   .muted{color:var(--muted);font-size:.78rem;}
 
   /* Classement total : carte mise en évidence par une couleur dédiée */
@@ -1560,14 +1561,25 @@ function remplirTablesClassement(activite){
   const matchesACreer = Math.min(freeTables.length, pairs.length);
   const chosenPairs = pairs.slice(0, matchesACreer);
 
+  // Dernier rôle tenu par chaque élève (joueur ou arbitre), pour ne jamais
+  // désigner deux fois de suite arbitre : il doit d'abord rejouer au moins
+  // un match avant de pouvoir arbitrer à nouveau.
+  const dernierRole = {};
+  for(let i = seance.defisMatches.length - 1; i >= 0; i--){
+    const m = seance.defisMatches[i];
+    if(dernierRole[m.a] === undefined) dernierRole[m.a] = 'joueur';
+    if(dernierRole[m.b] === undefined) dernierRole[m.b] = 'joueur';
+    if(m.referee && dernierRole[m.referee] === undefined) dernierRole[m.referee] = 'arbitre';
+  }
+
   const usedInPairs = new Set();
   chosenPairs.forEach(([a,b])=>{ usedInPairs.add(a); usedInPairs.add(b); });
-  const refPool = shuffleArray(available.filter(id=>!usedInPairs.has(id)));
+  const refPool = shuffleArray(available.filter(id=>!usedInPairs.has(id) && dernierRole[id] !== 'arbitre'));
   chosenPairs.forEach(([a,b], i)=>{
     const table = freeTables[i];
     const numA = defisMatchCount(seance,a) + 1;
     const numB = defisMatchCount(seance,b) + 1;
-    const referee = refPool[i] || null; // undefined une fois le vivier épuisé -> auto-arbitrage
+    const referee = refPool[i] || null; // undefined (vivier épuisé ou tous arbitres la dernière fois) -> auto-arbitrage
     seance.defisMatches.push({ table, a, b, winner:null, referee, numA, numB });
   });
   saveState();
@@ -2525,7 +2537,7 @@ function renderDefisClassementSection(activite){
   const rotationMatches = Object.values(parTable).map(i=>seance.defisMatches[i]);
   const rotationTerminees = rotationMatches.filter(m=>m.winner!==null).length;
   const rotationHtml = rotationMatches.length
-    ? `<p class="hint">Rotation en cours : <b>${rotationTerminees}/${rotationMatches.length}</b> matchs terminés.</p>`
+    ? `<p class="rotation-progress">Rotation en cours : <b>${rotationTerminees}/${rotationMatches.length}</b> matchs terminés.</p>`
     : '';
 
   return `
@@ -2540,7 +2552,7 @@ function renderDefisClassementSection(activite){
       </div>
       ${checkboxRangeHtml('defisTerrainCbGroup', act.terrainLabel+' disponibles', act.defisTerrainMin, act.defisTerrainMax, seance.defisTerrains || act.defisTerrainMin)}
       ${demiTerrainToggle}
-      <p class="hint">Les élèves ayant le même nombre de victoires s'affrontent (jusqu'à ±2 victoires d'écart si personne n'est exactement à égalité). Deux élèves qui se sont déjà rencontrés ne se réaffrontent que si chacun a rejoué au moins 4 matchs depuis. Cliquez sur le nom du vainqueur de chaque match. La rotation suivante s'organise automatiquement pour tout le monde une fois que <b>tous</b> les matchs de la rotation en cours sont terminés (pas de table qui avance plus vite qu'une autre). S'il y a plus d'élèves que de tables, les non-joueurs officient comme arbitres.</p>
+      <p class="hint">Les élèves ayant le même nombre de victoires s'affrontent (jusqu'à ±2 victoires d'écart si personne n'est exactement à égalité). Deux élèves qui se sont déjà rencontrés ne se réaffrontent que si chacun a rejoué au moins 4 matchs depuis. Cliquez sur le nom du vainqueur de chaque match. La rotation suivante s'organise automatiquement pour tout le monde une fois que <b>tous</b> les matchs de la rotation en cours sont terminés (pas de table qui avance plus vite qu'une autre). S'il y a plus d'élèves que de tables, les non-joueurs officient comme arbitres (jamais deux fois de suite : il faut d'abord rejouer un match).</p>
       ${rotationHtml}
       ${byeHtml}
       ${started ? `

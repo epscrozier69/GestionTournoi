@@ -114,8 +114,9 @@
      un conteneur partagé. La classe active se distingue par sa pleine
      opacité + un léger zoom. */
   .classe-card{
-    flex:0 0 auto;border:none;font-size:1.1rem;font-weight:800;letter-spacing:.02em;
-    color:#fff;cursor:pointer;opacity:.55;transition:.15s;align-self:flex-start;
+    flex:0 1 200px;min-width:160px;border:none;font-size:1.1rem;font-weight:800;letter-spacing:.02em;
+    color:#fff;cursor:pointer;opacity:.55;transition:.15s;
+    display:flex;align-items:center;justify-content:center;text-align:center;
   }
   .classe-card:hover{opacity:.8;}
   .classe-card.active{opacity:1;box-shadow:0 6px 18px rgba(0,0,0,.2);transform:scale(1.03);}
@@ -428,6 +429,12 @@ function ensureActivityData(){
         if(!s.absentReasons) s.absentReasons = {};
         if(s.lastAction === undefined) s.lastAction = null;
       });
+      // Auto-réparation : recalcule systématiquement cd.wins/cd.poulePoints à
+      // partir des séances (source de vérité), au cas où ils auraient été
+      // désynchronisés par une ancienne version de l'appli (ex. "Effacer les
+      // résultats" qui remettait le total à zéro pour toute la classe au lieu
+      // de le recalculer sans la séance effacée).
+      recomputeCumulativeTotals(cd);
     });
   });
 }
@@ -474,14 +481,14 @@ function deleteSeance(activite){
   const seance = cd.seances[cd.currentSeanceIndex];
   const isLast = cd.seances.length === 1;
   const msg = isLast
-    ? `Supprimer définitivement la Séance ${seance.numero} ? C'est la dernière séance de cette classe : le total de victoires cumulées sera aussi remis à zéro.`
-    : `Supprimer définitivement la Séance ${seance.numero} et ses matchs/tours ? (le total de victoires cumulées est conservé)`;
+    ? `Supprimer définitivement la Séance ${seance.numero} ? C'est la dernière séance de cette classe : le total cumulé sera aussi remis à zéro.`
+    : `Supprimer définitivement la Séance ${seance.numero} et ses matchs/tours ? Le total cumulé sera recalculé sans cette séance.`;
   if(!confirm(msg)) return;
   cd.seances.splice(cd.currentSeanceIndex, 1);
   cd.currentSeanceIndex = Math.max(0, cd.currentSeanceIndex - 1);
-  if(!cd.seances.length){
-    cd.wins = {}; cd.poulePoints = {}; // plus aucune séance : on repart de zéro
-  }
+  // Recalcule le total cumulé à partir des séances restantes (au lieu de le
+  // remettre à zéro), pour ne pas fausser le classement des autres séances.
+  recomputeCumulativeTotals(cd);
   saveState();
   renderActivityTab(activite);
   renderGeneral();
@@ -528,11 +535,13 @@ function setPresenceStatus(activite, studentId, status){
   }
   renderActivityTab(activite);
 }
-// Efface matchs/tours de la séance en cours ET remet le classement (victoires) à zéro pour cette classe.
+// Efface matchs/tours/poules de la séance en cours ET recalcule le total
+// cumulé de la classe sans cette séance (les autres séances, elles, gardent
+// leurs propres résultats).
 function clearSeanceResults(activite){
   const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
-  if(!confirm('Effacer tous les résultats de cette séance (matchs, tours, poules) et remettre le classement des victoires à zéro pour cette classe ? Cette action est irréversible.')) return;
+  if(!confirm('Effacer tous les résultats de cette séance (matchs, tours, poules) ? Le total cumulé de la classe sera recalculé sans cette séance. Cette action est irréversible.')) return;
   seance.teams = [];
   seance.poules = [];
   seance.matches = [];
@@ -540,8 +549,7 @@ function clearSeanceResults(activite){
   seance.defisMatches = [];
   seance.defisBye = [];
   seance.lastAction = null;
-  cd.wins = {};
-  cd.poulePoints = {};
+  recomputeCumulativeTotals(cd);
   saveState();
   renderActivityTab(activite);
   renderGeneral();
@@ -1147,6 +1155,31 @@ function computePoulePoints(seance, poule){
     if(totals[m.b] !== undefined) totals[m.b] += m.pointsB;
   });
   return totals;
+}
+// Points de poule marqués lors d'une séance donnée, toutes poules confondues.
+function computeSeancePoulePoints(seance){
+  const totals = {};
+  (seance.poules||[]).forEach(p=>{
+    const pts = computePoulePoints(seance, p);
+    Object.keys(pts).forEach(id=>{ totals[id] = (totals[id]||0) + pts[id]; });
+  });
+  return totals;
+}
+// Recalcule cd.wins et cd.poulePoints depuis zéro en resommant toutes les
+// séances de la classe (au lieu de simplement les remettre à zéro) : utilisé
+// après avoir effacé ou supprimé une séance, pour que le total cumulé
+// reflète exactement ce qu'il reste, sans effacer les autres séances.
+function recomputeCumulativeTotals(cd){
+  const wins = {};
+  const poulePoints = {};
+  cd.seances.forEach(s=>{
+    const w = computeSeanceDefisWins(s);
+    Object.keys(w).forEach(id=>{ wins[id] = (wins[id]||0) + w[id]; });
+    const p = computeSeancePoulePoints(s);
+    Object.keys(p).forEach(id=>{ poulePoints[id] = (poulePoints[id]||0) + p[id]; });
+  });
+  cd.wins = wins;
+  cd.poulePoints = poulePoints;
 }
 // Classement (ordre décroissant de points marqués) des membres ACTIFS (non
 // absents) d'une poule, à partir des matchs de cette séance.
@@ -1911,7 +1944,6 @@ function renderActivityTab(activite){
           </div>
           <div style="display:flex;gap:6px;">
             <button class="btn small secondary" id="btnNouvelleSeance">➕ Nouvelle séance</button>
-            ${cd.seances.length ? '<button class="btn small ghost" id="btnEffacerResultats">🧹 Effacer les résultats</button>' : ''}
             ${cd.seances.length ? '<button class="btn small danger" id="btnSupprimerSeance">🗑️ Supprimer la séance</button>' : ''}
           </div>
         </div>
@@ -1929,11 +1961,24 @@ function renderActivityTab(activite){
       if(act.defisAllowed){
         html += `
           <div class="card">
-            <h3>Type de tournoi</h3>
+            <div class="toolbar">
+              <h3>Type de tournoi</h3>
+              ${cd.seances.length ? '<button class="btn small ghost" id="btnEffacerResultats">🧹 Effacer les résultats</button>' : ''}
+            </div>
             <div class="config-grid">
               <button class="btn ${seance.tournamentType==='poule'?'':'ghost'}" data-tournament-type="poule">🏆 Par poule</button>
               <button class="btn ${seance.tournamentType==='defisClassement'?'':'ghost'}" data-tournament-type="defisClassement">📈 Défis classement progressif</button>
               <button class="btn ${seance.tournamentType==='defisHasard'?'':'ghost'}" data-tournament-type="defisHasard">🎲 Défis hasard</button>
+            </div>
+          </div>`;
+      } else if(cd.seances.length){
+        // Sports collectifs : pas de choix de type de tournoi (toujours poule),
+        // mais le bouton doit rester accessible quelque part.
+        html += `
+          <div class="card">
+            <div class="toolbar" style="margin-bottom:0;">
+              <h3 style="margin:0;">🏆 Tournoi par poule</h3>
+              <button class="btn small ghost" id="btnEffacerResultats">🧹 Effacer les résultats</button>
             </div>
           </div>`;
       }

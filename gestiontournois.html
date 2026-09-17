@@ -147,6 +147,7 @@
   .defis-tables-grid .poule-card h4{font-size:1.05rem;margin-bottom:4px;}
   .defis-tables-grid .poule-card .hint{font-size:.82rem;margin:2px 0;}
   .defis-tables-grid .poule-card .btn{font-size:1.05rem;padding:6px 10px;}
+  .match-ordinal{font-size:.78rem;font-weight:600;opacity:.75;}
   .defis-tables-grid .poule-card .arbitre-label{font-size:.92rem;padding:4px 7px;margin-top:4px;}
   .team-card, .poule-card{
     border:2px solid var(--line);border-radius:12px;padding:10px;background:#f8fafc;
@@ -1511,6 +1512,17 @@ function remplirTablesClassement(activite){
   const byes = [];
   Object.keys(groups).map(Number).forEach(k=>{
     const pool = groups[k];
+    // Groupe à effectif impair : celui qui a DÉJÀ joué le plus de matchs est
+    // mis de côté en premier (plutôt qu'un des moins joués) pour que les
+    // matchs disponibles profitent en priorité à ceux qui sont en retard.
+    if(pool.length % 2 === 1){
+      let maxIdx = 0, maxCount = -1;
+      pool.forEach((id,idx)=>{
+        const c = defisMatchCount(seance,id);
+        if(c > maxCount){ maxCount = c; maxIdx = idx; }
+      });
+      byes.push(pool.splice(maxIdx, 1)[0]);
+    }
     while(pool.length >= 2){
       const a = pool.shift();
       const idx = pool.findIndex(id => peutAffronter(a, id));
@@ -1574,7 +1586,18 @@ function remplirTablesClassement(activite){
 
   const usedInPairs = new Set();
   chosenPairs.forEach(([a,b])=>{ usedInPairs.add(a); usedInPairs.add(b); });
-  const refPool = shuffleArray(available.filter(id=>!usedInPairs.has(id) && dernierRole[id] !== 'arbitre'));
+  // Priorité pour arbitrer : d'abord les non-joueurs qui n'ont pas arbitré la
+  // dernière fois ; puis les élèves exemptés (bye) — eux n'ont de toute façon
+  // pas d'autre rôle possible ce tour-ci, donc la règle "pas 2 fois d'affilée"
+  // ne doit pas les empêcher d'arbitrer et forcer de l'auto-arbitrage à leur
+  // place ; enfin, en tout dernier recours, n'importe quel non-joueur restant.
+  const nonJoueurs = available.filter(id=>!usedInPairs.has(id));
+  const byeSet = new Set(stillByes);
+  const refPool = [
+    ...shuffleArray(nonJoueurs.filter(id=>!byeSet.has(id) && dernierRole[id] !== 'arbitre')),
+    ...shuffleArray(nonJoueurs.filter(id=>byeSet.has(id))),
+    ...shuffleArray(nonJoueurs.filter(id=>!byeSet.has(id) && dernierRole[id] === 'arbitre')),
+  ];
   chosenPairs.forEach(([a,b], i)=>{
     const table = freeTables[i];
     const numA = defisMatchCount(seance,a) + 1;
@@ -2508,11 +2531,9 @@ function renderDefisClassementSection(activite){
     tableCards.push(`
       <div class="poule-card">
         <h4>${act.terrainLabel.replace(/s$/,'')} ${t}</h4>
-        <div class="hint" style="text-align:center;">${ordinalMatch(m.numA)}</div>
-        <button class="btn ${m.winner===m.a?'':'ghost'}" data-set-winner="${i}::${m.a}">${nomA}</button>
+        <button class="btn ${m.winner===m.a?'':'ghost'}" data-set-winner="${i}::${m.a}">${nomA} <span class="match-ordinal">(${ordinalMatch(m.numA)})</span></button>
         <div class="hint" style="text-align:center;margin:4px 0;">contre</div>
-        <div class="hint" style="text-align:center;">${ordinalMatch(m.numB)}</div>
-        <button class="btn ${m.winner===m.b?'':'ghost'}" data-set-winner="${i}::${m.b}">${nomB}</button>
+        <button class="btn ${m.winner===m.b?'':'ghost'}" data-set-winner="${i}::${m.b}">${nomB} <span class="match-ordinal">(${ordinalMatch(m.numB)})</span></button>
         <div class="arbitre-label">🧑‍⚖️ Arbitre : <b>${refereeLabel}</b></div>
       </div>`);
   }

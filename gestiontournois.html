@@ -1479,26 +1479,41 @@ function remplirTablesClassement(activite){
     // priorité à ceux qui ont joué le moins de matchs, pour égaliser le nombre de matchs de chacun
     groups[k] = shuffleArray(groups[k]).sort((x,y)=> defisMatchCount(seance,x) - defisMatchCount(seance,y));
   });
-  // Dernier adversaire rencontré par chaque élève (pour éviter une revanche
-  // immédiate, le même duel deux fois de suite).
-  const lastOpponent = {};
-  for(let i = seance.defisMatches.length - 1; i >= 0; i--){
-    const m = seance.defisMatches[i];
-    if(lastOpponent[m.a] === undefined) lastOpponent[m.a] = m.b;
-    if(lastOpponent[m.b] === undefined) lastOpponent[m.b] = m.a;
+  // Anti-revanche à cooldown : deux élèves qui se sont déjà affrontés ne
+  // peuvent se retrouver que si CHACUN des deux a joué au moins 4 matchs
+  // depuis leur dernière rencontre (pas juste "pas le tout dernier match").
+  // On retient, pour chaque élève, à quel numéro de match (le sien) il a
+  // affronté chaque adversaire.
+  const REVANCHE_COOLDOWN = 4;
+  const rencontreAuMatchNo = {}; // rencontreAuMatchNo[a][b] = le n° de match de a où il a affronté b
+  const compteurParEleve = {};
+  seance.defisMatches.forEach(m=>{
+    compteurParEleve[m.a] = (compteurParEleve[m.a]||0) + 1;
+    compteurParEleve[m.b] = (compteurParEleve[m.b]||0) + 1;
+    (rencontreAuMatchNo[m.a] = rencontreAuMatchNo[m.a]||{})[m.b] = compteurParEleve[m.a];
+    (rencontreAuMatchNo[m.b] = rencontreAuMatchNo[m.b]||{})[m.a] = compteurParEleve[m.b];
+  });
+  function peutAffronter(a, b){
+    const auMatchA = rencontreAuMatchNo[a] && rencontreAuMatchNo[a][b];
+    if(auMatchA === undefined) return true; // ne se sont jamais rencontrés
+    const auMatchB = rencontreAuMatchNo[b][a];
+    return (defisMatchCount(seance,a) - auMatchA) >= REVANCHE_COOLDOWN
+        && (defisMatchCount(seance,b) - auMatchB) >= REVANCHE_COOLDOWN;
   }
   // Appariement PRIORITAIREMENT à l'intérieur de chaque groupe de même
-  // nombre de victoires (jamais de report vers un groupe voisin à ce stade) :
-  // un élève seul dans son groupe reste exempté (bye) en attendant un
-  // adversaire à égalité.
+  // nombre de victoires (jamais de report vers un groupe voisin à ce stade).
+  // La revanche avant ce cooldown est INTERDITE, même s'il n'y a personne
+  // d'autre dans le groupe : dans ce cas, les deux restent exemptés (bye)
+  // plutôt que de se réaffronter trop tôt — ils seront retentés via le
+  // repli ±2 ci-dessous.
   const pairs = [];
   const byes = [];
   Object.keys(groups).map(Number).forEach(k=>{
     const pool = groups[k];
     while(pool.length >= 2){
       const a = pool.shift();
-      let idx = pool.findIndex(id => lastOpponent[a] !== id);
-      if(idx === -1) idx = 0; // pas d'autre choix : on rejoue le même duel
+      const idx = pool.findIndex(id => peutAffronter(a, id));
+      if(idx === -1){ byes.push(a); continue; } // personne d'admissible dans ce groupe : on attend
       const b = pool.splice(idx, 1)[0];
       pairs.push([a, b]);
     }
@@ -1506,20 +1521,21 @@ function remplirTablesClassement(activite){
   });
 
   // Repli de souplesse (priorité basse, seulement pour ne pas rester bloqué) :
-  // un élève encore seul après le passage ci-dessus peut exceptionnellement
-  // affronter quelqu'un ayant une victoire de plus ou de moins — jamais un
-  // écart plus grand. S'il n'y a même pas ça, il reste exempté. Comme pour
-  // l'appariement strict, on évite la revanche immédiate contre le dernier
-  // adversaire dès qu'un autre choix à ±1 victoire existe — sans ça, deux
-  // élèves isolés à eux deux se retrouvaient rejoués en boucle l'un contre
-  // l'autre à chaque match.
+  // un élève encore seul après le passage ci-dessus peut affronter
+  // quelqu'un ayant jusqu'à 2 victoires de plus ou de moins — jamais un
+  // écart plus grand, et toujours dans le respect du cooldown anti-revanche.
+  // On choisit l'écart le plus faible possible parmi les candidats valides.
+  // S'il n'y a personne, il reste exempté.
   const stillByes = [];
   while(byes.length){
     const a = byes.shift();
-    let idx = byes.findIndex(id => Math.abs((cd.wins[id]||0) - (cd.wins[a]||0)) === 1 && lastOpponent[a] !== id);
-    if(idx === -1) idx = byes.findIndex(id => Math.abs((cd.wins[id]||0) - (cd.wins[a]||0)) === 1);
-    if(idx === -1){ stillByes.push(a); continue; }
-    const b = byes.splice(idx, 1)[0];
+    let bestIdx = -1, bestGap = Infinity;
+    byes.forEach((id,idx)=>{
+      const gap = Math.abs((cd.wins[id]||0) - (cd.wins[a]||0));
+      if(gap <= 2 && peutAffronter(a, id) && gap < bestGap){ bestGap = gap; bestIdx = idx; }
+    });
+    if(bestIdx === -1){ stillByes.push(a); continue; }
+    const b = byes.splice(bestIdx, 1)[0];
     pairs.push([a, b]);
   }
   seance.defisBye = stillByes;
@@ -2524,7 +2540,7 @@ function renderDefisClassementSection(activite){
       </div>
       ${checkboxRangeHtml('defisTerrainCbGroup', act.terrainLabel+' disponibles', act.defisTerrainMin, act.defisTerrainMax, seance.defisTerrains || act.defisTerrainMin)}
       ${demiTerrainToggle}
-      <p class="hint">Les élèves ayant le même nombre de victoires s'affrontent. Cliquez sur le nom du vainqueur de chaque match. La rotation suivante s'organise automatiquement pour tout le monde une fois que <b>tous</b> les matchs de la rotation en cours sont terminés (pas de table qui avance plus vite qu'une autre). S'il y a plus d'élèves que de tables, les non-joueurs officient comme arbitres.</p>
+      <p class="hint">Les élèves ayant le même nombre de victoires s'affrontent (jusqu'à ±2 victoires d'écart si personne n'est exactement à égalité). Deux élèves qui se sont déjà rencontrés ne se réaffrontent que si chacun a rejoué au moins 4 matchs depuis. Cliquez sur le nom du vainqueur de chaque match. La rotation suivante s'organise automatiquement pour tout le monde une fois que <b>tous</b> les matchs de la rotation en cours sont terminés (pas de table qui avance plus vite qu'une autre). S'il y a plus d'élèves que de tables, les non-joueurs officient comme arbitres.</p>
       ${rotationHtml}
       ${byeHtml}
       ${started ? `

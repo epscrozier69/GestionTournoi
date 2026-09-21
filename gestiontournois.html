@@ -224,6 +224,21 @@
   .presence-chip.absent{background:#fee2e2;color:var(--bad);border-color:var(--bad);text-decoration:line-through;}
   .presence-chip.materiel{background:#fef3c7;color:#92400e;border-color:#d97706;text-decoration:line-through;}
   .presence-chip.dispense{background:#e0e7ff;color:#3730a3;border-color:#4f46e5;text-decoration:line-through;}
+
+  /* Présence en liste verticale + niveaux à cocher (Ultimate) */
+  .presence-list-vertical{display:flex;flex-direction:column;gap:6px;}
+  .presence-row-niveau{
+    display:flex;align-items:center;justify-content:space-between;gap:10px;
+    flex-wrap:wrap;padding:2px 0;border-bottom:1px dashed var(--line);
+  }
+  .presence-row-niveau:last-child{border-bottom:none;}
+  .presence-row-niveau .presence-chip{flex:1;min-width:200px;text-align:left;}
+  .niveau-group{display:flex;gap:4px;flex:0 0 auto;}
+  .niveau-opt{
+    width:30px;height:30px;border-radius:8px;border:1px solid var(--line);
+    background:#f8fafc;color:var(--muted);font-weight:700;cursor:pointer;
+  }
+  .niveau-opt.checked{background:var(--c7);color:#fff;border-color:var(--c7);}
   .demi-terrain-toggle{
     display:inline-flex;align-items:center;gap:8px;margin-bottom:10px;font-size:.82rem;font-weight:600;
     cursor:pointer;background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:8px 12px;
@@ -404,6 +419,8 @@ function defaultSeance(numero, activite){
     teams:[], poules:[], matches:[],
     hasardWins:{}, // défis hasard : victoires de cette séance uniquement
     defisMatches:[], defisBye:[], lastAction:null, // défis classement progressif uniquement (flux continu)
+    niveaux:{}, // studentId -> 1 (meilleur) à 4 (moins bon) — Ultimate : composition d'équipes
+    compositionEquipes:'aleatoire', // 'aleatoire' | 'homogene' | 'heterogene' (Ultimate)
   };
 }
 function defaultClasseData(classe, activite){
@@ -446,6 +463,8 @@ function ensureActivityData(){
         if(!s.hasardWins) s.hasardWins = {};
         if(!s.absentReasons) s.absentReasons = {};
         if(s.lastAction === undefined) s.lastAction = null;
+        if(!s.niveaux) s.niveaux = {};
+        if(!s.compositionEquipes) s.compositionEquipes = 'aleatoire';
       });
       // Auto-réparation : recalcule systématiquement cd.wins/cd.poulePoints à
       // partir des séances (source de vérité), au cas où ils auraient été
@@ -551,6 +570,17 @@ function setPresenceStatus(activite, studentId, status){
   if(seance.tournamentType === 'defisClassement' && seance.defisMatches && seance.defisMatches.length && rotationClassementTerminee(seance)){
     remplirTablesClassement(activite);
   }
+  renderActivityTab(activite);
+}
+// Niveau d'un élève (1 = meilleur à 4 = moins bon), utilisé pour composer des
+// équipes homogènes ou hétérogènes (Ultimate). Recliquer sur le niveau déjà
+// coché le retire (élève sans niveau attribué).
+function setNiveauEleve(activite, studentId, niveau){
+  const seance = currentSeance(activite);
+  if(!seance.niveaux) seance.niveaux = {};
+  if(seance.niveaux[studentId] === niveau) delete seance.niveaux[studentId];
+  else seance.niveaux[studentId] = niveau;
+  saveState();
   renderActivityTab(activite);
 }
 // Efface matchs/tours/poules de la séance en cours ET recalcule le total
@@ -1114,6 +1144,51 @@ function generateTeams(studentIds, joueursParEquipe){
   }
   return teams;
 }
+// Équipes "homogènes" (Ultimate) : les niveaux 1-2 forment un vivier de
+// "forts", les niveaux 3-4 un vivier de "moins forts", chaque vivier étant
+// ensuite réparti en équipes indépendamment de l'autre — les équipes issues
+// d'un même vivier sont donc de niveau proche entre elles, mais les deux
+// viviers ne se mélangent jamais. Les élèves sans niveau renseigné sont
+// répartis dans le vivier le moins fourni pour équilibrer les effectifs.
+function generateTeamsHomogenes(studentIds, joueursParEquipe, niveaux){
+  const shuffled = shuffleArray(studentIds);
+  const forts = shuffled.filter(id => niveaux[id] === 1 || niveaux[id] === 2);
+  const faibles = shuffled.filter(id => niveaux[id] === 3 || niveaux[id] === 4);
+  const sansNiveau = shuffled.filter(id => !niveaux[id]);
+  sansNiveau.forEach(id => (forts.length <= faibles.length ? forts : faibles).push(id));
+  const equipes = [...generateTeams(forts, joueursParEquipe), ...generateTeams(faibles, joueursParEquipe)];
+  equipes.forEach((t,i)=>{ t.id = 'equipe'+(i+1); t.nom = 'Équipe '+(i+1); });
+  return equipes;
+}
+// Équipes "hétérogènes" (Ultimate) : draft en serpentin — les élèves sont
+// distribués niveau par niveau (tous les 1, puis tous les 2, etc.) sur les
+// équipes chacune leur tour, en alternant le sens de distribution, pour que
+// chaque équipe reçoive un mélange de niveaux tout en restant équilibrée par
+// rapport aux autres. Les élèves sans niveau renseigné sont distribués en
+// dernier, de la même façon.
+function generateTeamsHeterogenes(studentIds, joueursParEquipe, niveaux){
+  const groupes = {1:[], 2:[], 3:[], 4:[], 0:[]};
+  shuffleArray(studentIds).forEach(id => groupes[niveaux[id] || 0].push(id));
+  const nbEquipes = Math.max(1, Math.ceil(studentIds.length / joueursParEquipe));
+  const equipes = Array.from({length:nbEquipes}, (_,i)=>({ id:'equipe'+(i+1), nom:'Équipe '+(i+1), memberIds:[] }));
+  let idx = 0, sens = 1;
+  [1,2,3,4,0].forEach(niveau=>{
+    groupes[niveau].forEach(id=>{
+      let essais = 0;
+      while(equipes[idx].memberIds.length >= joueursParEquipe && essais < nbEquipes){
+        idx += sens;
+        if(idx >= nbEquipes){ idx = nbEquipes-1; sens = -1; }
+        else if(idx < 0){ idx = 0; sens = 1; }
+        essais++;
+      }
+      equipes[idx].memberIds.push(id);
+      idx += sens;
+      if(idx >= nbEquipes){ idx = nbEquipes-1; sens = -1; }
+      else if(idx < 0){ idx = 0; sens = 1; }
+    });
+  });
+  return equipes;
+}
 // Calcule la taille des poules à créer pour n participants, en respectant les
 // bornes [min, max] de l'activité : priorité à la taille de base souhaitée,
 // et absorption du reste par des poules d'une unité de plus (jamais de poule
@@ -1216,8 +1291,14 @@ function onGenererPoules(activite){
   const act = ACTIVITIES[activite];
   if(!cd){ alert("Choisissez d'abord une classe."); return; }
   if(!seance){ alert("Créez d'abord une séance."); return; }
+  // Chaque activité a son propre panneau, mais certains champs (comme
+  // "cfgTaillePoule") partagent le même id d'un panneau à l'autre : on
+  // cherche donc dans le panneau de CETTE activité précisément, plutôt que
+  // document.getElementById() qui renverrait toujours le premier trouvé
+  // dans toute la page (celui d'une autre activité).
+  const panel = document.getElementById('panel-'+slug(activite));
   const terrains = clamp(seance.pouleTerrains || act.pouleTerrainMin, act.pouleTerrainMin, act.pouleTerrainMax);
-  const taillePoule = clamp(parseInt(document.getElementById('cfgTaillePoule').value, 10) || act.pouleMin, act.pouleMin, act.pouleMax);
+  const taillePoule = clamp(parseInt(panel.querySelector('#cfgTaillePoule').value, 10) || act.pouleMin, act.pouleMin, act.pouleMax);
 
   if(seance.poules.length){
     if(!confirm('Cela régénère les poules et efface les placements/matchs actuels de cette séance. Continuer ?')) return;
@@ -1226,9 +1307,12 @@ function onGenererPoules(activite){
   const studentIds = STATE.allStudents.filter(s=>s.classe===cd.classe && !seance.absents.includes(s.id)).map(s=>s.id);
 
   if(act.type === 'equipe'){
-    const joueursParEquipe = clamp(parseInt(document.getElementById('cfgJoueursEquipe').value, 10) || 4, 2, 15);
+    const joueursParEquipe = clamp(parseInt(panel.querySelector('#cfgJoueursEquipe').value, 10) || 4, 2, 15);
     seance.config = { terrains, taillePoule, joueursParEquipe };
-    seance.teams = generateTeams(studentIds, joueursParEquipe);
+    const composition = activite === 'Ultimate' ? (seance.compositionEquipes || 'aleatoire') : 'aleatoire';
+    if(composition === 'homogene') seance.teams = generateTeamsHomogenes(studentIds, joueursParEquipe, seance.niveaux || {});
+    else if(composition === 'heterogene') seance.teams = generateTeamsHeterogenes(studentIds, joueursParEquipe, seance.niveaux || {});
+    else seance.teams = generateTeams(studentIds, joueursParEquipe);
     seance.poules = generatePoules(seance.teams.map(t=>t.id), taillePoule, null, act.pouleMin, act.pouleMax);
   } else {
     seance.config = { terrains, taillePoule };
@@ -1912,8 +1996,10 @@ function checkboxRangeHtml(groupId, label, min, max, current){
       <div class="cb-group" id="${groupId}">${opts.join('')}</div>
     </div>`;
 }
-function wireCheckboxRange(groupId, onSelect){
-  const group = document.getElementById(groupId);
+function wireCheckboxRange(root, groupId, onSelect){
+  // `root` limite la recherche au panneau de l'activité concernée : ce même
+  // id de groupe existe une fois par activité (5 panneaux dans la page).
+  const group = root.querySelector('#'+groupId);
   if(!group) return;
   const boxes = group.querySelectorAll('input[type=checkbox]');
   boxes.forEach(input=>{
@@ -2226,9 +2312,18 @@ function renderActivityTab(activite){
 
   panel.innerHTML = html;
 
+  // IMPORTANT : toutes les activités partagent les mêmes id (ex. "selectClasse",
+  // "btnNouvelleSeance"...) car chaque panneau reprend le même gabarit. Comme
+  // les 5 panneaux existent tous en même temps dans la page (seuls les
+  // panneaux inactifs sont masqués), document.getElementById() renverrait
+  // toujours le premier trouvé dans toute la page — pas forcément celui de
+  // CETTE activité. On cherche donc systématiquement à l'intérieur de
+  // `panel` (panel.querySelector), qui est déjà limité au bon panneau.
+  const q = (sel) => panel.querySelector(sel);
+
   if(classesDisponibles.length){
-    document.getElementById('btnImporterClasse').addEventListener('click', ()=>{
-      const classe = document.getElementById('selectClasse').value;
+    q('#btnImporterClasse').addEventListener('click', ()=>{
+      const classe = q('#selectClasse').value;
       if(!classe){ alert('Choisissez une classe.'); return; }
       importerClasseDansActivite(activite, classe);
     });
@@ -2237,17 +2332,23 @@ function renderActivityTab(activite){
     btn.addEventListener('click', ()=>switchClasse(activite, btn.dataset.classeSelect));
   });
 
-  const btnNouvelleSeance = document.getElementById('btnNouvelleSeance');
+  const btnNouvelleSeance = q('#btnNouvelleSeance');
   if(btnNouvelleSeance) btnNouvelleSeance.addEventListener('click', ()=>addSeance(activite));
-  const btnSupprimerSeance = document.getElementById('btnSupprimerSeance');
+  const btnSupprimerSeance = q('#btnSupprimerSeance');
   if(btnSupprimerSeance) btnSupprimerSeance.addEventListener('click', ()=>deleteSeance(activite));
-  const btnEffacerResultats = document.getElementById('btnEffacerResultats');
+  const btnEffacerResultats = q('#btnEffacerResultats');
   if(btnEffacerResultats) btnEffacerResultats.addEventListener('click', ()=>clearSeanceResults(activite));
   panel.querySelectorAll('[data-seance-index]').forEach(btn=>{
     btn.addEventListener('click', ()=>switchSeance(activite, parseInt(btn.dataset.seanceIndex, 10)));
   });
   panel.querySelectorAll('[data-open-presence]').forEach(btn=>{
     btn.addEventListener('click', ()=>openPresenceModal(activite, btn.dataset.openPresence));
+  });
+  panel.querySelectorAll('[data-niveau-valeur]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const eleveId = btn.closest('[data-niveau-eleve]').dataset.niveauEleve;
+      setNiveauEleve(activite, eleveId, parseInt(btn.dataset.niveauValeur, 10));
+    });
   });
 
   panel.querySelectorAll('[data-tournament-type]').forEach(btn=>{
@@ -2257,12 +2358,19 @@ function renderActivityTab(activite){
       renderActivityTab(activite);
     });
   });
+  panel.querySelectorAll('[data-composition-equipes]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      currentSeance(activite).compositionEquipes = btn.dataset.compositionEquipes;
+      saveState();
+      renderActivityTab(activite);
+    });
+  });
 
-  wireCheckboxRange('pouleTerrainCbGroup', (v)=>{
+  wireCheckboxRange(panel, 'pouleTerrainCbGroup', (v)=>{
     currentSeance(activite).pouleTerrains = v;
     saveState();
   });
-  wireCheckboxRange('defisTerrainCbGroup', (v)=>{
+  wireCheckboxRange(panel, 'defisTerrainCbGroup', (v)=>{
     const s = currentSeance(activite);
     s.defisTerrains = v;
     if(s.tournamentType === 'defisClassement' && s.defisMatches && s.defisMatches.length && rotationClassementTerminee(s)){
@@ -2272,7 +2380,7 @@ function renderActivityTab(activite){
       saveState();
     }
   });
-  const chkDemiTerrain = document.getElementById('chkDemiTerrain');
+  const chkDemiTerrain = q('#chkDemiTerrain');
   if(chkDemiTerrain){
     chkDemiTerrain.addEventListener('change', ()=>{
       const s = currentSeance(activite);
@@ -2286,17 +2394,17 @@ function renderActivityTab(activite){
     });
   }
 
-  const btnPoules = document.getElementById('btnGenererPoules');
+  const btnPoules = q('#btnGenererPoules');
   if(btnPoules) btnPoules.addEventListener('click', ()=>onGenererPoules(activite));
-  const btnMatchs = document.getElementById('btnGenererMatchs');
+  const btnMatchs = q('#btnGenererMatchs');
   if(btnMatchs) btnMatchs.addEventListener('click', ()=>onGenererMatchs(activite));
-  const btnExportMatchs = document.getElementById('btnExportMatchs');
+  const btnExportMatchs = q('#btnExportMatchs');
   if(btnExportMatchs) btnExportMatchs.addEventListener('click', ()=>exportMatchesExcel(activite));
-  const btnExportFeuilles = document.getElementById('btnExportFeuilles');
+  const btnExportFeuilles = q('#btnExportFeuilles');
   if(btnExportFeuilles) btnExportFeuilles.addEventListener('click', ()=>exportFeuillesMatchsPDF(activite));
-  const btnExportClassement = document.getElementById('btnExportClassement');
+  const btnExportClassement = q('#btnExportClassement');
   if(btnExportClassement) btnExportClassement.addEventListener('click', ()=>exportClassementExcel(activite));
-  const btnToggleClassementTotal = document.getElementById('btnToggleClassementTotal');
+  const btnToggleClassementTotal = q('#btnToggleClassementTotal');
   if(btnToggleClassementTotal) btnToggleClassementTotal.addEventListener('click', ()=>{
     cd.showClassementTotal = !cd.showClassementTotal;
     saveState();
@@ -2326,14 +2434,14 @@ function renderActivityTab(activite){
     });
   });
 
-  const btnDemarrerDefis = document.getElementById('btnDemarrerDefis');
+  const btnDemarrerDefis = q('#btnDemarrerDefis');
   if(btnDemarrerDefis) btnDemarrerDefis.addEventListener('click', ()=>{
     remplirTablesClassement(activite);
     renderActivityTab(activite);
   });
-  const btnAnnulerDernierResultat = document.getElementById('btnAnnulerDernierResultat');
+  const btnAnnulerDernierResultat = q('#btnAnnulerDernierResultat');
   if(btnAnnulerDernierResultat) btnAnnulerDernierResultat.addEventListener('click', ()=>undoLastDefisAction(activite));
-  const btnExportDefisMatchs = document.getElementById('btnExportDefisMatchs');
+  const btnExportDefisMatchs = q('#btnExportDefisMatchs');
   if(btnExportDefisMatchs) btnExportDefisMatchs.addEventListener('click', ()=>exportDefisMatchesExcel(activite));
   panel.querySelectorAll('[data-set-winner]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
@@ -2356,6 +2464,32 @@ const PRESENCE_STATUTS = {
 function renderPresenceCard(activite, students, seance){
   const presents = students.filter(s=>!seance.absents.includes(s.id)).length;
   const reasons = seance.absentReasons || {};
+
+  // Ultimate : liste verticale avec, en plus du statut, un niveau (1 = meilleur
+  // à 4 = moins bon) à cocher pour chaque élève, utilisé ensuite pour composer
+  // des équipes homogènes ou hétérogènes (voir Fonctionnalites.md).
+  if(activite === 'Ultimate'){
+    if(!seance.niveaux) seance.niveaux = {};
+    const rows = students.map(s=>{
+      const statut = reasons[s.id] && PRESENCE_STATUTS[reasons[s.id]];
+      const label = statut ? `${statut.icon} ${statut.label} ` : '✅ ';
+      const niveauActuel = seance.niveaux[s.id] || 0;
+      return `
+        <div class="presence-row-niveau">
+          <button class="presence-chip ${statut?statut.cls:''}" data-open-presence="${s.id}">${label}${s.nomPrenom}</button>
+          <div class="niveau-group" data-niveau-eleve="${s.id}">
+            ${[1,2,3,4].map(n=>`<button class="niveau-opt ${niveauActuel===n?'checked':''}" data-niveau-valeur="${n}" title="Niveau ${n}">${n}</button>`).join('')}
+          </div>
+        </div>`;
+    }).join('');
+    return `
+      <div class="card">
+        <h3>🧍 Présence — Séance ${seance.numero} <span class="muted">(${presents}/${students.length} présents)</span></h3>
+        <p class="hint">Cliquez sur un élève pour choisir son statut (absent, matériel manquant, dispensé). À droite, cochez son niveau (1 = meilleur, 4 = moins bon) pour composer des équipes homogènes ou hétérogènes.</p>
+        <div class="presence-list-vertical">${rows}</div>
+      </div>`;
+  }
+
   return `
     <div class="card">
       <h3>🧍 Présence — Séance ${seance.numero} <span class="muted">(${presents}/${students.length} présents)</span></h3>
@@ -2388,6 +2522,16 @@ function renderPouleConfigCard(activite){
           <div class="hint">de ${act.pouleMin} à ${act.pouleMax}</div>
         </div>
       </div>`;
+    if(activite === 'Ultimate'){
+      const comp = seance.compositionEquipes || 'aleatoire';
+      fields += `
+        <div class="config-grid">
+          <button class="btn ${comp==='aleatoire'?'':'ghost'}" data-composition-equipes="aleatoire">🎲 Aléatoire</button>
+          <button class="btn ${comp==='homogene'?'':'ghost'}" data-composition-equipes="homogene">🟰 Homogène (niveaux 1-2 ensemble, 3-4 ensemble)</button>
+          <button class="btn ${comp==='heterogene'?'':'ghost'}" data-composition-equipes="heterogene">🔀 Hétérogène (équipes équilibrées, mélange des niveaux)</button>
+        </div>
+        <p class="hint">Basé sur les niveaux cochés dans la carte Présence ci-dessus (un élève sans niveau compte comme neutre).</p>`;
+    }
   } else {
     fields += `
       <div class="config-grid">

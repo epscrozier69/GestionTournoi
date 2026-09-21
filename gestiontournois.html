@@ -609,28 +609,54 @@ async function loadState(){
 // envois à chaque clic). Fonctionne hors-ligne : sans réseau, l'appli
 // continue avec la dernière version connue localement.
 let cloudSyncTimer = null;
+let syncStatusActuel = null;
 function setSyncStatus(state){
+  syncStatusActuel = state;
   const el = document.getElementById('syncStatus');
   if(!el) return;
   if(!APPS_SCRIPT_URL){ el.textContent = ''; el.className = 'sync-status'; return; }
   const labels = {
     loading: '🔄 Chargement…', ok: '☁️ Synchronisé', saving: '🔄 Enregistrement…',
-    error: '⚠️ Hors ligne (données locales)',
+    error: '⚠️ Hors ligne (nouvel essai automatique...)',
   };
   el.textContent = labels[state] || '';
   el.className = 'sync-status' + (state === 'error' ? ' error' : (state === 'ok' ? ' ok' : ''));
 }
+// Si une sauvegarde a échoué (réseau capricieux, script Google lent...), on
+// retente automatiquement en arrière-plan de temps en temps, sans attendre
+// que l'utilisateur fasse une nouvelle modification pour redéclencher un envoi.
+setInterval(()=>{
+  if(APPS_SCRIPT_URL && syncStatusActuel === 'error') pushCloudState();
+}, 30000);
 function fetchWithTimeout(url, options, ms){
   return Promise.race([
     fetch(url, options),
     new Promise((_, reject)=> setTimeout(()=>reject(new Error('Délai dépassé')), ms)),
   ]);
 }
+// Un Google Apps Script Web App peut être lent à répondre la toute première
+// fois qu'il est sollicité après un moment d'inactivité ("cold start" côté
+// Google, parfois 10-15s), contrairement à un site simplement hébergé (les
+// "autres applications à côté") qui n'a pas ce genre de démarrage à froid.
+// On retente donc automatiquement avant d'afficher "Hors ligne", au lieu de
+// abandonner dès le premier délai dépassé.
+async function fetchAvecReprises(url, options, timeoutMs, tentatives){
+  let derniereErreur;
+  for(let i=0; i<tentatives; i++){
+    try{
+      return await fetchWithTimeout(url, options, timeoutMs);
+    }catch(e){
+      derniereErreur = e;
+      if(i < tentatives-1) await new Promise(r=>setTimeout(r, 1500));
+    }
+  }
+  throw derniereErreur;
+}
 async function loadCloudStateIfAvailable(){
   if(!APPS_SCRIPT_URL) return;
   setSyncStatus('loading');
   try{
-    const res = await fetchWithTimeout(APPS_SCRIPT_URL + '?action=load', {}, 8000);
+    const res = await fetchAvecReprises(APPS_SCRIPT_URL + '?action=load', {}, 15000, 3);
     const json = await res.json();
     if(json && json.ok && json.data){
       STATE = json.data;
@@ -642,24 +668,43 @@ async function loadCloudStateIfAvailable(){
     setSyncStatus('error');
   }
 }
+// true tant que la dernière modification locale n'a pas été confirmée
+// envoyée en ligne avec succès (reste true même après un échec, jusqu'à ce
+// qu'une tentative réussisse) — sert à ne jamais écraser un changement local
+// pas encore sauvegardé en ligne.
+let syncEnAttente = false;
 function scheduleCloudSync(){
   if(!APPS_SCRIPT_URL) return;
   clearTimeout(cloudSyncTimer);
+  syncEnAttente = true;
   setSyncStatus('saving');
   cloudSyncTimer = setTimeout(pushCloudState, 2500);
 }
 async function pushCloudState(){
   try{
-    await fetchWithTimeout(APPS_SCRIPT_URL, {
+    await fetchAvecReprises(APPS_SCRIPT_URL, {
       method:'POST',
       headers:{'Content-Type':'text/plain;charset=utf-8'}, // évite le préflight CORS
       body: JSON.stringify({ action:'save', data: STATE }),
-    }, 10000);
+    }, 15000, 2);
+    syncEnAttente = false;
     setSyncStatus('ok');
   }catch(e){
-    setSyncStatus('error');
+    setSyncStatus('error'); // syncEnAttente reste true : rien n'est confirmé envoyé
   }
 }
+// Quand on revient sur cet appareil (onglet ré-affiché, appli remise au
+// premier plan sur tablette) : on va rechercher la version la plus récente
+// en ligne, pour retrouver ce qui a été fait entre-temps sur un autre
+// appareil — sans écraser une modification locale pas encore envoyée.
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState !== 'visible') return;
+  if(!APPS_SCRIPT_URL || syncEnAttente) return;
+  loadCloudStateIfAvailable().then(()=>{
+    renderTabs();
+    renderAll();
+  });
+});
 
 /* --------------------------------------------------------- CSV IMPORT - */
 function parseCSV(text){

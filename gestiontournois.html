@@ -249,6 +249,11 @@
   }
   .modal-vs{font-weight:700;color:var(--muted);}
   .modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px;}
+  .backup-row{
+    display:flex;align-items:center;justify-content:space-between;gap:10px;
+    padding:8px 4px;border-bottom:1px solid var(--line);font-size:.85rem;
+  }
+  .backup-row:last-child{border-bottom:none;}
 
   /* Cases à cocher (choix du nombre de tables/terrains) */
   .field-row-cb{margin-bottom:14px;}
@@ -327,6 +332,17 @@
       <button class="btn danger" id="btnStatutAbsent">🚫 Absent</button>
       <button class="btn secondary" id="btnStatutMateriel">🎽 Matériel (pas de raquette)</button>
       <button class="btn ghost" id="btnStatutDispense">📄 Dispensé</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="backupsModal" hidden>
+  <div class="modal-box" style="max-width:520px;">
+    <h3>🕒 Sauvegardes en ligne</h3>
+    <p class="hint">À chaque enregistrement automatique, la version précédente est conservée (les 20 dernières). Vous pouvez revenir à l'une d'elles si besoin.</p>
+    <div id="backupsListe" style="max-height:340px;overflow-y:auto;"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="btnFermerBackupsModal">Fermer</button>
     </div>
   </div>
 </div>
@@ -652,6 +668,11 @@ async function fetchAvecReprises(url, options, timeoutMs, tentatives){
   }
   throw derniereErreur;
 }
+// Vrai si l'état local n'a essentiellement rien dedans (aucun risque à le
+// remplacer sans demander).
+function estStateVide(s){
+  return !s || !Array.isArray(s.allStudents) || s.allStudents.length === 0;
+}
 async function loadCloudStateIfAvailable(){
   if(!APPS_SCRIPT_URL) return;
   setSyncStatus('loading');
@@ -659,9 +680,26 @@ async function loadCloudStateIfAvailable(){
     const res = await fetchAvecReprises(APPS_SCRIPT_URL + '?action=load', {}, 15000, 3);
     const json = await res.json();
     if(json && json.ok && json.data){
-      STATE = json.data;
-      ensureActivityData();
-      localStorage.setItem('gt_state', JSON.stringify(STATE));
+      const distant = json.data;
+      const identique = JSON.stringify(distant) === JSON.stringify(STATE);
+      if(estStateVide(STATE) || identique){
+        STATE = distant;
+        ensureActivityData();
+        localStorage.setItem('gt_state', JSON.stringify(STATE));
+      } else {
+        // Les deux versions diffèrent : on ne remplace JAMAIS sans accord,
+        // pour ne jamais écraser silencieusement un travail en cours sur cet
+        // appareil avec une version différente trouvée en ligne.
+        const accepte = confirm(
+          "Une version différente de vos données a été trouvée en ligne (autre appareil, ou synchronisation antérieure).\n\n" +
+          "Charger cette version en ligne ? (Annuler pour garder ce qui est actuellement sur cet appareil.)"
+        );
+        if(accepte){
+          STATE = distant;
+          ensureActivityData();
+          localStorage.setItem('gt_state', JSON.stringify(STATE));
+        }
+      }
     }
     setSyncStatus('ok');
   }catch(e){
@@ -694,17 +732,68 @@ async function pushCloudState(){
   }
 }
 // Quand on revient sur cet appareil (onglet ré-affiché, appli remise au
-// premier plan sur tablette) : on va rechercher la version la plus récente
-// en ligne, pour retrouver ce qui a été fait entre-temps sur un autre
-// appareil — sans écraser une modification locale pas encore envoyée.
+// premier plan sur tablette), on regarde s'il existe une version différente
+// en ligne (modifiée depuis un autre appareil pendant ce temps). Comme
+// loadCloudStateIfAvailable() ne remplace jamais deux versions différentes
+// sans confirmation (voir plus haut), c'est sans risque d'écraser un travail
+// en cours sur cet appareil.
 document.addEventListener('visibilitychange', ()=>{
-  if(document.visibilityState !== 'visible') return;
-  if(!APPS_SCRIPT_URL || syncEnAttente) return;
+  if(document.visibilityState !== 'visible' || syncEnAttente) return;
   loadCloudStateIfAvailable().then(()=>{
     renderTabs();
     renderAll();
   });
 });
+
+// Chaque enregistrement en ligne conserve automatiquement la version d'avant
+// (les 20 dernières, voir GoogleAppsScript.gs) : cette liste permet de
+// revenir en arrière directement depuis l'application, sans avoir à fouiller
+// l'historique de versions de Google Sheets.
+async function ouvrirModalSauvegardesCloud(){
+  const liste = document.getElementById('backupsListe');
+  const modal = document.getElementById('backupsModal');
+  liste.innerHTML = '<p class="hint">Chargement…</p>';
+  modal.hidden = false;
+  try{
+    const res = await fetchAvecReprises(APPS_SCRIPT_URL + '?action=listBackups', {}, 15000, 2);
+    const json = await res.json();
+    const backups = (json && json.ok) ? json.backups : [];
+    if(!backups.length){
+      liste.innerHTML = '<p class="hint">Aucune sauvegarde disponible pour l\'instant.</p>';
+      return;
+    }
+    liste.innerHTML = backups.map(b => `
+      <div class="backup-row">
+        <span>${new Date(b.horodatage).toLocaleString('fr-FR')}</span>
+        <button class="btn small secondary" data-restaurer-backup="${b.row}">Restaurer</button>
+      </div>`).join('');
+    liste.querySelectorAll('[data-restaurer-backup]').forEach(btn=>{
+      btn.addEventListener('click', ()=>restaurerSauvegardeCloud(parseInt(btn.dataset.restaurerBackup, 10)));
+    });
+  }catch(e){
+    liste.innerHTML = '<p class="hint">Impossible de récupérer la liste (réseau indisponible). Réessayez dans un instant.</p>';
+  }
+}
+function fermerModalSauvegardesCloud(){
+  document.getElementById('backupsModal').hidden = true;
+}
+async function restaurerSauvegardeCloud(row){
+  if(!confirm("Remplacer toutes les données actuelles (sur tous les appareils) par cette sauvegarde ?\n\nL'état actuel sera lui-même conservé dans l'historique, donc cette action reste réversible si besoin.")) return;
+  try{
+    const res = await fetchAvecReprises(APPS_SCRIPT_URL + '?action=loadBackup&row=' + row, {}, 15000, 2);
+    const json = await res.json();
+    if(!(json && json.ok && json.data)){ alert("Cette sauvegarde n'a pas pu être chargée."); return; }
+    STATE = json.data;
+    ensureActivityData();
+    saveState();
+    fermerModalSauvegardesCloud();
+    renderTabs();
+    renderAll();
+    alert('Sauvegarde restaurée.');
+  }catch(e){
+    alert("Échec de la restauration (réseau indisponible). Réessayez dans un instant.");
+  }
+}
 
 /* --------------------------------------------------------- CSV IMPORT - */
 function parseCSV(text){
@@ -1891,6 +1980,7 @@ function renderSauvegardeCard(){
         <button class="btn secondary" id="btnExportBackup">⬇️ Exporter une sauvegarde</button>
         <button class="btn ghost" id="btnImportBackupTrigger">⬆️ Importer une sauvegarde</button>
         <input type="file" id="inputImportBackup" accept="application/json" hidden>
+        ${APPS_SCRIPT_URL ? '<button class="btn ghost" id="btnVoirSauvegardesCloud">🕒 Sauvegardes en ligne (restauration)</button>' : ''}
       </div>
     </div>`;
 }
@@ -1902,6 +1992,8 @@ function wireSauvegardeCard(){
     if(input.files[0]) importBackupJSON(input.files[0]);
     input.value = '';
   });
+  const btnVoirSauvegardesCloud = document.getElementById('btnVoirSauvegardesCloud');
+  if(btnVoirSauvegardesCloud) btnVoirSauvegardesCloud.addEventListener('click', ouvrirModalSauvegardesCloud);
 }
 
 /* ---- Général ---- */
@@ -2651,6 +2743,10 @@ document.addEventListener('DOMContentLoaded', async ()=>{
   document.getElementById('btnStatutDispense').addEventListener('click', ()=>choisirStatutPresence('dispense'));
   document.getElementById('presenceModal').addEventListener('click', (e)=>{
     if(e.target.id === 'presenceModal') closePresenceModal();
+  });
+  document.getElementById('btnFermerBackupsModal').addEventListener('click', fermerModalSauvegardesCloud);
+  document.getElementById('backupsModal').addEventListener('click', (e)=>{
+    if(e.target.id === 'backupsModal') fermerModalSauvegardesCloud();
   });
 });
 </script>

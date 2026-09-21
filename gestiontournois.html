@@ -426,6 +426,7 @@ function defaultSeance(numero, activite){
   return {
     numero, tournamentType:'', config:{}, defisTerrains:defaultT, pouleTerrains:defaultT,
     joueursParEquipe:4, taillePoule:act.pouleMin, // choix par cases à cocher (sports collectifs)
+    nombrePoules:2, // sports collectifs : nombre de poules souhaité (répartition équilibrée des équipes)
     demiTerrain:false, // Badminton uniquement : double la capacité de terrains simultanés
     absents:[], // ids d'élèves exclus des poules/défis pour cette séance (quelle qu'en soit la raison)
     absentReasons:{}, // studentId -> 'absent' | 'materiel' | 'dispense' (motif affiché sur la pastille)
@@ -482,6 +483,7 @@ function ensureActivityData(){
         if(!s.compositionEquipes) s.compositionEquipes = 'aleatoire';
         if(!s.joueursParEquipe) s.joueursParEquipe = (s.config && s.config.joueursParEquipe) || 4;
         if(!s.taillePoule) s.taillePoule = (s.config && s.config.taillePoule) || ACTIVITIES[a].pouleMin;
+        if(!s.nombrePoules) s.nombrePoules = 2;
       });
       // Auto-réparation : recalcule systématiquement cd.wins/cd.poulePoints à
       // partir des séances (source de vérité), au cas où ils auraient été
@@ -1174,14 +1176,20 @@ function exportClassementExcel(activite){
 }
 
 /* ------------------------------------------------------- POULES / EQUIPES */
+// La taille des équipes s'ajuste intelligemment (même logique que pour les
+// poules) : priorité au nombre demandé, en absorbant le reste par une ou
+// plusieurs équipes d'un joueur de plus plutôt que de laisser une équipe
+// minuscule (1 ou 2 joueurs) — jamais d'équipe plus petite que demandé, sauf
+// s'il n'y a vraiment pas de quoi former 2 équipes complètes.
 function generateTeams(studentIds, joueursParEquipe){
   const shuffled = shuffleArray(studentIds);
+  const tailles = computePouleSizes(shuffled.length, joueursParEquipe, joueursParEquipe, joueursParEquipe + 1);
   const teams = [];
-  let idx=0, n=1;
-  while(idx < shuffled.length){
-    teams.push({ id:'equipe'+n, nom:'Équipe '+n, memberIds: shuffled.slice(idx, idx+joueursParEquipe) });
-    idx += joueursParEquipe; n++;
-  }
+  let idx = 0;
+  tailles.forEach((taille, i)=>{
+    teams.push({ id:'equipe'+(i+1), nom:'Équipe '+(i+1), memberIds: shuffled.slice(idx, idx+taille) });
+    idx += taille;
+  });
   return teams;
 }
 // Équipes "homogènes" (Ultimate) : les niveaux 1-2 forment un vivier de
@@ -1209,13 +1217,16 @@ function generateTeamsHomogenes(studentIds, joueursParEquipe, niveaux){
 function generateTeamsHeterogenes(studentIds, joueursParEquipe, niveaux){
   const groupes = {1:[], 2:[], 3:[], 4:[], 0:[]};
   shuffleArray(studentIds).forEach(id => groupes[niveaux[id] || 0].push(id));
-  const nbEquipes = Math.max(1, Math.ceil(studentIds.length / joueursParEquipe));
-  const equipes = Array.from({length:nbEquipes}, (_,i)=>({ id:'equipe'+(i+1), nom:'Équipe '+(i+1), memberIds:[] }));
+  // Nombre d'équipes et capacité de chacune calculés avec la même logique
+  // que les poules (voir generateTeams) : jamais d'équipe trop petite.
+  const tailles = computePouleSizes(studentIds.length, joueursParEquipe, joueursParEquipe, joueursParEquipe + 1);
+  const equipes = tailles.map((taille,i)=>({ id:'equipe'+(i+1), nom:'Équipe '+(i+1), memberIds:[], capacite:taille }));
+  const nbEquipes = equipes.length;
   let idx = 0, sens = 1;
   [1,2,3,4,0].forEach(niveau=>{
     groupes[niveau].forEach(id=>{
       let essais = 0;
-      while(equipes[idx].memberIds.length >= joueursParEquipe && essais < nbEquipes){
+      while(equipes[idx].memberIds.length >= equipes[idx].capacite && essais < nbEquipes){
         idx += sens;
         if(idx >= nbEquipes){ idx = nbEquipes-1; sens = -1; }
         else if(idx < 0){ idx = 0; sens = 1; }
@@ -1227,6 +1238,7 @@ function generateTeamsHeterogenes(studentIds, joueursParEquipe, niveaux){
       else if(idx < 0){ idx = 0; sens = 1; }
     });
   });
+  equipes.forEach(t=>delete t.capacite);
   return equipes;
 }
 // Calcule la taille des poules à créer pour n participants, en respectant les
@@ -1273,6 +1285,27 @@ function generatePoules(ids, taillePoule, wins, min, max){
     ordered = ordered.sort((a,b)=> (wins[b]||0) - (wins[a]||0));
   }
   const sizes = computePouleSizes(ordered.length, taillePoule, min || taillePoule, max || taillePoule);
+  const poules = [];
+  let idx = 0;
+  sizes.forEach((size, i)=>{
+    poules.push({ id:'poule'+(i+1), nom:'Poule '+(i+1), members: ordered.slice(idx, idx+size) });
+    idx += size;
+  });
+  return poules;
+}
+// Répartit n équipes en un nombre de poules donné, le plus équitablement
+// possible (écart d'au plus 1 équipe entre la plus grande et la plus petite
+// poule), pour équilibrer le nombre de matchs à jouer d'une poule à l'autre.
+function computePouleSizesParNombre(n, nbPoules){
+  if(n <= 0 || nbPoules <= 0) return [];
+  const nbPoulesEff = Math.min(nbPoules, n); // jamais plus de poules que d'équipes
+  const base = Math.floor(n / nbPoulesEff);
+  const reste = n % nbPoulesEff;
+  return [...Array(reste).fill(base + 1), ...Array(nbPoulesEff - reste).fill(base)];
+}
+function generatePoulesParNombre(ids, nbPoules){
+  const ordered = shuffleArray(ids);
+  const sizes = computePouleSizesParNombre(ordered.length, nbPoules);
   const poules = [];
   let idx = 0;
   sizes.forEach((size, i)=>{
@@ -1344,12 +1377,13 @@ function onGenererPoules(activite){
   // dans toute la page (celui d'une autre activité).
   const panel = document.getElementById('panel-'+slug(activite));
   const terrains = clamp(seance.pouleTerrains || act.pouleTerrainMin, act.pouleTerrainMin, act.pouleTerrainMax);
-  // "Équipes par poule" se choisit désormais par cases à cocher pour les
-  // sports collectifs (valeur retenue dans seance.taillePoule), et reste un
-  // champ numérique classique ("Joueurs par poule") pour les activités
-  // individuelles.
+  // Sports collectifs : on choisit directement le NOMBRE de poules (cases à
+  // cocher), les équipes sont ensuite réparties le plus équitablement
+  // possible entre elles. Activités individuelles : on garde le choix
+  // classique de la taille de poule ("Joueurs par poule").
+  const nombrePoules = clamp(seance.nombrePoules || 2, 1, 10);
   const taillePoule = act.type === 'equipe'
-    ? clamp(seance.taillePoule || act.pouleMin, act.pouleMin, act.pouleMax)
+    ? null
     : clamp(parseInt(panel.querySelector('#cfgTaillePoule').value, 10) || act.pouleMin, act.pouleMin, act.pouleMax);
 
   if(seance.poules.length){
@@ -1360,12 +1394,12 @@ function onGenererPoules(activite){
 
   if(act.type === 'equipe'){
     const joueursParEquipe = clamp(seance.joueursParEquipe || 4, 2, 15);
-    seance.config = { terrains, taillePoule, joueursParEquipe };
+    seance.config = { terrains, nombrePoules, joueursParEquipe };
     const composition = activite === 'Ultimate' ? (seance.compositionEquipes || 'aleatoire') : 'aleatoire';
     if(composition === 'homogene') seance.teams = generateTeamsHomogenes(studentIds, joueursParEquipe, seance.niveaux || {});
     else if(composition === 'heterogene') seance.teams = generateTeamsHeterogenes(studentIds, joueursParEquipe, seance.niveaux || {});
     else seance.teams = generateTeams(studentIds, joueursParEquipe);
-    seance.poules = generatePoules(seance.teams.map(t=>t.id), taillePoule, null, act.pouleMin, act.pouleMax);
+    seance.poules = generatePoulesParNombre(seance.teams.map(t=>t.id), nombrePoules);
   } else {
     seance.config = { terrains, taillePoule };
     seance.teams = [];
@@ -2435,8 +2469,8 @@ function renderActivityTab(activite){
     currentSeance(activite).joueursParEquipe = v;
     saveState();
   });
-  wireCheckboxRange(panel, 'cfgTailleEquipePouleCbGroup', (v)=>{
-    currentSeance(activite).taillePoule = v;
+  wireCheckboxRange(panel, 'cfgNombrePoulesCbGroup', (v)=>{
+    currentSeance(activite).nombrePoules = v;
     saveState();
   });
   wireCheckboxRange(panel, 'defisTerrainCbGroup', (v)=>{
@@ -2582,7 +2616,8 @@ function renderPouleConfigCard(activite){
   let fields = checkboxRangeHtml('pouleTerrainCbGroup', act.terrainLabel+' disponibles', act.pouleTerrainMin, act.pouleTerrainMax, seance.pouleTerrains || act.pouleTerrainMin);
   if(act.type === 'equipe'){
     fields += checkboxRangeHtml('cfgJoueursEquipeCbGroup', 'Joueurs par équipe', 2, 15, seance.joueursParEquipe || 4);
-    fields += checkboxRangeHtml('cfgTailleEquipePouleCbGroup', 'Équipes par poule', act.pouleMin, act.pouleMax, seance.taillePoule || act.pouleMin);
+    fields += checkboxRangeHtml('cfgNombrePoulesCbGroup', 'Nombre de poules', 1, 10, seance.nombrePoules || 2);
+    fields += '<p class="hint">Les équipes sont réparties le plus équitablement possible entre les poules, pour équilibrer le nombre de matchs à jouer dans chacune.</p>';
     if(activite === 'Ultimate'){
       const comp = seance.compositionEquipes || 'aleatoire';
       fields += `
@@ -2608,7 +2643,9 @@ function renderPouleConfigCard(activite){
       <h3>⚙️ Configuration de la poule</h3>
       ${fields}
       <button class="btn" id="btnGenererPoules">🎲 Générer les poules</button>
-      <p class="hint" style="margin-top:8px;">Le nombre de poules s'ajuste automatiquement au nombre de participants présents : priorité à des poules de ${act.pouleMin}, complétées si besoin par une ou plusieurs poules de ${act.pouleMin+1} — jamais de poule à ${act.pouleMin-1}.</p>
+      <p class="hint" style="margin-top:8px;">${act.type === 'equipe'
+        ? "Les équipes sont réparties le plus équitablement possible dans le nombre de poules choisi ci-dessus."
+        : `Le nombre de poules s'ajuste automatiquement au nombre de participants présents : priorité à des poules de ${act.pouleMin}, complétées si besoin par une ou plusieurs poules de ${act.pouleMin+1} — jamais de poule à ${act.pouleMin-1}.`}</p>
     </div>`;
 }
 

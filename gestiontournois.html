@@ -936,6 +936,29 @@ function exportMatchesExcel(activite){
   }));
   exportRowsToExcel(rows, `matchs_${slug(activite)}_seance${seance.numero}.xlsx`, 'Matchs');
 }
+// Export Excel de la composition des équipes (un élève par ligne : son
+// équipe, la poule de cette équipe, et son niveau s'il en a un — Ultimate).
+function exportTeamsExcel(activite){
+  const cd = currentClasseData(activite);
+  const seance = currentSeance(activite);
+  if(!cd || !seance || !seance.teams.length) return;
+  const rows = [];
+  seance.teams.forEach(t=>{
+    const poule = seance.poules.find(p=>p.members.includes(t.id));
+    t.memberIds.forEach(mid=>{
+      const student = STATE.allStudents.find(s=>s.id===mid);
+      if(!student) return;
+      const niveau = seance.niveaux && seance.niveaux[mid];
+      rows.push({
+        'Nom Prénom': student.nomPrenom,
+        'Équipe': t.nom,
+        'Poule': poule ? poule.nom : '',
+        'Niveau': niveau || '',
+      });
+    });
+  });
+  exportRowsToExcel(rows, `equipes_${slug(activite)}_${slug(cd.classe)}_seance${seance.numero}.xlsx`, 'Équipes');
+}
 // Feuilles de match imprimables (2 pages par table) :
 // 1) le recueil de points pendant le match (double échelle : Joueur A monte
 //    de 1 à N, Joueur B descend de N à 1), avec l'arbitre de chaque match ;
@@ -1213,7 +1236,13 @@ function generateTeamsHeterogenes(studentIds, joueursParEquipe, niveaux){
 // max autorise 4).
 function computePouleSizes(n, base, min, max){
   if(n <= 0) return [];
-  if(n <= max) return [n]; // un seul groupe suffit (même incomplet si n < min)
+  // Un seul groupe suffit seulement s'il n'y a même pas de quoi former 2
+  // groupes de la taille minimale (ex : 5 participants avec min 3 → un seul
+  // groupe incomplet). Se baser sur "max" ici serait une erreur : avec une
+  // base volontairement petite (ex. 2 équipes par poule) et un max large, ça
+  // mettait tout le monde dans une seule poule au lieu de respecter la taille
+  // choisie.
+  if(n < 2 * min) return [n];
   const full = Math.floor(n / base);
   const r = n % base;
   if(r === 0) return Array(full).fill(base);
@@ -2440,6 +2469,8 @@ function renderActivityTab(activite){
   if(btnMatchs) btnMatchs.addEventListener('click', ()=>onGenererMatchs(activite));
   const btnExportMatchs = q('#btnExportMatchs');
   if(btnExportMatchs) btnExportMatchs.addEventListener('click', ()=>exportMatchesExcel(activite));
+  const btnExportEquipes = q('#btnExportEquipes');
+  if(btnExportEquipes) btnExportEquipes.addEventListener('click', ()=>exportTeamsExcel(activite));
   const btnExportFeuilles = q('#btnExportFeuilles');
   if(btnExportFeuilles) btnExportFeuilles.addEventListener('click', ()=>exportFeuillesMatchsPDF(activite));
   const btnExportClassement = q('#btnExportClassement');
@@ -2587,7 +2618,10 @@ function renderTeamsSection(activite){
   if(act.type !== 'equipe' || !seance.teams.length) return '';
   return `
     <div class="card">
-      <h3>👥 Équipes</h3>
+      <div class="toolbar">
+        <h3>👥 Équipes</h3>
+        <button class="btn secondary small" id="btnExportEquipes">📊 Exporter Excel</button>
+      </div>
       <div class="teams-grid">
         ${seance.teams.map(t=>`
           <div class="team-card">

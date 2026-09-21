@@ -228,17 +228,29 @@
   /* Présence en liste verticale + niveaux à cocher (Ultimate) */
   .presence-list-vertical{display:flex;flex-direction:column;gap:6px;}
   .presence-row-niveau{
-    display:flex;align-items:center;justify-content:space-between;gap:10px;
+    display:flex;align-items:center;gap:14px;
     flex-wrap:wrap;padding:2px 0;border-bottom:1px dashed var(--line);
   }
   .presence-row-niveau:last-child{border-bottom:none;}
-  .presence-row-niveau .presence-chip{flex:1;min-width:200px;text-align:left;}
+  .presence-row-niveau .presence-chip{flex:0 0 auto;min-width:200px;text-align:left;}
   .niveau-group{display:flex;gap:4px;flex:0 0 auto;}
   .niveau-opt{
     width:30px;height:30px;border-radius:8px;border:1px solid var(--line);
     background:#f8fafc;color:var(--muted);font-weight:700;cursor:pointer;
   }
   .niveau-opt.checked{background:var(--c7);color:#fff;border-color:var(--c7);}
+  .niveau-opt[data-niveau-valeur="1"].checked{background:#39ff14;color:#0a3d00;border-color:#39ff14;}
+  .niveau-opt[data-niveau-valeur="2"].checked{background:#16a34a;color:#fff;border-color:#16a34a;}
+  .niveau-opt[data-niveau-valeur="3"].checked{background:#f59e0b;color:#fff;border-color:#f59e0b;}
+  .niveau-opt[data-niveau-valeur="4"].checked{background:#dc2626;color:#fff;border-color:#dc2626;}
+  .niveau-badge{
+    display:inline-block;background:var(--c7);color:#fff;font-size:.68rem;font-weight:700;
+    padding:1px 6px;border-radius:999px;vertical-align:middle;
+  }
+  .niveau-badge-1{background:#39ff14;color:#0a3d00;}
+  .niveau-badge-2{background:#16a34a;color:#fff;}
+  .niveau-badge-3{background:#f59e0b;color:#fff;}
+  .niveau-badge-4{background:#dc2626;color:#fff;}
   .demi-terrain-toggle{
     display:inline-flex;align-items:center;gap:8px;margin-bottom:10px;font-size:.82rem;font-weight:600;
     cursor:pointer;background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:8px 12px;
@@ -394,7 +406,7 @@ const ACTIVITIES = {
   },
   'Ultimate': {
     icon:'🥏', type:'equipe', terrainLabel:'Terrains', defisAllowed:false,
-    pouleMin:3, pouleMax:6, pouleTerrainMin:1, pouleTerrainMax:3, defaultTerrains:1,
+    pouleMin:2, pouleMax:6, pouleTerrainMin:1, pouleTerrainMax:3, defaultTerrains:1,
   },
   'Volley': {
     icon:'🏐', type:'equipe', terrainLabel:'Terrains', defisAllowed:false,
@@ -413,6 +425,7 @@ function defaultSeance(numero, activite){
   const defaultT = act.defaultTerrains || act.pouleTerrainMin;
   return {
     numero, tournamentType:'', config:{}, defisTerrains:defaultT, pouleTerrains:defaultT,
+    joueursParEquipe:4, taillePoule:act.pouleMin, // choix par cases à cocher (sports collectifs)
     demiTerrain:false, // Badminton uniquement : double la capacité de terrains simultanés
     absents:[], // ids d'élèves exclus des poules/défis pour cette séance (quelle qu'en soit la raison)
     absentReasons:{}, // studentId -> 'absent' | 'materiel' | 'dispense' (motif affiché sur la pastille)
@@ -440,8 +453,10 @@ function defaultActivityData(){
 let STATE = {
   allStudents: [],     // {id, nomPrenom, classe, sexe} — toute la liste chargée depuis le Sheet
   activityData: {},    // activité -> { classes: {classeName: classeData}, currentClasse }
+  listeElevesVisible: true, // onglet Général : afficher/masquer le tableau des élèves
 };
 function ensureActivityData(){
+  if(STATE.listeElevesVisible === undefined) STATE.listeElevesVisible = true;
   Object.keys(ACTIVITIES).forEach(a=>{
     if(!STATE.activityData[a]) STATE.activityData[a] = defaultActivityData();
     if(!STATE.activityData[a].classes) STATE.activityData[a].classes = {};
@@ -465,6 +480,8 @@ function ensureActivityData(){
         if(s.lastAction === undefined) s.lastAction = null;
         if(!s.niveaux) s.niveaux = {};
         if(!s.compositionEquipes) s.compositionEquipes = 'aleatoire';
+        if(!s.joueursParEquipe) s.joueursParEquipe = (s.config && s.config.joueursParEquipe) || 4;
+        if(!s.taillePoule) s.taillePoule = (s.config && s.config.taillePoule) || ACTIVITIES[a].pouleMin;
       });
       // Auto-réparation : recalcule systématiquement cd.wins/cd.poulePoints à
       // partir des séances (source de vérité), au cas où ils auraient été
@@ -1298,7 +1315,13 @@ function onGenererPoules(activite){
   // dans toute la page (celui d'une autre activité).
   const panel = document.getElementById('panel-'+slug(activite));
   const terrains = clamp(seance.pouleTerrains || act.pouleTerrainMin, act.pouleTerrainMin, act.pouleTerrainMax);
-  const taillePoule = clamp(parseInt(panel.querySelector('#cfgTaillePoule').value, 10) || act.pouleMin, act.pouleMin, act.pouleMax);
+  // "Équipes par poule" se choisit désormais par cases à cocher pour les
+  // sports collectifs (valeur retenue dans seance.taillePoule), et reste un
+  // champ numérique classique ("Joueurs par poule") pour les activités
+  // individuelles.
+  const taillePoule = act.type === 'equipe'
+    ? clamp(seance.taillePoule || act.pouleMin, act.pouleMin, act.pouleMax)
+    : clamp(parseInt(panel.querySelector('#cfgTaillePoule').value, 10) || act.pouleMin, act.pouleMin, act.pouleMax);
 
   if(seance.poules.length){
     if(!confirm('Cela régénère les poules et efface les placements/matchs actuels de cette séance. Continuer ?')) return;
@@ -1307,7 +1330,7 @@ function onGenererPoules(activite){
   const studentIds = STATE.allStudents.filter(s=>s.classe===cd.classe && !seance.absents.includes(s.id)).map(s=>s.id);
 
   if(act.type === 'equipe'){
-    const joueursParEquipe = clamp(parseInt(panel.querySelector('#cfgJoueursEquipe').value, 10) || 4, 2, 15);
+    const joueursParEquipe = clamp(seance.joueursParEquipe || 4, 2, 15);
     seance.config = { terrains, taillePoule, joueursParEquipe };
     const composition = activite === 'Ultimate' ? (seance.compositionEquipes || 'aleatoire') : 'aleatoire';
     if(composition === 'homogene') seance.teams = generateTeamsHomogenes(studentIds, joueursParEquipe, seance.niveaux || {});
@@ -2118,22 +2141,31 @@ function renderGeneral(){
     {key:'sexe', label:'Sexe', getValue:r=>r.sexe, render:r=>sexeBadge(r.sexe), filterType:'select', filterOptions:['F','G']},
   ];
 
-  const html = buildTable('general', columns, activeStudents);
+  const visible = STATE.listeElevesVisible !== false;
+  const html = visible ? buildTable('general', columns, activeStudents) : '';
   panel.innerHTML = `
     <div class="card">
       <div class="toolbar">
         <div class="muted">${STATE.allStudents.length} élève(s) chargé(s) au total</div>
-        <div>
-          <button class="btn secondary" id="btnExportGeneral">📊 Exporter Excel</button>
+        <div style="display:flex;gap:6px;">
+          ${visible ? '<button class="btn secondary" id="btnExportGeneral">📊 Exporter Excel</button>' : ''}
+          <button class="btn ghost" id="btnToggleListeEleves">${visible ? '🙈 Masquer la liste' : '👁️ Afficher la liste'}</button>
           ${loadBtn}
         </div>
       </div>
       ${html}
     </div>
     ${renderSauvegardeCard()}`;
-  wireTable(panel, 'general', columns, renderGeneral);
+  if(visible){
+    wireTable(panel, 'general', columns, renderGeneral);
+    document.getElementById('btnExportGeneral').addEventListener('click', exportGeneralExcel);
+  }
+  document.getElementById('btnToggleListeEleves').addEventListener('click', ()=>{
+    STATE.listeElevesVisible = !visible;
+    saveState();
+    renderGeneral();
+  });
   document.getElementById('btnChargerListe').addEventListener('click', onChargerListe);
-  document.getElementById('btnExportGeneral').addEventListener('click', exportGeneralExcel);
   wireSauvegardeCard();
 }
 
@@ -2370,6 +2402,14 @@ function renderActivityTab(activite){
     currentSeance(activite).pouleTerrains = v;
     saveState();
   });
+  wireCheckboxRange(panel, 'cfgJoueursEquipeCbGroup', (v)=>{
+    currentSeance(activite).joueursParEquipe = v;
+    saveState();
+  });
+  wireCheckboxRange(panel, 'cfgTailleEquipePouleCbGroup', (v)=>{
+    currentSeance(activite).taillePoule = v;
+    saveState();
+  });
   wireCheckboxRange(panel, 'defisTerrainCbGroup', (v)=>{
     const s = currentSeance(activite);
     s.defisTerrains = v;
@@ -2510,18 +2550,8 @@ function renderPouleConfigCard(activite){
   const cfg = seance.config || {};
   let fields = checkboxRangeHtml('pouleTerrainCbGroup', act.terrainLabel+' disponibles', act.pouleTerrainMin, act.pouleTerrainMax, seance.pouleTerrains || act.pouleTerrainMin);
   if(act.type === 'equipe'){
-    fields += `
-      <div class="config-grid">
-        <div class="field">
-          <label>Joueurs par équipe</label>
-          <input type="number" id="cfgJoueursEquipe" min="2" max="15" value="${cfg.joueursParEquipe || 4}">
-        </div>
-        <div class="field">
-          <label>Équipes par poule</label>
-          <input type="number" id="cfgTaillePoule" min="${act.pouleMin}" max="${act.pouleMax}" value="${cfg.taillePoule || act.pouleMin}">
-          <div class="hint">de ${act.pouleMin} à ${act.pouleMax}</div>
-        </div>
-      </div>`;
+    fields += checkboxRangeHtml('cfgJoueursEquipeCbGroup', 'Joueurs par équipe', 2, 15, seance.joueursParEquipe || 4);
+    fields += checkboxRangeHtml('cfgTailleEquipePouleCbGroup', 'Équipes par poule', act.pouleMin, act.pouleMax, seance.taillePoule || act.pouleMin);
     if(activite === 'Ultimate'){
       const comp = seance.compositionEquipes || 'aleatoire';
       fields += `
@@ -2566,7 +2596,8 @@ function renderTeamsSection(activite){
               ${t.memberIds.map(mid=>{
                 const student = STATE.allStudents.find(s=>s.id===mid);
                 if(!student) return '';
-                return `<li>${student.nomPrenom}
+                const niveau = seance.niveaux && seance.niveaux[mid];
+                return `<li>${student.nomPrenom}${niveau ? ` <span class="niveau-badge niveau-badge-${niveau}">N${niveau}</span>` : ''}
                   <select data-move-student="${mid}">
                     ${seance.teams.map(t2=>`<option value="${t2.id}" ${t2.id===t.id?'selected':''}>${t2.nom}</option>`).join('')}
                   </select>

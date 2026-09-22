@@ -2687,6 +2687,7 @@ function renderPoulesSection(activite){
   return `
     <div class="card">
       <h3>🏆 Poules</h3>
+      <p class="hint">Répartition automatique — utilisez le menu déroulant à côté d'un ${act.type==='equipe'?'nom d\'équipe':'nom'} pour la déplacer manuellement vers une autre poule si besoin.</p>
       ${seance.matches.some(m=>m.winner) ? `<p class="hint">Classement basé sur les matchs déjà enregistrés — servira à la montée-descente de la prochaine séance.</p>` : ''}
       <div class="poules-grid">
         ${seance.poules.map(p=>{

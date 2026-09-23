@@ -2499,7 +2499,8 @@ function renderActivityTab(activite){
       html += `
         <div class="card">
           <h3>🏅 Classement de cette séance (points de cette séance uniquement)</h3>
-          ${renderClassementTable(students, seanceTotals, 'Points')}
+          <p class="hint">Trié par poule actuelle (poule 1 = niveau le plus fort), puis par points à l'intérieur de chaque poule — un point marqué en poule 7 ne valant pas un point marqué en poule 1.</p>
+          ${renderClassementTotalPoule(students, seanceTotals, seancePourClassement)}
         </div>`;
     }
 

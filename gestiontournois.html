@@ -221,6 +221,11 @@
   /* Toutes les colonnes de chiffres (Séance 1, Séance 2..., Total) gardent la
      même largeur resserrée, quel que soit le nombre de séances affichées. */
   .classement-table th:nth-child(n+3), .classement-table td:nth-child(n+3){width:90px;}
+  .win-edit-input{
+    width:100%;box-sizing:border-box;text-align:center;padding:3px 2px;
+    border:1px solid var(--line);border-radius:6px;font-size:.8rem;font-family:inherit;
+  }
+  .win-edit-input:focus{border-color:var(--c1);outline:none;}
 
   /* Présence */
   .presence-list{display:flex;flex-wrap:wrap;gap:6px;}
@@ -463,6 +468,7 @@ function defaultSeance(numero, activite){
     absentReasons:{}, // studentId -> 'absent' | 'materiel' | 'dispense' (motif affiché sur la pastille)
     teams:[], poules:[], matches:[],
     hasardWins:{}, // défis hasard : victoires de cette séance uniquement
+    winsOverride:{}, // studentId -> correction manuelle du nb de victoires de cette séance (erreur de saisie)
     defisMatches:[], defisBye:[], lastAction:null, // défis classement progressif uniquement (flux continu)
     niveaux:{}, // studentId -> 1 (meilleur) à 4 (moins bon) — Ultimate : composition d'équipes
     compositionEquipes:'aleatoire', // 'aleatoire' | 'homogene' | 'heterogene' (Ultimate)
@@ -508,6 +514,7 @@ function ensureActivityData(){
       if(!cd.poulePoints) cd.poulePoints = {};
       cd.seances.forEach(s=>{
         if(!s.hasardWins) s.hasardWins = {};
+        if(!s.winsOverride) s.winsOverride = {};
         if(!s.absentReasons) s.absentReasons = {};
         if(s.lastAction === undefined) s.lastAction = null;
         if(!s.niveaux) s.niveaux = {};
@@ -2454,15 +2461,17 @@ function renderActivityTab(activite){
           </div>
           ${showTotal ? `
           <p class="hint">Ce total additionne les ${totalLabel} de toutes les séances de cette classe depuis le début du cycle (remis à zéro seulement si toutes les séances sont supprimées, ou via "Effacer les résultats").</p>
-          ${renderClassementTable(students, totalMap)}` : ''}
+          ${renderClassementTable(students, totalMap, 'Points')}` : ''}
         </div>`;
     }
 
-    // Classement détaillé des défis (hasard/classement progressif) : une
-    // colonne par séance + le total, affiché tout en haut (au-dessus des
-    // onglets de séance) pour qu'il soit visible quelle que soit la séance
-    // consultée, avec la même possibilité de masquer que le classement total.
-    if(typeCourant === 'defisHasard' || typeCourant === 'defisClassement'){
+    // Classement détaillé des défis : une colonne par séance + le total,
+    // affiché tout en haut (au-dessus des onglets de séance) pour qu'il soit
+    // visible quelle que soit la séance consultée. Uniquement pour les défis
+    // hasard : en défis classement progressif, ce même détail est déjà
+    // affiché à côté des tables en cours (voir renderDefisClassementSection),
+    // pas besoin de le répéter ici.
+    if(typeCourant === 'defisHasard'){
       const showTotal = !!cd.showClassementTotal;
       html += `
         <div class="card classement-total-card">
@@ -2475,7 +2484,7 @@ function renderActivityTab(activite){
           </div>
           ${showTotal ? `
           <p class="hint">Une colonne par séance de défis (hasard ou classement progressif), et le total cumulé à droite. C'est ce total qui détermine qui affronte qui (seuls les élèves à égalité de victoires se rencontrent).</p>
-          ${renderClassementParSeance(cd, students)}` : ''}
+          ${renderClassementParSeance(cd, students, false, activite)}` : ''}
         </div>`;
     }
 
@@ -2490,7 +2499,7 @@ function renderActivityTab(activite){
       html += `
         <div class="card">
           <h3>🏅 Classement de cette séance (points de cette séance uniquement)</h3>
-          ${renderClassementTable(students, seanceTotals)}
+          ${renderClassementTable(students, seanceTotals, 'Points')}
         </div>`;
     }
 
@@ -2687,6 +2696,12 @@ function renderActivityTab(activite){
     btn.addEventListener('click', (e)=>{
       e.stopPropagation();
       undoWin(activite, btn.dataset.defisUndo);
+    });
+  });
+  panel.querySelectorAll('[data-edit-seance-win]').forEach(inp=>{
+    inp.addEventListener('change', ()=>{
+      const [seanceNumero, studentId] = inp.dataset.editSeanceWin.split('::');
+      setWinsOverride(activite, parseInt(seanceNumero, 10), studentId, parseInt(inp.value, 10) || 0);
     });
   });
 
@@ -2903,9 +2918,15 @@ function renderMatchesSection(activite){
         ${joue ? `<span class="hint">(${m.pointsA}/${m.pointsB} pts)</span>` : ''}
       </div>`;
     }).join('');
+    // Une poule avec plus de membres génère plus de matchs simultanés par
+    // tour qu'une petite poule : elle peut donc occuper plusieurs tables à la
+    // fois (ex. une poule de 4 sur les tables 7 et 8) pour ne pas prendre
+    // deux fois plus de temps que les autres. Le nom de la poule est affiché
+    // sur chaque table concernée pour que ce soit clair : ce sont bien 7
+    // poules au total, pas 8 tables = 8 poules.
     return `
       <div class="poule-card">
-        <h4>${act.terrainLabel.replace(/s$/,'')} ${t}</h4>
+        <h4>${act.terrainLabel.replace(/s$/,'')} ${t}${pouleName ? ` — ${pouleName}` : ''}</h4>
         ${playersSummary ? `<div class="table-players-summary">${playersSummary}</div>` : ''}
         ${rows}
       </div>`;
@@ -2929,7 +2950,7 @@ function renderMatchesSection(activite){
     </div>`;
 }
 
-function renderClassementTable(students, wins){
+function renderClassementTable(students, wins, label){
   const sorted = students.slice().sort((a,b)=> (wins[b.id]||0) - (wins[a.id]||0));
   const rows = sorted.map((s,i)=>`
     <tr>
@@ -2943,7 +2964,7 @@ function renderClassementTable(students, wins){
         <thead><tr>
           <th style="background:${PALETTE[0]}">Rang</th>
           <th style="background:${PALETTE[1]}">Nom Prénom</th>
-          <th style="background:${PALETTE[2]}">Victoires</th>
+          <th style="background:${PALETTE[2]}">${label || 'Victoires'}</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
@@ -2953,22 +2974,42 @@ function renderClassementTable(students, wins){
 // Victoires marquées lors d'une séance donnée (défis hasard ou défis
 // classement progressif) — utilisé pour reconstituer le détail séance par
 // séance du classement total, qui cumule les victoires d'une séance à
-// l'autre (voir cd.wins).
+// l'autre (voir cd.wins). seance.winsOverride permet de corriger
+// manuellement le nombre de victoires d'un élève pour cette séance (en cas
+// d'erreur de saisie) sans toucher à l'historique des matchs eux-mêmes : la
+// valeur corrigée remplace simplement le décompte automatique.
 function computeSeanceDefisWins(seance){
-  if(seance.tournamentType === 'defisHasard') return seance.hasardWins || {};
-  if(seance.tournamentType === 'defisClassement'){
-    const tally = {};
+  let tally;
+  if(seance.tournamentType === 'defisHasard') tally = Object.assign({}, seance.hasardWins || {});
+  else if(seance.tournamentType === 'defisClassement'){
+    tally = {};
     (seance.defisMatches||[]).forEach(m=>{ if(m.winner) tally[m.winner] = (tally[m.winner]||0) + 1; });
-    return tally;
+  } else return {};
+  if(seance.winsOverride){
+    Object.keys(seance.winsOverride).forEach(id=>{ tally[id] = seance.winsOverride[id]; });
   }
-  return {};
+  return tally;
+}
+// Corrige manuellement le nombre de victoires d'un élève pour une séance
+// donnée (case éditée dans le tableau de classement détaillé), en cas
+// d'erreur de saisie. Recalcule aussitôt le total cumulé de la classe (utilisé
+// pour l'appariement en défis classement progressif).
+function setWinsOverride(activite, seanceNumero, studentId, value){
+  const cd = currentClasseData(activite);
+  const seance = cd.seances.find(s=>s.numero===seanceNumero);
+  if(!seance) return;
+  if(!seance.winsOverride) seance.winsOverride = {};
+  seance.winsOverride[studentId] = Math.max(0, value);
+  recomputeCumulativeTotals(cd);
+  saveState();
+  renderActivityTab(activite);
 }
 // Classement détaillé : une colonne par séance de défis (hasard ou
 // classement progressif) jouée par cette classe, plus une colonne Total —
 // pour comprendre pourquoi deux élèves n'ont pas le même nombre de
 // victoires total (et donc pourquoi ils ne s'affrontent pas forcément) en
 // voyant d'où viennent leurs victoires séance par séance.
-function renderClassementParSeance(cd, students, recentFirst){
+function renderClassementParSeance(cd, students, recentFirst, activite){
   let seancesDefis = cd.seances.filter(s=> s.tournamentType==='defisHasard' || s.tournamentType==='defisClassement');
   if(!seancesDefis.length) return '';
   // recentFirst : la séance la plus récente juste après le nom (au lieu de
@@ -2978,14 +3019,21 @@ function renderClassementParSeance(cd, students, recentFirst){
   const perSeance = seancesDefis.map(s=>computeSeanceDefisWins(s));
   const headerCols = seancesDefis.map(s=>`<th style="background:${PALETTE[3 + (s.numero % (PALETTE.length-3))]}">Séance ${s.numero}</th>`).join('');
   const sorted = students.slice().sort((a,b)=> (cd.wins[b.id]||0) - (cd.wins[a.id]||0));
-  const rows = sorted.map((s,i)=>{
-    const cells = perSeance.map(map=>`<td>${map[s.id]||0}</td>`).join('');
+  // Cases éditables (si activite fourni) pour corriger une victoire mal
+  // saisie sans avoir à rejouer/ré-arbitrer le match concerné.
+  const rows = sorted.map((stu,i)=>{
+    const cells = seancesDefis.map((se,si)=>{
+      const val = perSeance[si][stu.id]||0;
+      return activite
+        ? `<td><input type="number" min="0" class="win-edit-input" value="${val}" data-edit-seance-win="${se.numero}::${stu.id}"></td>`
+        : `<td>${val}</td>`;
+    }).join('');
     return `
       <tr>
         <td><b>${i+1}</b></td>
-        <td>${s.nomPrenom}</td>
+        <td>${stu.nomPrenom}</td>
         ${cells}
-        <td><b>${cd.wins[s.id]||0}</b></td>
+        <td><b>${cd.wins[stu.id]||0}</b></td>
       </tr>`;
   }).join('');
   return `
@@ -3119,7 +3167,7 @@ function renderDefisClassementSection(activite){
         <div class="defis-classement-live">
           <h4>🏅 Classement — victoires séance par séance</h4>
           <p class="hint">Se met à jour à chaque résultat enregistré. La séance la plus récente est la colonne juste après le nom.</p>
-          ${renderClassementParSeance(cd, students, true)}
+          ${renderClassementParSeance(cd, students, true, activite)}
         </div>
       </div>` : `<div class="empty-state">Choisissez le nombre de ${act.terrainLabel.toLowerCase()} puis cliquez sur « Démarrer les matchs ».</div>`}
     </div>`;

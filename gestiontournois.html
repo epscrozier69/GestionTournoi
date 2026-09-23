@@ -505,6 +505,7 @@ function ensureActivityData(){
         if(!s.joueursParEquipe) s.joueursParEquipe = (s.config && s.config.joueursParEquipe) || 4;
         if(!s.taillePoule) s.taillePoule = (s.config && s.config.taillePoule) || ACTIVITIES[a].pouleMin;
         if(!s.nombrePoules) s.nombrePoules = 2;
+        if(s.tournamentType === 'defisClassement') reparerDefisMatches(s);
       });
       // Auto-réparation : recalcule systématiquement cd.wins/cd.poulePoints à
       // partir des séances (source de vérité), au cas où ils auraient été
@@ -944,6 +945,13 @@ async function fetchCollegeList(){
     throw new Error('Colonnes Nom / Prénom / Classe introuvables dans le fichier.');
   }
   const list = [];
+  // Deux élèves homonymes dans la même classe (même nom+prénom) généreraient
+  // sinon le même id : ils seraient alors confondus partout dans l'appli (un
+  // seul total de victoires pour les deux, et surtout risque qu'un même id
+  // se retrouve tiré deux fois lors de la génération des tables — l'élève
+  // "apparaît" alors sur deux tables différentes). On rend chaque id unique
+  // en ajoutant un suffixe aux homonymes suivants.
+  const idsVus = {};
   for(let i=1; i<rows.length; i++){
     const row = rows[i];
     const nom = String(row[idxNom] || '').trim();
@@ -952,7 +960,13 @@ async function fetchCollegeList(){
     const sexe = idxSexe >= 0 ? normalizeSexe(row[idxSexe]) : '';
     if(!nom || !prenom || !classe) continue;
     const nomPrenom = nom.toUpperCase() + ' ' + prenom;
-    const id = slug(nomPrenom) + '_' + slug(classe);
+    let id = slug(nomPrenom) + '_' + slug(classe);
+    if(idsVus[id] !== undefined){
+      idsVus[id]++;
+      id = id + '_' + idsVus[id];
+    } else {
+      idsVus[id] = 1;
+    }
     list.push({ id, nomPrenom, classe, sexe });
   }
   return list;
@@ -1813,13 +1827,47 @@ function defisMatchCount(seance, studentId){
 function rotationClassementTerminee(seance){
   return seance.defisMatches.every(m=>m.winner !== null);
 }
+// Auto-réparation : garantit qu'un même élève ne se retrouve jamais joueur
+// dans deux matchs en cours à la fois, ni arbitre d'un match alors qu'il
+// joue déjà ailleurs. Ça ne devrait normalement jamais arriver, mais une
+// synchronisation malvenue en plein milieu d'une rotation (ancien état
+// rechargé par-dessus un état plus récent) peut mélanger un ancien match pas
+// encore soldé avec les nouveaux — d'où un élève "sur deux tables" ou
+// désigné arbitre plusieurs fois de suite. On garde toujours l'occurrence la
+// plus récente (celle en fin de tableau) et on annule les plus anciennes.
+function reparerDefisMatches(seance){
+  if(!seance.defisMatches || seance.defisMatches.length < 2) return;
+  const vuJoueur = new Set();
+  const aSupprimer = new Set();
+  for(let i = seance.defisMatches.length - 1; i >= 0; i--){
+    const m = seance.defisMatches[i];
+    if(m.winner !== null) continue; // un match déjà soldé ne bloque plus personne
+    if(vuJoueur.has(m.a) || vuJoueur.has(m.b)){
+      aSupprimer.add(i);
+      continue;
+    }
+    vuJoueur.add(m.a); vuJoueur.add(m.b);
+  }
+  if(aSupprimer.size){
+    seance.defisMatches = seance.defisMatches.filter((m,i)=>!aSupprimer.has(i));
+  }
+  const joueursActuels = new Set();
+  seance.defisMatches.forEach(m=>{ if(m.winner===null){ joueursActuels.add(m.a); joueursActuels.add(m.b); } });
+  seance.defisMatches.forEach(m=>{
+    if(m.winner===null && m.referee && joueursActuels.has(m.referee)) m.referee = null;
+  });
+}
 function remplirTablesClassement(activite){
   const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
+  reparerDefisMatches(seance);
   if(!seance.defisTerrains){ alert('Choisissez le nombre de tables/terrains disponibles.'); return; }
   if(!seance.defisMatches) seance.defisMatches = [];
   const capacite = defisCapacite(seance);
-  const students = STATE.allStudents.filter(s=>s.classe===cd.classe && !seance.absents.includes(s.id)).map(s=>s.id);
+  // dédoublonnage défensif : si un même id apparaît deux fois (ne devrait
+  // plus arriver, voir fetchCollegeList, mais évite qu'un élève ne se
+  // retrouve tiré sur deux tables à la fois si jamais un doublon subsiste).
+  const students = [...new Set(STATE.allStudents.filter(s=>s.classe===cd.classe && !seance.absents.includes(s.id)).map(s=>s.id))];
 
   const unresolved = seance.defisMatches.filter(m=>m.winner===null);
   const occupiedTables = new Set(unresolved.map(m=>m.table));
@@ -1954,19 +2002,22 @@ function remplirTablesClassement(activite){
   // dernière fois ; puis les élèves exemptés (bye) — eux n'ont de toute façon
   // pas d'autre rôle possible ce tour-ci, donc la règle "pas 2 fois d'affilée"
   // ne doit pas les empêcher d'arbitrer et forcer de l'auto-arbitrage à leur
-  // place ; enfin, en tout dernier recours, n'importe quel non-joueur restant.
+  // place. Règle STRICTE, jamais de 3e niveau de repli : un élève qui a
+  // arbitré au tour précédent ne peut jamais être redésigné arbitre tant
+  // qu'il n'a pas rejoué au moins un match. S'il ne reste vraiment personne
+  // d'éligible, le match se joue en auto-arbitrage plutôt que d'imposer un
+  // 2e (ou 3e) tour d'arbitrage d'affilée à la même personne.
   const nonJoueurs = available.filter(id=>!usedInPairs.has(id));
   const byeSet = new Set(stillByes);
   const refPool = [
     ...shuffleArray(nonJoueurs.filter(id=>!byeSet.has(id) && dernierRole[id] !== 'arbitre')),
     ...shuffleArray(nonJoueurs.filter(id=>byeSet.has(id))),
-    ...shuffleArray(nonJoueurs.filter(id=>!byeSet.has(id) && dernierRole[id] === 'arbitre')),
   ];
   chosenPairs.forEach(([a,b], i)=>{
     const table = freeTables[i];
     const numA = defisMatchCount(seance,a) + 1;
     const numB = defisMatchCount(seance,b) + 1;
-    const referee = refPool[i] || null; // undefined (vivier épuisé ou tous arbitres la dernière fois) -> auto-arbitrage
+    const referee = refPool[i] || null; // undefined (vivier épuisé) -> auto-arbitrage
     seance.defisMatches.push({ table, a, b, winner:null, referee, numA, numB });
   });
   saveState();

@@ -279,14 +279,26 @@
     background:var(--panel);border-radius:14px;padding:20px;max-width:420px;width:100%;
     box-shadow:0 10px 40px rgba(0,0,0,.25);
   }
+  .modal-box.modal-box-wide{max-width:560px;}
   .modal-box h3{margin:0 0 14px;}
-  .modal-score-row{display:flex;align-items:center;gap:10px;margin-bottom:10px;}
+  .modal-score-row{display:flex;align-items:flex-start;gap:10px;margin-bottom:10px;}
   .modal-player{flex:1;display:flex;flex-direction:column;gap:6px;text-align:center;}
   .modal-player label{font-weight:700;font-size:.85rem;}
   .modal-player input{
     width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;font-size:1.1rem;text-align:center;
   }
-  .modal-vs{font-weight:700;color:var(--muted);}
+  .modal-vs{font-weight:700;color:var(--muted);padding-top:34px;}
+  .score-picker{
+    display:flex;flex-wrap:wrap;gap:5px;justify-content:center;
+    max-height:180px;overflow-y:auto;padding:4px;border:1px solid var(--line);border-radius:8px;
+  }
+  .score-opt{
+    display:flex;align-items:center;justify-content:center;
+    width:34px;height:34px;border:2px solid var(--line);border-radius:8px;cursor:pointer;
+    font-weight:700;font-size:.85rem;background:#f8fafc;transition:.15s;flex-shrink:0;
+  }
+  .score-opt:hover{border-color:var(--c1);}
+  .score-opt.checked{background:#dbeafe;border-color:var(--c1);color:var(--c1);}
   .modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px;}
   .backup-row{
     display:flex;align-items:center;justify-content:space-between;gap:10px;
@@ -343,18 +355,18 @@
 </main>
 
 <div class="modal-overlay" id="scoreModal" hidden>
-  <div class="modal-box">
+  <div class="modal-box modal-box-wide">
     <h3>📝 Résultat du match</h3>
     <div class="modal-score-row">
       <div class="modal-player">
         <label id="scoreModalNomA">Joueur A</label>
-        <input type="number" id="scoreModalScoreA" min="0" placeholder="Score">
+        <div class="score-picker" id="scoreModalPickerA"></div>
         <button class="btn ghost small" id="btnAbandonA">Abandon</button>
       </div>
       <div class="modal-vs">vs</div>
       <div class="modal-player">
         <label id="scoreModalNomB">Joueur B</label>
-        <input type="number" id="scoreModalScoreB" min="0" placeholder="Score">
+        <div class="score-picker" id="scoreModalPickerB"></div>
         <button class="btn ghost small" id="btnAbandonB">Abandon</button>
       </div>
     </div>
@@ -1654,6 +1666,33 @@ function computePouleStanding(seance, poule){
 
 /* --------------------------------------------- SAISIE DU SCORE (MODALE) - */
 let scoreModalContext = null;
+// Score maximum proposé dans les cases à cocher (large pour couvrir tous les
+// sports gérés : tennis de table/badminton se jouent rarement au-delà, mais
+// une poule de volley/handball peut aller plus haut).
+const SCORE_PICKER_MAX = 30;
+// Construit la grille de cases à cocher 0..SCORE_PICKER_MAX pour un des deux
+// joueurs, et retourne la valeur actuellement sélectionnée (ou null) via une
+// fermeture : cliquer sur une case la sélectionne (et désélectionne les
+// autres), recliquer dessus la désélectionne.
+function renderScorePicker(containerId, valeurActuelle){
+  const container = document.getElementById(containerId);
+  const opts = [];
+  for(let v=0; v<=SCORE_PICKER_MAX; v++){
+    opts.push(`<div class="score-opt ${v===valeurActuelle?'checked':''}" data-score-value="${v}">${v}</div>`);
+  }
+  container.innerHTML = opts.join('');
+  container.querySelectorAll('.score-opt').forEach(opt=>{
+    opt.addEventListener('click', ()=>{
+      const dejaCoche = opt.classList.contains('checked');
+      container.querySelectorAll('.score-opt').forEach(o=>o.classList.remove('checked'));
+      if(!dejaCoche) opt.classList.add('checked');
+    });
+  });
+}
+function getScorePickerValue(containerId){
+  const checked = document.querySelector('#'+containerId+' .score-opt.checked');
+  return checked ? parseInt(checked.dataset.scoreValue, 10) : null;
+}
 function openScoreModal(activite, matchIndex){
   const seance = currentSeance(activite);
   const match = seance.matches[matchIndex];
@@ -1661,10 +1700,11 @@ function openScoreModal(activite, matchIndex){
   scoreModalContext = { activite, matchIndex };
   document.getElementById('scoreModalNomA').textContent = participantLabel(activite, match.a);
   document.getElementById('scoreModalNomB').textContent = participantLabel(activite, match.b);
-  document.getElementById('scoreModalScoreA').value = (match.scoreA !== undefined && match.scoreA !== null) ? match.scoreA : '';
-  document.getElementById('scoreModalScoreB').value = (match.scoreB !== undefined && match.scoreB !== null) ? match.scoreB : '';
+  const scoreA = (match.scoreA !== undefined && match.scoreA !== null) ? match.scoreA : null;
+  const scoreB = (match.scoreB !== undefined && match.scoreB !== null) ? match.scoreB : null;
+  renderScorePicker('scoreModalPickerA', scoreA);
+  renderScorePicker('scoreModalPickerB', scoreB);
   document.getElementById('scoreModal').hidden = false;
-  document.getElementById('scoreModalScoreA').focus();
 }
 function closeScoreModal(){
   document.getElementById('scoreModal').hidden = true;
@@ -1708,9 +1748,9 @@ function validerScoreModal(){
   const seance = currentSeance(activite);
   const match = seance.matches[matchIndex];
   if(!match) return;
-  const scoreA = parseInt(document.getElementById('scoreModalScoreA').value, 10);
-  const scoreB = parseInt(document.getElementById('scoreModalScoreB').value, 10);
-  if(isNaN(scoreA) || isNaN(scoreB) || scoreA < 0 || scoreB < 0){ alert('Entrez les deux scores.'); return; }
+  const scoreA = getScorePickerValue('scoreModalPickerA');
+  const scoreB = getScorePickerValue('scoreModalPickerB');
+  if(scoreA === null || scoreB === null){ alert('Cochez les deux scores.'); return; }
   const result = computeMatchPoints(scoreA, scoreB);
   if(!result){ alert('Les deux scores ne peuvent pas être égaux : il doit y avoir un vainqueur.'); return; }
   appliquerDeltaPoulePoints(activite, match, result.pointsA, result.pointsB);

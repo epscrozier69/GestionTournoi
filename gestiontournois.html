@@ -838,6 +838,13 @@ async function loadCloudStateIfAvailable(){
           STATE = distant;
           ensureActivityData();
           localStorage.setItem('gt_state', JSON.stringify(STATE));
+        } else {
+          // "Garder cet appareil" : la version en ligne reste plus ancienne
+          // tant qu'on ne l'écrase pas avec la version locale — sans ça, le
+          // même conflit réapparaîtrait à chaque rechargement de la page,
+          // indéfiniment. On envoie donc tout de suite la version locale en
+          // ligne pour que le cloud se mette à jour avec le bon choix.
+          pushCloudState();
         }
       }
     }

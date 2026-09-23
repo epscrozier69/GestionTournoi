@@ -2968,9 +2968,13 @@ function computeSeanceDefisWins(seance){
 // pour comprendre pourquoi deux élèves n'ont pas le même nombre de
 // victoires total (et donc pourquoi ils ne s'affrontent pas forcément) en
 // voyant d'où viennent leurs victoires séance par séance.
-function renderClassementParSeance(cd, students){
-  const seancesDefis = cd.seances.filter(s=> s.tournamentType==='defisHasard' || s.tournamentType==='defisClassement');
+function renderClassementParSeance(cd, students, recentFirst){
+  let seancesDefis = cd.seances.filter(s=> s.tournamentType==='defisHasard' || s.tournamentType==='defisClassement');
   if(!seancesDefis.length) return '';
+  // recentFirst : la séance la plus récente juste après le nom (au lieu de
+  // l'ordre chronologique habituel) — utilisé dans le tableau affiché à côté
+  // des tables en cours, pour voir en priorité la séance en cours.
+  if(recentFirst) seancesDefis = seancesDefis.slice().reverse();
   const perSeance = seancesDefis.map(s=>computeSeanceDefisWins(s));
   const headerCols = seancesDefis.map(s=>`<th style="background:${PALETTE[3 + (s.numero % (PALETTE.length-3))]}">Séance ${s.numero}</th>`).join('');
   const sorted = students.slice().sort((a,b)=> (cd.wins[b.id]||0) - (cd.wins[a.id]||0));
@@ -3085,8 +3089,6 @@ function renderDefisClassementSection(activite){
     </label>` : '';
 
   const students = STATE.allStudents.filter(s=>s.classe===cd.classe);
-  const seanceWins = {};
-  seance.defisMatches.forEach(m=>{ if(m.winner) seanceWins[m.winner] = (seanceWins[m.winner]||0) + 1; });
 
   // Progression de la rotation en cours (le dernier match connu de chaque
   // table) : la rotation suivante n'est générée que lorsque tout est à 100%.
@@ -3115,9 +3117,9 @@ function renderDefisClassementSection(activite){
       <div class="defis-layout">
         <div class="defis-tables-grid">${tableCards.join('')}</div>
         <div class="defis-classement-live">
-          <h4>🏅 Classement de cette séance</h4>
-          <p class="hint">Se met à jour à chaque résultat enregistré.</p>
-          ${renderClassementTable(students, seanceWins)}
+          <h4>🏅 Classement — victoires séance par séance</h4>
+          <p class="hint">Se met à jour à chaque résultat enregistré. La séance la plus récente est la colonne juste après le nom.</p>
+          ${renderClassementParSeance(cd, students, true)}
         </div>
       </div>` : `<div class="empty-state">Choisissez le nombre de ${act.terrainLabel.toLowerCase()} puis cliquez sur « Démarrer les matchs ».</div>`}
     </div>`;

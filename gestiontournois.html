@@ -28,6 +28,13 @@
   }
   .sync-status.error{background:#fee2e2;color:#7f1d1d;}
   .sync-status.ok{background:rgba(255,255,255,.25);}
+  .sync-zone{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  .btn-force-sync{
+    font-size:.75rem;font-weight:700;padding:6px 12px;border-radius:999px;
+    background:#fff;color:var(--c1);border:none;cursor:pointer;white-space:nowrap;
+  }
+  .btn-force-sync:hover{opacity:.9;}
+  .btn-force-sync:disabled{opacity:.6;cursor:default;}
 
   nav.tabs{
     display:flex;gap:6px;padding:10px 16px;background:#e9edf5;flex-wrap:wrap;position:sticky;top:62px;z-index:40;
@@ -313,7 +320,10 @@
     <h1>EPS Gestion des tournois</h1>
     <div class="sub">Poules, défis et calendriers de matchs par activité</div>
   </div>
-  <div class="sync-status" id="syncStatus" title="Statut de la synchronisation en ligne"></div>
+  <div class="sync-zone">
+    <button class="btn-force-sync" id="btnForcerSync" title="Enregistrer immédiatement en ligne, sans attendre">💾 Enregistrer maintenant</button>
+    <div class="sync-status" id="syncStatus" title="Statut de la synchronisation en ligne"></div>
+  </div>
 </header>
 
 <nav class="tabs" id="tabsNav"></nav>
@@ -697,6 +707,15 @@ async function loadState(){
 // continue avec la dernière version connue localement.
 let cloudSyncTimer = null;
 let syncStatusActuel = null;
+// Horodatage du dernier enregistrement en ligne réussi (pas juste tenté) —
+// conservé aussi en localStorage pour rester affiché après un rechargement
+// de la page, tant qu'aucun nouvel enregistrement n'a encore eu lieu.
+let derniereSyncReussie = localStorage.getItem('gt_last_sync') || null;
+function formatHeureSync(iso){
+  if(!iso) return '';
+  const d = new Date(iso);
+  return d.toLocaleDateString('fr-FR') + ' à ' + d.toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+}
 function setSyncStatus(state){
   syncStatusActuel = state;
   const el = document.getElementById('syncStatus');
@@ -706,7 +725,11 @@ function setSyncStatus(state){
     loading: '🔄 Chargement…', ok: '☁️ Synchronisé', saving: '🔄 Enregistrement…',
     error: '⚠️ Hors ligne (nouvel essai automatique...)',
   };
-  el.textContent = labels[state] || '';
+  let texte = labels[state] || '';
+  if(state === 'ok' && derniereSyncReussie){
+    texte += ' — dernier envoi : ' + formatHeureSync(derniereSyncReussie);
+  }
+  el.textContent = texte;
   el.className = 'sync-status' + (state === 'error' ? ' error' : (state === 'ok' ? ' ok' : ''));
 }
 // Si une sauvegarde a échoué (réseau capricieux, script Google lent...), on
@@ -836,9 +859,26 @@ async function pushCloudState(){
       body: JSON.stringify({ action:'save', data: STATE }),
     }, 15000, 2);
     syncEnAttente = false;
+    derniereSyncReussie = new Date().toISOString();
+    localStorage.setItem('gt_last_sync', derniereSyncReussie);
     setSyncStatus('ok');
   }catch(e){
     setSyncStatus('error'); // syncEnAttente reste true : rien n'est confirmé envoyé
+  }
+}
+// Bouton "Enregistrer maintenant" : envoie tout de suite au lieu d'attendre
+// les 2,5s de délai habituel (utile pour être sûr, sans attendre, que ce qui
+// vient d'être saisi est bien parti en ligne).
+async function forcerSyncMaintenant(){
+  const btn = document.getElementById('btnForcerSync');
+  clearTimeout(cloudSyncTimer);
+  if(btn){ btn.disabled = true; btn.textContent = '🔄 Enregistrement…'; }
+  syncEnAttente = true;
+  setSyncStatus('saving');
+  await pushCloudState();
+  if(btn){ btn.disabled = false; btn.textContent = '💾 Enregistrer maintenant'; }
+  if(syncStatusActuel === 'error'){
+    alert("L'enregistrement en ligne a échoué (réseau indisponible ?). Vos données restent sauvegardées sur cet appareil et un nouvel essai automatique aura lieu sous peu.");
   }
 }
 // Quand on revient sur cet appareil (onglet ré-affiché, appli remise au
@@ -3112,6 +3152,7 @@ document.addEventListener('DOMContentLoaded', async ()=>{
     // ligne par erreur).
     if(e.target.id === 'conflictModal') document.getElementById('btnGarderLocal').click();
   });
+  document.getElementById('btnForcerSync').addEventListener('click', forcerSyncMaintenant);
 });
 </script>
 </body>

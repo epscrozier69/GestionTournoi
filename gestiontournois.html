@@ -2460,8 +2460,8 @@ function renderActivityTab(activite){
             </div>
           </div>
           ${showTotal ? `
-          <p class="hint">Ce total additionne les ${totalLabel} de toutes les séances de cette classe depuis le début du cycle (remis à zéro seulement si toutes les séances sont supprimées, ou via "Effacer les résultats").</p>
-          ${renderClassementTable(students, totalMap, 'Points')}` : ''}
+          <p class="hint">Ce total additionne les points de toutes les séances de cette classe depuis le début du cycle. Un point marqué en poule 7 ne valant pas un point marqué en poule 1, le classement est d'abord trié par poule actuelle (poule 1 = niveau le plus fort), puis par points à l'intérieur de chaque poule.</p>
+          ${renderClassementTotalPoule(students, totalMap, seancePourClassement)}` : ''}
         </div>`;
     }
 
@@ -2947,6 +2947,50 @@ function renderMatchesSection(activite){
       </div>
       <p class="hint">Cliquez sur un match pour saisir le score — les points marqués (selon l'écart) et le classement des poules (ci-dessus) se mettent à jour automatiquement.</p>
       <div class="poules-grid">${tableCards}</div>
+    </div>`;
+}
+
+// Classement total du tournoi par poule : un point marqué en poule 7 (face à
+// des adversaires plus faibles) ne vaut pas un point marqué en poule 1, donc
+// un simple tri par points bruts toutes poules confondues mélangerait des
+// niveaux différents. On trie donc d'abord par poule actuelle (poule 1 =
+// niveau le plus fort, cohérent avec la logique de montée/descente), puis
+// par points à l'intérieur de chaque poule. La poule de référence est celle
+// de la séance en cours (seanceRef) ; les élèves qui n'y figurent pas encore
+// (nouveaux, jamais placés en poule) sont listés en dernier.
+function renderClassementTotalPoule(students, totalMap, seanceRef){
+  const poules = (seanceRef && seanceRef.poules) || [];
+  const pouleIndex = {};
+  poules.forEach((p, idx)=>{ p.members.forEach(id=>{ pouleIndex[id] = idx; }); });
+  const sorted = students.slice().sort((a,b)=>{
+    const pa = pouleIndex[a.id], pb = pouleIndex[b.id];
+    const hasA = pa !== undefined, hasB = pb !== undefined;
+    if(hasA && hasB && pa !== pb) return pa - pb;
+    if(hasA !== hasB) return hasA ? -1 : 1;
+    return (totalMap[b.id]||0) - (totalMap[a.id]||0);
+  });
+  const rows = sorted.map((s,i)=>{
+    const pIdx = pouleIndex[s.id];
+    const pouleLabel = pIdx !== undefined ? (poules[pIdx].nom || `Poule ${pIdx+1}`) : '—';
+    return `
+      <tr>
+        <td><b>${i+1}</b></td>
+        <td>${s.nomPrenom}</td>
+        <td>${pouleLabel}</td>
+        <td>${totalMap[s.id]||0}</td>
+      </tr>`;
+  }).join('');
+  return `
+    <div class="table-wrap">
+      <table class="classement-table">
+        <thead><tr>
+          <th style="background:${PALETTE[0]}">Rang</th>
+          <th style="background:${PALETTE[1]}">Nom Prénom</th>
+          <th style="background:${PALETTE[3]}">Poule</th>
+          <th style="background:${PALETTE[2]}">Points</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
     </div>`;
 }
 

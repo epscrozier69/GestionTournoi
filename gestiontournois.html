@@ -1963,37 +1963,32 @@ function roundRobinRounds(participants){
 function onGenererMatchs(activite){
   const seance = currentSeance(activite);
   if(!seance || !seance.poules.length){ alert("Générez d'abord les poules."); return; }
-  const pouleRounds = seance.poules.map(p => {
-    const aller = roundRobinRounds(p.members);
-    const retour = aller.map(round => round.map(([a,b])=>[b,a]));
-    return [...aller, ...retour];
-  });
-  const maxRounds = Math.max(0, ...pouleRounds.map(r=>r.length));
-  // Chaque poule reçoit un bloc FIXE de numéros de table, dédié à elle seule
-  // pour tout le tournoi (jamais partagé avec une autre poule, même sur des
-  // tours différents) : le nombre de tables qu'il lui faut est le plus grand
-  // nombre de matchs qu'elle joue en même temps sur un tour (en général sa
-  // taille // 2). Sans ça (ancien système : un compteur global cyclait sur le
-  // nombre de tables toutes poules confondues), deux poules pouvaient se
-  // retrouver mélangées sur le même numéro de table selon les tours.
-  const tablesParPoule = pouleRounds.map(rounds => Math.max(1, ...rounds.map(r=>r.length)));
-  const tableDebut = [];
-  let cursor = 1;
-  tablesParPoule.forEach(n=>{ tableDebut.push(cursor); cursor += n; });
-  const totalTablesNecessaires = cursor - 1;
-  if(totalTablesNecessaires > seance.config.terrains){
-    const label = ACTIVITIES[activite].terrainLabel.toLowerCase();
-    if(!confirm(`Pour que toutes les poules jouent en parallèle sans jamais partager une table, il faudrait ${totalTablesNecessaires} ${label} en même temps, mais seulement ${seance.config.terrains} sont configurées. Les numéros de table iront donc au-delà de ce nombre (à répartir sur les ${label} réellement disponibles en réutilisant une table libre). Continuer quand même ?`)) return;
-  }
+  const terrains = seance.config.terrains;
+  // Chaque poule joue tous ses matchs sur UNE seule table dédiée, un match à
+  // la fois (pas de simultanéité à gérer à l'intérieur d'une poule) : poule 1
+  // -> table 1, poule 2 -> table 2, etc. S'il y a plus de poules que de
+  // tables disponibles, les poules en trop réutilisent une table déjà prise
+  // (créneau suivant, une fois la poule précédente terminée sur cette table),
+  // et sont affichées comme une carte séparée (voir renderMatchesSection),
+  // jamais mélangées avec les matchs de l'autre poule.
   const matches = [];
-  for(let round=0; round<maxRounds; round++){
-    seance.poules.forEach((p, pi)=>{
-      const pairs = pouleRounds[pi][round] || [];
-      pairs.forEach(([a,b], j)=>{
-        const table = tableDebut[pi] + j;
-        matches.push({ poule:p.nom, tour:round+1, vague:1, table, a, b, winner:null });
-      });
+  seance.poules.forEach((p, pi) => {
+    const table = (pi % terrains) + 1;
+    const tableSlot = Math.floor(pi / terrains) + 1;
+    // Poule de 3 : aller-retour (chaque paire se rencontre 2 fois = 6 matchs).
+    // Poule de 4 : aller seul (chaque paire se rencontre 1 fois, tout le
+    // monde s'affronte = 6 matchs aussi) — pour garder un nombre de matchs
+    // comparable entre poules de tailles différentes plutôt que de doubler à
+    // 12. Les autres tailles (sports collectifs) gardent l'aller-retour.
+    const aller = roundRobinRounds(p.members).flat();
+    const pairs = p.members.length === 4 ? aller : [...aller, ...aller.map(([a,b])=>[b,a])];
+    pairs.forEach(([a,b], i)=>{
+      matches.push({ poule:p.nom, tour:i+1, vague:1, table, tableSlot, a, b, winner:null });
     });
+  });
+  if(seance.poules.length > terrains){
+    const label = ACTIVITIES[activite].terrainLabel.toLowerCase();
+    alert(`Il y a ${seance.poules.length} poules mais seulement ${terrains} ${label} configurées : certaines poules partageront une même table, l'une après l'autre (indiqué comme "créneau 2" sur la table concernée).`);
   }
   seance.matches = matches;
   saveState();
@@ -3091,8 +3086,8 @@ function renderPoulesSection(activite){
           </div>`;
         }).join('')}
       </div>
-      <button class="btn secondary" id="btnGenererMatchs">📅 Générer les matchs (aller-retour)</button>
-      <p class="hint" style="margin-top:8px;">Chaque paire de la poule se rencontre deux fois (aller puis retour) : une poule de 3 fait 6 matchs, une poule de 4 en fait 12.</p>
+      <button class="btn secondary" id="btnGenererMatchs">📅 Générer les matchs</button>
+      <p class="hint" style="margin-top:8px;">Poule de 3 : aller-retour (chaque paire se rencontre 2 fois). Poule de 4 : aller seul (chaque paire se rencontre 1 fois, tout le monde s'affronte). Dans les deux cas : 6 matchs par poule.</p>
     </div>`;
 }
 
@@ -3108,12 +3103,23 @@ function renderMatchesSection(activite){
   if(!seance.matches.length) return renderClassementTotalCard(activite);
   const act = ACTIVITIES[activite];
   const withIndex = seance.matches.map((m,idx)=>Object.assign({}, m, {idx}));
+  // Clé table + créneau (tableSlot) : une poule a toujours SA propre carte,
+  // même quand elle partage un numéro de table avec une autre poule (faute
+  // de tables en nombre suffisant) — jamais deux poules mélangées dans la
+  // même carte de matchs.
   const byTable = {};
-  withIndex.forEach(m=>{ (byTable[m.table] = byTable[m.table]||[]).push(m); });
-  const tables = Object.keys(byTable).map(Number).sort((a,b)=>a-b);
+  withIndex.forEach(m=>{
+    const key = m.table + '::' + (m.tableSlot||1);
+    (byTable[key] = byTable[key]||[]).push(m);
+  });
+  const cles = Object.keys(byTable).sort((a,b)=>{
+    const [ta,sa] = a.split('::').map(Number), [tb,sb] = b.split('::').map(Number);
+    return ta-tb || sa-sb;
+  });
 
-  const tableCards = tables.map(t=>{
-    const matches = byTable[t].slice().sort((a,b)=> a.tour-b.tour || a.vague-b.vague);
+  const tableCards = cles.map(cle=>{
+    const [t, slot] = cle.split('::').map(Number);
+    const matches = byTable[cle].slice().sort((a,b)=> a.tour-b.tour);
     const pouleName = matches[0] ? matches[0].poule : '';
     const poule = seance.poules.find(p=>p.nom===pouleName);
     const standing = poule ? computePouleStanding(seance, poule) : [];
@@ -3131,15 +3137,13 @@ function renderMatchesSection(activite){
         ${joue ? `<span class="hint">(${m.pointsA}/${m.pointsB} pts)</span>` : ''}
       </div>`;
     }).join('');
-    // Une poule avec plus de membres génère plus de matchs simultanés par
-    // tour qu'une petite poule : elle peut donc occuper plusieurs tables à la
-    // fois (ex. une poule de 4 sur les tables 7 et 8) pour ne pas prendre
-    // deux fois plus de temps que les autres. Le nom de la poule est affiché
-    // sur chaque table concernée pour que ce soit clair : ce sont bien 7
-    // poules au total, pas 8 tables = 8 poules.
+    // Le nom de la poule est affiché sur sa table pour que ce soit clair.
+    // Quand plusieurs poules partagent un même numéro de table (faute de
+    // tables en nombre suffisant), le créneau (2e, 3e...) est indiqué pour
+    // ne jamais laisser croire que c'est la même poule qui continue.
     return `
       <div class="poule-card">
-        <h4>${act.terrainLabel.replace(/s$/,'')} ${t}${pouleName ? ` — ${pouleName}` : ''}</h4>
+        <h4>${act.terrainLabel.replace(/s$/,'')} ${t}${slot>1?` (créneau ${slot})`:''}${pouleName ? ` — ${pouleName}` : ''}</h4>
         ${playersSummary ? `<div class="table-players-summary">${playersSummary}</div>` : ''}
         ${rows}
       </div>`;

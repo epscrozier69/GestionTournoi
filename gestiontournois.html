@@ -1165,6 +1165,25 @@ function exportTeamsExcel(activite){
   });
   exportRowsToExcel(rows, `equipes_${slug(activite)}_${slug(cd.classe)}_seance${seance.numero}.xlsx`, 'Équipes');
 }
+// Export Excel de la composition des poules affichées à l'écran, mais en
+// colonnes (une colonne par poule, un nom par ligne en dessous) plutôt qu'en
+// une ligne par élève — pour un copier-coller direct dans Excel qui garde la
+// même disposition que ce qui est vu dans l'application.
+function exportPoulesExcel(activite){
+  const seance = currentSeance(activite);
+  if(!seance || !seance.poules.length) return;
+  const maxSize = Math.max(...seance.poules.map(p=>p.members.length));
+  const rows = [];
+  for(let i=0; i<maxSize; i++){
+    const row = {};
+    seance.poules.forEach(p=>{
+      const id = p.members[i];
+      row[p.nom] = id ? participantLabel(activite, id) : '';
+    });
+    rows.push(row);
+  }
+  exportRowsToExcel(rows, `poules_${slug(activite)}_seance${seance.numero}.xlsx`, 'Poules');
+}
 // Feuilles de match imprimables (2 pages par table) :
 // 1) le recueil de points pendant le match (double échelle : Joueur A monte
 //    de 1 à N, Joueur B descend de N à 1), avec l'arbitre de chaque match ;
@@ -2837,6 +2856,8 @@ function renderActivityTab(activite){
   if(btnExportMatchs) btnExportMatchs.addEventListener('click', ()=>exportMatchesExcel(activite));
   const btnExportEquipes = q('#btnExportEquipes');
   if(btnExportEquipes) btnExportEquipes.addEventListener('click', ()=>exportTeamsExcel(activite));
+  const btnExportPoules = q('#btnExportPoules');
+  if(btnExportPoules) btnExportPoules.addEventListener('click', ()=>exportPoulesExcel(activite));
   const btnExportFeuilles = q('#btnExportFeuilles');
   if(btnExportFeuilles) btnExportFeuilles.addEventListener('click', ()=>exportFeuillesMatchsPDF(activite));
   const btnExportClassement = q('#btnExportClassement');
@@ -3024,7 +3045,10 @@ function renderPoulesSection(activite){
   const act = ACTIVITIES[activite];
   return `
     <div class="card">
-      <h3>🏆 Poules</h3>
+      <div class="toolbar">
+        <h3>🏆 Poules</h3>
+        <button class="btn secondary small" id="btnExportPoules">📊 Exporter Excel</button>
+      </div>
       <p class="hint">Répartition automatique — utilisez le menu déroulant à côté d'un ${act.type==='equipe'?'nom d\'équipe':'nom'} pour la déplacer manuellement vers une autre poule si besoin.</p>
       ${seance.matches.some(m=>m.winner) ? `<p class="hint">Classement basé sur les matchs déjà enregistrés — servira à la montée-descente de la prochaine séance.</p>` : ''}
       <div class="poules-grid">

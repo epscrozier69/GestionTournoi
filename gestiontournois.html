@@ -250,26 +250,31 @@
   /* Présence en liste verticale + niveaux à cocher (Ultimate) : sur 2
      colonnes (remplies de haut en bas puis colonne suivante) pour moins
      défiler verticalement avec une classe entière. */
-  .presence-list-vertical{column-count:2;column-gap:28px;}
+  .presence-list-vertical{column-count:2;column-gap:20px;}
   .presence-row-niveau{
-    display:flex;align-items:center;gap:14px;
-    flex-wrap:wrap;padding:2px 0;border-bottom:1px dashed var(--line);
+    display:flex;align-items:center;gap:6px;
+    flex-wrap:nowrap;padding:2px 0;border-bottom:1px dashed var(--line);
     break-inside:avoid;
   }
   .presence-row-niveau:last-child{border-bottom:none;}
-  .presence-row-niveau .presence-chip{flex:0 0 auto;min-width:180px;text-align:left;}
-  /* En dessous de ~1080px (iPad compris, portrait ou paysage), une seule
-     colonne : les 2 colonnes ne laissaient plus assez de largeur par ligne
-     pour que le nom + les niveaux 1-4 + ABS/DISP tiennent sans repasser à la
-     ligne. On resserre aussi les espacements/tailles pour que tout tienne
-     bien sur une seule ligne, même sur un iPad en portrait. */
-  @media (max-width:1080px){
+  .presence-row-niveau .presence-chip{
+    flex:1 1 auto;min-width:0;text-align:left;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  }
+  /* Colonnes et boutons resserrés en dessous de ~1300px (iPad compris,
+     portrait ou paysage) pour que le nom + les niveaux 1-4 + ABS/DISP
+     tiennent sur une seule ligne malgré les 2 colonnes (qui réduisent de
+     moitié la largeur disponible par ligne). */
+  @media (max-width:1300px){
+    .presence-list-vertical{column-gap:14px;}
+    .presence-row-niveau{gap:4px;}
+    .presence-row-niveau .presence-chip{font-size:.7rem;padding:5px 6px;}
+    .niveau-group{gap:2px;}
+    .niveau-opt{width:20px;height:20px;font-size:.68rem;}
+    .niveau-opt.statut-abs, .niveau-opt.statut-disp{padding:0 4px;font-size:.56rem;}
+  }
+  @media (max-width:700px){
     .presence-list-vertical{column-count:1;}
-    .presence-row-niveau{gap:8px;flex-wrap:nowrap;}
-    .presence-row-niveau .presence-chip{min-width:0;flex:1 1 auto;font-size:.72rem;padding:5px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-    .niveau-group{gap:3px;}
-    .niveau-opt{width:24px;height:24px;font-size:.72rem;}
-    .niveau-opt.statut-abs, .niveau-opt.statut-disp{padding:0 5px;font-size:.6rem;}
   }
   .niveau-group{display:flex;gap:4px;flex:0 0 auto;}
   .niveau-opt{

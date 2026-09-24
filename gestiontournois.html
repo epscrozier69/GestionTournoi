@@ -131,6 +131,11 @@
 
   /* Teams / Poules grids */
   .teams-grid, .poules-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-bottom:14px;}
+  /* Le classement total (dans la grille des matchs) a besoin de bien plus de
+     largeur que la cellule d'une seule poule pour rester lisible sans
+     scroller : il prend donc toute la largeur de la ligne, quel que soit le
+     nombre de colonnes de poules actuellement affichées. */
+  .poules-grid .classement-total-card{grid-column:1 / -1;}
 
   /* Défis classement progressif : matchs à gauche (3 tables par ligne), classement à droite */
   .defis-layout{display:grid;grid-template-columns:2fr 1fr;gap:16px;align-items:start;}
@@ -299,6 +304,22 @@
   }
   .score-opt:hover{border-color:var(--c1);}
   .score-opt.checked{background:#dbeafe;border-color:var(--c1);color:var(--c1);}
+
+  /* Évaluation technique Ultimate : essais/lancers bonus (0/1/2 par clic) */
+  .essai-picker{display:flex;flex-wrap:wrap;gap:5px;}
+  .essai-opt{
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    width:42px;height:42px;border:2px solid var(--line);border-radius:8px;cursor:pointer;
+    background:#f8fafc;transition:.15s;flex-shrink:0;
+  }
+  .essai-opt:hover{border-color:var(--c1);}
+  .essai-opt .essai-num{font-size:.62rem;color:var(--muted);font-weight:700;}
+  .essai-opt .essai-val{font-size:1rem;font-weight:800;}
+  .essai-opt.essai-val-0{background:#f8fafc;}
+  .essai-opt.essai-val-1{background:#dbeafe;border-color:#60a5fa;}
+  .essai-opt.essai-val-1 .essai-val{color:#1d4ed8;}
+  .essai-opt.essai-val-2{background:#2563eb;border-color:#1d4ed8;}
+  .essai-opt.essai-val-2 .essai-val, .essai-opt.essai-val-2 .essai-num{color:#fff;}
   @media (max-width:700px){
     .modal-box.modal-box-wide{max-width:calc(100vw - 32px);}
     .score-opt{width:24px;height:24px;font-size:.68rem;}
@@ -459,6 +480,7 @@ const ACTIVITIES = {
   'Ultimate': {
     icon:'🥏', type:'equipe', terrainLabel:'Terrains', defisAllowed:false,
     pouleMin:2, pouleMax:6, pouleTerrainMin:1, pouleTerrainMax:3, defaultTerrains:1,
+    evaluationTechniqueAllowed:true,
   },
   'Volley': {
     icon:'🏐', type:'equipe', terrainLabel:'Terrains', defisAllowed:false,
@@ -488,6 +510,7 @@ function defaultSeance(numero, activite){
     defisMatches:[], defisBye:[], lastAction:null, // défis classement progressif uniquement (flux continu)
     niveaux:{}, // studentId -> 1 (meilleur) à 4 (moins bon) — Ultimate : composition d'équipes
     compositionEquipes:'aleatoire', // 'aleatoire' | 'homogene' | 'heterogene' (Ultimate)
+    binomes:[], // Ultimate, évaluation technique : [{id, memberIds:[a,b], essais:[10], bonus:[2]}]
   };
 }
 function defaultClasseData(classe, activite){
@@ -531,6 +554,7 @@ function ensureActivityData(){
       cd.seances.forEach(s=>{
         if(!s.hasardWins) s.hasardWins = {};
         if(!s.winsOverride) s.winsOverride = {};
+        if(!s.binomes) s.binomes = [];
         if(!s.absentReasons) s.absentReasons = {};
         if(s.lastAction === undefined) s.lastAction = null;
         if(!s.niveaux) s.niveaux = {};
@@ -671,6 +695,7 @@ function clearSeanceResults(activite){
   seance.defisMatches = [];
   seance.defisBye = [];
   seance.lastAction = null;
+  seance.binomes = [];
   recomputeCumulativeTotals(cd);
   saveState();
   renderActivityTab(activite);
@@ -1453,8 +1478,14 @@ function computePouleSizesParNombre(n, nbPoules){
   const reste = n % nbPoulesEff;
   return [...Array(reste).fill(base + 1), ...Array(nbPoulesEff - reste).fill(base)];
 }
-function generatePoulesParNombre(ids, nbPoules){
-  const ordered = shuffleArray(ids);
+// preserveOrder : à utiliser quand l'ordre des ids reflète déjà un niveau
+// (ex. composition d'équipes homogène — voir generateTeamsHomogenes — où les
+// équipes fortes sont créées avant les équipes faibles) : la poule 1 reçoit
+// alors les premières (meilleures), la dernière poule les dernières (moins
+// bonnes), au lieu d'un tirage au sort qui mélangerait les niveaux entre
+// poules.
+function generatePoulesParNombre(ids, nbPoules, preserveOrder){
+  const ordered = preserveOrder ? ids.slice() : shuffleArray(ids);
   const sizes = computePouleSizesParNombre(ordered.length, nbPoules);
   const poules = [];
   let idx = 0;
@@ -1493,6 +1524,13 @@ function getPouleLabelForClasse(activite, cd, student){
     const w = cd.wins[student.id] || 0;
     const label = seance.tournamentType === 'defisHasard' ? 'Défis hasard' : 'Défis classement';
     return `${label} — ${w} victoire${w>1?'s':''}`;
+  }
+  if(seance.tournamentType === 'evaluationTechnique'){
+    const b = (seance.binomes||[]).find(b=>b.memberIds.includes(student.id));
+    if(!b) return 'Évaluation technique — pas encore en binôme';
+    const note = b.essais.reduce((a,v)=>a+v, 0);
+    const bonus = b.bonus.reduce((a,v)=>a+v, 0);
+    return `Évaluation technique — ${note}/20${bonus?` (+${bonus} bonus)`:''}`;
   }
   return '';
 }
@@ -1549,7 +1587,11 @@ function onGenererPoules(activite){
     if(composition === 'homogene') seance.teams = generateTeamsHomogenes(studentIds, joueursParEquipe, seance.niveaux || {});
     else if(composition === 'heterogene') seance.teams = generateTeamsHeterogenes(studentIds, joueursParEquipe, seance.niveaux || {});
     else seance.teams = generateTeams(studentIds, joueursParEquipe);
-    seance.poules = generatePoulesParNombre(seance.teams.map(t=>t.id), nombrePoules);
+    // En composition homogène, les équipes sont déjà créées des plus fortes
+    // aux plus faibles (voir generateTeamsHomogenes) : on garde cet ordre pour
+    // que la poule 1 reçoive les meilleures équipes, comme demandé — sinon
+    // (aléatoire/hétérogène) la répartition en poules reste tirée au sort.
+    seance.poules = generatePoulesParNombre(seance.teams.map(t=>t.id), nombrePoules, composition === 'homogene');
   } else {
     seance.config = { terrains, taillePoule };
     seance.teams = [];
@@ -2566,7 +2608,7 @@ function renderActivityTab(activite){
     if(seance){
       html += renderPresenceCard(activite, students, seance);
 
-      if(!act.defisAllowed && !seance.tournamentType){
+      if(!act.defisAllowed && !act.evaluationTechniqueAllowed && !seance.tournamentType){
         seance.tournamentType = 'poule';
         saveState();
       }
@@ -2582,6 +2624,18 @@ function renderActivityTab(activite){
               <button class="btn ${seance.tournamentType==='poule'?'':'ghost'}" data-tournament-type="poule">🏆 Par poule</button>
               <button class="btn ${seance.tournamentType==='defisClassement'?'':'ghost'}" data-tournament-type="defisClassement">📈 Défis classement progressif</button>
               <button class="btn ${seance.tournamentType==='defisHasard'?'':'ghost'}" data-tournament-type="defisHasard">🎲 Défis hasard</button>
+            </div>
+          </div>`;
+      } else if(act.evaluationTechniqueAllowed){
+        html += `
+          <div class="card">
+            <div class="toolbar">
+              <h3>Type de séance</h3>
+              ${cd.seances.length ? '<button class="btn small ghost" id="btnEffacerResultats">🧹 Effacer les résultats</button>' : ''}
+            </div>
+            <div class="config-grid">
+              <button class="btn ${seance.tournamentType==='poule'?'':'ghost'}" data-tournament-type="poule">🏆 Tournoi par poule</button>
+              <button class="btn ${seance.tournamentType==='evaluationTechnique'?'':'ghost'}" data-tournament-type="evaluationTechnique">🎯 Évaluation technique (passe/réception)</button>
             </div>
           </div>`;
       } else if(cd.seances.length){
@@ -2601,6 +2655,8 @@ function renderActivityTab(activite){
         html += renderTeamsSection(activite);
         html += renderPoulesSection(activite);
         html += renderMatchesSection(activite);
+      } else if(seance.tournamentType === 'evaluationTechnique'){
+        html += renderEvaluationTechniqueSection(activite);
       } else if(seance.tournamentType === 'defisHasard'){
         html += renderDefisHasardSection(activite);
       } else if(seance.tournamentType === 'defisClassement'){
@@ -2647,6 +2703,20 @@ function renderActivityTab(activite){
     btn.addEventListener('click', ()=>{
       const eleveId = btn.closest('[data-niveau-eleve]').dataset.niveauEleve;
       setNiveauEleve(activite, eleveId, parseInt(btn.dataset.niveauValeur, 10));
+    });
+  });
+  panel.querySelectorAll('[data-binome-candidat]').forEach(input=>{
+    input.addEventListener('change', ()=>toggleBinomeCandidat(activite, input.dataset.binomeCandidat));
+  });
+  const btnCreerBinome = q('#btnCreerBinome');
+  if(btnCreerBinome) btnCreerBinome.addEventListener('click', ()=>creerBinome(activite));
+  panel.querySelectorAll('[data-supprimer-binome]').forEach(btn=>{
+    btn.addEventListener('click', ()=>supprimerBinome(activite, btn.dataset.supprimerBinome));
+  });
+  panel.querySelectorAll('[data-cycler-essai]').forEach(cell=>{
+    cell.addEventListener('click', ()=>{
+      const [binomeId, index, estBonus] = cell.dataset.cyclerEssai.split('::');
+      cyclerEssaiBinome(activite, binomeId, parseInt(index, 10), estBonus === '1');
     });
   });
 
@@ -3163,6 +3233,99 @@ function renderClassementParSeance(cd, students, recentFirst, activite){
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
+    </div>`;
+}
+
+/* --------------------------------- ÉVALUATION TECHNIQUE (Ultimate) ---- */
+// Sélection d'élèves en cours pour former un binôme (état transitoire, non
+// sauvegardé : remis à zéro une fois le binôme créé).
+let binomeSelectionEnCours = [];
+function toggleBinomeCandidat(activite, studentId){
+  const idx = binomeSelectionEnCours.indexOf(studentId);
+  if(idx !== -1) binomeSelectionEnCours.splice(idx, 1);
+  else if(binomeSelectionEnCours.length < 2) binomeSelectionEnCours.push(studentId);
+  renderActivityTab(activite);
+}
+function creerBinome(activite){
+  if(binomeSelectionEnCours.length !== 2) return;
+  const seance = currentSeance(activite);
+  if(!seance.binomes) seance.binomes = [];
+  seance.binomes.push({
+    id: 'binome' + Date.now() + Math.floor(Math.random()*1000),
+    memberIds: binomeSelectionEnCours.slice(),
+    essais: Array(10).fill(0),
+    bonus: Array(2).fill(0),
+  });
+  binomeSelectionEnCours = [];
+  saveState();
+  renderActivityTab(activite);
+}
+function supprimerBinome(activite, binomeId){
+  const seance = currentSeance(activite);
+  seance.binomes = seance.binomes.filter(b=>b.id!==binomeId);
+  saveState();
+  renderActivityTab(activite);
+}
+// Un clic fait tourner la valeur de l'essai 0 -> 1 -> 2 -> 0 (permet de
+// corriger facilement en reçliquant, comme demandé).
+function cyclerEssaiBinome(activite, binomeId, index, estBonus){
+  const seance = currentSeance(activite);
+  const b = (seance.binomes||[]).find(b=>b.id===binomeId);
+  if(!b) return;
+  const arr = estBonus ? b.bonus : b.essais;
+  arr[index] = (arr[index] + 1) % 3;
+  saveState();
+  renderActivityTab(activite);
+}
+function renderEvaluationTechniqueSection(activite){
+  const cd = currentClasseData(activite);
+  const seance = currentSeance(activite);
+  if(!seance.binomes) seance.binomes = [];
+  const students = STATE.allStudents.filter(s=>s.classe===cd.classe && !seance.absents.includes(s.id));
+  const dejaAssignes = new Set(seance.binomes.flatMap(b=>b.memberIds));
+  const disponibles = students.filter(s=>!dejaAssignes.has(s.id));
+
+  const selectionHtml = disponibles.map(s=>{
+    const checked = binomeSelectionEnCours.includes(s.id);
+    return `
+      <label class="cb-opt ${checked?'checked':''}" style="min-width:auto;">
+        <input type="checkbox" data-binome-candidat="${s.id}" ${checked?'checked':''}>
+        <span class="code">${s.nomPrenom}</span>
+      </label>`;
+  }).join('');
+
+  const binomesHtml = seance.binomes.map(b=>{
+    const totalEssais = b.essais.reduce((a,v)=>a+v, 0);
+    const totalBonus = b.bonus.reduce((a,v)=>a+v, 0);
+    const noms = b.memberIds.map(id=>participantLabel(activite, id)).join(' / ');
+    const essaiCells = b.essais.map((v,i)=>`
+      <div class="essai-opt essai-val-${v}" data-cycler-essai="${b.id}::${i}::0">
+        <span class="essai-num">${i+1}</span><span class="essai-val">${v}</span>
+      </div>`).join('');
+    const bonusCells = b.bonus.map((v,i)=>`
+      <div class="essai-opt essai-val-${v}" data-cycler-essai="${b.id}::${i}::1">
+        <span class="essai-num">B${i+1}</span><span class="essai-val">${v}</span>
+      </div>`).join('');
+    return `
+      <div class="poule-card">
+        <div class="toolbar" style="margin-bottom:6px;">
+          <h4 style="margin:0;">${noms}</h4>
+          <button class="btn ghost small" data-supprimer-binome="${b.id}">🗑️</button>
+        </div>
+        <div class="essai-picker">${essaiCells}</div>
+        <p class="hint" style="margin:8px 0 2px;">Lancers bonus (optionnels) :</p>
+        <div class="essai-picker">${bonusCells}</div>
+        <p style="margin:8px 0 0;"><b>Note : ${totalEssais}/20</b>${totalBonus ? ` + ${totalBonus} bonus` : ''}</p>
+      </div>`;
+  }).join('');
+
+  return `
+    <div class="card">
+      <h3>🎯 Évaluation technique — Passe/Réception</h3>
+      <p class="hint">Sélectionnez 2 élèves ci-dessous pour créer un binôme, puis cliquez sur chaque essai pour lui attribuer 0, 1 ou 2 points (recliquer fait tourner la valeur, donc modifiable à tout moment). Chaque binôme a 10 essais (note sur 20) + 2 lancers bonus optionnels.</p>
+      <div class="cb-group" style="margin-bottom:10px;">${selectionHtml || '<span class="muted">Tous les élèves présents sont déjà en binôme.</span>'}</div>
+      <button class="btn small" id="btnCreerBinome" ${binomeSelectionEnCours.length!==2?'disabled':''}>➕ Créer le binôme (${binomeSelectionEnCours.length}/2)</button>
+      <div class="poules-grid" style="margin-top:14px;">${binomesHtml || `<span class="muted">Aucun binôme créé pour l'instant.</span>`}</div>
     </div>`;
 }
 

@@ -883,11 +883,17 @@ function scheduleCloudSync(){
 }
 async function pushCloudState(){
   try{
-    await fetchAvecReprises(APPS_SCRIPT_URL, {
+    const res = await fetchAvecReprises(APPS_SCRIPT_URL, {
       method:'POST',
       headers:{'Content-Type':'text/plain;charset=utf-8'}, // évite le préflight CORS
       body: JSON.stringify({ action:'save', data: STATE }),
     }, 15000, 2);
+    // Le script Google répond toujours "200 OK", même quand l'enregistrement
+    // a échoué de son côté ({ok:false, error:...}) : sans cette vérification,
+    // un échec passait pour un succès et la version en ligne restait bloquée
+    // sur une ancienne version (d'où le conflit à chaque rechargement).
+    const json = await res.json();
+    if(!(json && json.ok)) throw new Error((json && json.error) || 'Enregistrement refusé');
     syncEnAttente = false;
     derniereSyncReussie = new Date().toISOString();
     localStorage.setItem('gt_last_sync', derniereSyncReussie);

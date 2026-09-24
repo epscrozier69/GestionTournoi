@@ -258,8 +258,18 @@
   }
   .presence-row-niveau:last-child{border-bottom:none;}
   .presence-row-niveau .presence-chip{flex:0 0 auto;min-width:180px;text-align:left;}
-  @media (max-width:700px){
+  /* En dessous de ~1080px (iPad compris, portrait ou paysage), une seule
+     colonne : les 2 colonnes ne laissaient plus assez de largeur par ligne
+     pour que le nom + les niveaux 1-4 + ABS/DISP tiennent sans repasser à la
+     ligne. On resserre aussi les espacements/tailles pour que tout tienne
+     bien sur une seule ligne, même sur un iPad en portrait. */
+  @media (max-width:1080px){
     .presence-list-vertical{column-count:1;}
+    .presence-row-niveau{gap:8px;flex-wrap:nowrap;}
+    .presence-row-niveau .presence-chip{min-width:0;flex:1 1 auto;font-size:.72rem;padding:5px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .niveau-group{gap:3px;}
+    .niveau-opt{width:24px;height:24px;font-size:.72rem;}
+    .niveau-opt.statut-abs, .niveau-opt.statut-disp{padding:0 5px;font-size:.6rem;}
   }
   .niveau-group{display:flex;gap:4px;flex:0 0 auto;}
   .niveau-opt{

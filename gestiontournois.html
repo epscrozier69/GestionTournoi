@@ -271,6 +271,9 @@
   .niveau-opt[data-niveau-valeur="2"].checked{background:#16a34a;color:#fff;border-color:#16a34a;}
   .niveau-opt[data-niveau-valeur="3"].checked{background:#f59e0b;color:#fff;border-color:#f59e0b;}
   .niveau-opt[data-niveau-valeur="4"].checked{background:#dc2626;color:#fff;border-color:#dc2626;}
+  .niveau-opt.statut-abs, .niveau-opt.statut-disp{width:auto;padding:0 8px;font-size:.68rem;}
+  .niveau-opt.statut-abs.checked{background:#dc2626;color:#fff;border-color:#dc2626;}
+  .niveau-opt.statut-disp.checked{background:#64748b;color:#fff;border-color:#64748b;}
   .niveau-badge{
     display:inline-block;background:var(--c7);color:#fff;font-size:.68rem;font-weight:700;
     padding:1px 6px;border-radius:999px;vertical-align:middle;
@@ -1212,6 +1215,26 @@ function exportPoulesExcel(activite){
     rows.push(row);
   }
   exportRowsToExcel(rows, `poules_${slug(activite)}_seance${seance.numero}.xlsx`, 'Poules');
+}
+// Export Excel des notes d'évaluation technique (Ultimate), par ordre
+// alphabétique — mêmes données que le tableau affiché à l'écran.
+function exportEvalTechniqueExcel(activite){
+  const cd = currentClasseData(activite);
+  const seance = currentSeance(activite);
+  if(!cd || !seance) return;
+  const students = STATE.allStudents.filter(s=>s.classe===cd.classe && !seance.absents.includes(s.id));
+  const notesParEleve = {};
+  (seance.binomes||[]).forEach(b=>{
+    const totalEssais = b.essais.reduce((a,v)=>a+v, 0);
+    const totalBonus = b.bonus.reduce((a,v)=>a+v, 0);
+    const note = Math.min(20, totalEssais + totalBonus);
+    b.memberIds.forEach(id=>{ notesParEleve[id] = note; });
+  });
+  const rows = students.slice().sort((a,b)=>a.nomPrenom.localeCompare(b.nomPrenom, 'fr')).map(s=>({
+    'Nom Prénom': s.nomPrenom,
+    'Note': notesParEleve[s.id] !== undefined ? notesParEleve[s.id] : '',
+  }));
+  exportRowsToExcel(rows, `evaluation_technique_${slug(activite)}_${slug(cd.classe)}_seance${seance.numero}.xlsx`, 'Évaluation technique');
 }
 // Feuilles de match imprimables (2 pages par table) :
 // 1) le recueil de points pendant le match (double échelle : Joueur A monte
@@ -2804,9 +2827,18 @@ function renderActivityTab(activite){
       setNiveauEleve(activite, eleveId, parseInt(btn.dataset.niveauValeur, 10));
     });
   });
+  panel.querySelectorAll('[data-statut-case]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const eleveId = btn.closest('[data-statut-eleve]').dataset.statutEleve;
+      const dejaActif = btn.classList.contains('checked');
+      setPresenceStatus(activite, eleveId, dejaActif ? null : btn.dataset.statutCase);
+    });
+  });
   panel.querySelectorAll('[data-binome-candidat]').forEach(input=>{
     input.addEventListener('change', ()=>toggleBinomeCandidat(activite, input.dataset.binomeCandidat));
   });
+  const btnBinomeSolo = q('#btnBinomeSolo');
+  if(btnBinomeSolo) btnBinomeSolo.addEventListener('click', ()=>creerBinomeSolo(activite));
   panel.querySelectorAll('[data-supprimer-binome]').forEach(btn=>{
     btn.addEventListener('click', ()=>supprimerBinome(activite, btn.dataset.supprimerBinome));
   });
@@ -2892,6 +2924,8 @@ function renderActivityTab(activite){
   if(btnExportEquipes) btnExportEquipes.addEventListener('click', ()=>exportTeamsExcel(activite));
   const btnExportPoules = q('#btnExportPoules');
   if(btnExportPoules) btnExportPoules.addEventListener('click', ()=>exportPoulesExcel(activite));
+  const btnExportEvalTechnique = q('#btnExportEvalTechnique');
+  if(btnExportEvalTechnique) btnExportEvalTechnique.addEventListener('click', ()=>exportEvalTechniqueExcel(activite));
   const btnExportFeuilles = q('#btnExportFeuilles');
   if(btnExportFeuilles) btnExportFeuilles.addEventListener('click', ()=>exportFeuillesMatchsPDF(activite));
   const btnExportClassement = q('#btnExportClassement');
@@ -2972,18 +3006,23 @@ function renderPresenceCard(activite, students, seance){
       const statut = reasons[s.id] && PRESENCE_STATUTS[reasons[s.id]];
       const label = statut ? `${statut.icon} ${statut.label} ` : '✅ ';
       const niveauActuel = seance.niveaux[s.id] || 0;
+      const statutActuel = reasons[s.id];
       return `
         <div class="presence-row-niveau">
           <button class="presence-chip ${statut?statut.cls:''}" data-open-presence="${s.id}">${label}${s.nomPrenom}</button>
           <div class="niveau-group" data-niveau-eleve="${s.id}">
             ${[1,2,3,4].map(n=>`<button class="niveau-opt ${niveauActuel===n?'checked':''}" data-niveau-valeur="${n}" title="Niveau ${n}">${n}</button>`).join('')}
           </div>
+          <div class="niveau-group" data-statut-eleve="${s.id}">
+            <button class="niveau-opt statut-abs ${statutActuel==='absent'?'checked':''}" data-statut-case="absent" title="Absent(e)">ABS</button>
+            <button class="niveau-opt statut-disp ${statutActuel==='dispense'?'checked':''}" data-statut-case="dispense" title="Dispensé(e)">DISP</button>
+          </div>
         </div>`;
     }).join('');
     return `
       <div class="card">
         <h3>🧍 Présence — Séance ${seance.numero} <span class="muted">(${presents}/${students.length} présents)</span></h3>
-        <p class="hint">Cliquez sur un élève pour choisir son statut (absent, matériel manquant, dispensé). À droite, cochez son niveau (1 = meilleur, 4 = moins bon) pour composer des équipes homogènes ou hétérogènes.</p>
+        <p class="hint">Cliquez sur un élève pour choisir un statut détaillé (matériel manquant inclus), ou directement sur ABS/DISP à droite pour l'exclure du tournoi par poule et de l'évaluation technique de cette séance. À droite, cochez son niveau (1 = meilleur, 4 = moins bon) pour composer des équipes homogènes ou hétérogènes.</p>
         <div class="presence-list-vertical">${rows}</div>
       </div>`;
   }
@@ -3378,11 +3417,22 @@ function toggleBinomeCandidat(activite, studentId){
 }
 function creerBinome(activite){
   if(binomeSelectionEnCours.length !== 2) return;
+  ajouterBinome(activite, binomeSelectionEnCours.slice());
+}
+// Évaluation "solo" (1 seul élève) : utile quand le nombre d'élèves est
+// impair — un élève passe alors deux fois (une fois avec son binôme normal,
+// une fois seul avec l'élève restant), plutôt que de laisser ce dernier de
+// côté sans évaluation.
+function creerBinomeSolo(activite){
+  if(binomeSelectionEnCours.length !== 1) return;
+  ajouterBinome(activite, binomeSelectionEnCours.slice());
+}
+function ajouterBinome(activite, memberIds){
   const seance = currentSeance(activite);
   if(!seance.binomes) seance.binomes = [];
   seance.binomes.push({
     id: 'binome' + Date.now() + Math.floor(Math.random()*1000),
-    memberIds: binomeSelectionEnCours.slice(),
+    memberIds,
     essais: Array(10).fill(0),
     bonus: Array(2).fill(0),
   });
@@ -3412,15 +3462,19 @@ function renderEvaluationTechniqueSection(activite){
   const seance = currentSeance(activite);
   if(!seance.binomes) seance.binomes = [];
   const students = STATE.allStudents.filter(s=>s.classe===cd.classe && !seance.absents.includes(s.id));
+  // Un élève déjà dans un binôme reste sélectionnable : si le nombre
+  // d'élèves est impair, l'un d'eux doit passer deux fois (une fois avec son
+  // binôme normal, une fois seul avec l'élève restant) — on l'indique juste
+  // visuellement plutôt que de l'empêcher.
   const dejaAssignes = new Set(seance.binomes.flatMap(b=>b.memberIds));
-  const disponibles = students.filter(s=>!dejaAssignes.has(s.id));
 
-  const selectionHtml = disponibles.map(s=>{
+  const selectionHtml = students.map(s=>{
     const checked = binomeSelectionEnCours.includes(s.id);
+    const deja = dejaAssignes.has(s.id);
     return `
       <label class="cb-opt ${checked?'checked':''}" style="min-width:auto;">
         <input type="checkbox" data-binome-candidat="${s.id}" ${checked?'checked':''}>
-        <span class="code">${s.nomPrenom}</span>
+        <span class="code">${s.nomPrenom}${deja?' <span class="muted">(déjà évalué)</span>':''}</span>
       </label>`;
   }).join('');
 
@@ -3453,12 +3507,45 @@ function renderEvaluationTechniqueSection(activite){
       </div>`;
   }).join('');
 
+  // Liste alphabétique de tous les élèves présents avec leur note (une fois
+  // en binôme) — un vrai tableau HTML (pas des cases), donc sélectionnable et
+  // copiable-collable directement dans un autre fichier Excel.
+  const notesParEleve = {};
+  seance.binomes.forEach(b=>{
+    const totalEssais = b.essais.reduce((a,v)=>a+v, 0);
+    const totalBonus = b.bonus.reduce((a,v)=>a+v, 0);
+    const note = Math.min(20, totalEssais + totalBonus);
+    b.memberIds.forEach(id=>{ notesParEleve[id] = note; });
+  });
+  const alphabetique = students.slice().sort((a,b)=>a.nomPrenom.localeCompare(b.nomPrenom, 'fr'));
+  const notesRows = alphabetique.map((s,i)=>`
+    <tr>
+      <td><b>${i+1}</b></td>
+      <td>${s.nomPrenom}</td>
+      <td><b>${notesParEleve[s.id] !== undefined ? notesParEleve[s.id] + '/20' : '—'}</b></td>
+    </tr>`).join('');
+
   return `
     <div class="card">
       <h3>🎯 Évaluation technique — Passe/Réception</h3>
-      <p class="hint">Cliquez sur 2 élèves ci-dessous pour créer directement leur binôme, puis cliquez sur chaque essai pour lui attribuer 0, 1 ou 2 points (recliquer fait tourner la valeur, donc modifiable à tout moment). Chaque binôme a 10 essais (note sur 20) + 2 lancers bonus optionnels.</p>
-      <div class="cb-group" style="margin-bottom:10px;">${selectionHtml || '<span class="muted">Tous les élèves présents sont déjà en binôme.</span>'}</div>
+      <p class="hint">Cliquez sur 2 élèves ci-dessous pour créer directement leur binôme, puis cliquez sur chaque essai pour lui attribuer 0, 1 ou 2 points (recliquer fait tourner la valeur, donc modifiable à tout moment). Chaque binôme a 10 essais (note sur 20) + 2 lancers bonus optionnels. Un élève déjà évalué reste sélectionnable (utile si le nombre d'élèves est impair : il passe alors deux fois).</p>
+      <div class="cb-group" style="margin-bottom:10px;">${selectionHtml || '<span class="muted">Aucun élève présent.</span>'}</div>
+      ${binomeSelectionEnCours.length === 1 ? `<button class="btn secondary small" id="btnBinomeSolo" style="margin-bottom:10px;">➕ Évaluer ${participantLabel(activite, binomeSelectionEnCours[0])} seul(e) (nombre impair)</button>` : ''}
       <div class="poules-grid" style="margin-top:14px;">${binomesHtml || `<span class="muted">Aucun binôme créé pour l'instant.</span>`}</div>
+      <div class="toolbar" style="margin-top:18px;">
+        <h4 style="margin:0;">📋 Notes par ordre alphabétique</h4>
+        <button class="btn secondary small" id="btnExportEvalTechnique">📊 Exporter Excel</button>
+      </div>
+      <div class="table-wrap">
+        <table class="classement-table">
+          <thead><tr>
+            <th style="background:${PALETTE[0]}">N°</th>
+            <th style="background:${PALETTE[1]}">Nom Prénom</th>
+            <th style="background:${PALETTE[2]}">Note</th>
+          </tr></thead>
+          <tbody>${notesRows}</tbody>
+        </table>
+      </div>
     </div>`;
 }
 

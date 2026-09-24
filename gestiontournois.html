@@ -826,6 +826,21 @@ async function fetchAvecReprises(url, options, timeoutMs, tentatives){
   }
   throw derniereErreur;
 }
+// JSON.stringify normal dépend de l'ORDRE d'insertion des clés d'un objet :
+// deux états par ailleurs identiques (mêmes séances, mêmes scores) peuvent
+// donner un texte différent si par exemple cd.wins a été reconstruit dans un
+// ordre différent (ce qui arrive : recomputeCumulativeTotals le reconstruit
+// entièrement à chaque chargement). Ça faisait réapparaître la fenêtre de
+// conflit indéfiniment même quand rien de réel n'avait changé. On trie donc
+// les clés avant de comparer, pour ne détecter que de vraies différences.
+function stringifyCanonique(valeur){
+  return JSON.stringify(valeur, (key, val)=>{
+    if(val && typeof val === 'object' && !Array.isArray(val)){
+      return Object.keys(val).sort().reduce((acc,k)=>{ acc[k] = val[k]; return acc; }, {});
+    }
+    return val;
+  });
+}
 // Vrai si l'état local n'a essentiellement rien dedans (aucun risque à le
 // remplacer sans demander).
 function estStateVide(s){
@@ -896,7 +911,7 @@ async function loadCloudStateIfAvailable(){
     const json = await res.json();
     if(json && json.ok && json.data){
       const distant = json.data;
-      const identique = JSON.stringify(distant) === JSON.stringify(STATE);
+      const identique = stringifyCanonique(distant) === stringifyCanonique(STATE);
       if(estStateVide(STATE) || identique){
         STATE = distant;
         ensureActivityData();

@@ -192,6 +192,8 @@
   .team-card .team-name{
     width:100%;border:1px solid var(--line);border-radius:7px;padding:5px 7px;background:#fff;
   }
+  .team-name-row{display:flex;align-items:center;gap:6px;margin-bottom:8px;}
+  .team-name-row .team-name{flex:1;width:auto;margin-bottom:0;}
   .team-card ul, .poule-card ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px;}
   .team-card li, .poule-card li{
     display:flex;justify-content:space-between;align-items:center;gap:6px;font-size:.8rem;
@@ -3110,9 +3112,14 @@ function renderTeamsSection(activite){
         <button class="btn secondary small" id="btnExportEquipes">📊 Exporter Excel</button>
       </div>
       <div class="teams-grid">
-        ${seance.teams.map(t=>`
+        ${seance.teams.map(t=>{
+          const presentsCount = t.memberIds.filter(mid=>!seance.absents.includes(mid)).length;
+          return `
           <div class="team-card">
-            <input class="team-name" data-team-name="${t.id}" value="${t.nom}">
+            <div class="team-name-row">
+              <input class="team-name" data-team-name="${t.id}" value="${t.nom}">
+              <span class="muted">(${presentsCount})</span>
+            </div>
             <ul>
               ${t.memberIds.map(mid=>{
                 const student = STATE.allStudents.find(s=>s.id===mid);
@@ -3125,7 +3132,8 @@ function renderTeamsSection(activite){
                 </li>`;
               }).join('')}
             </ul>
-          </div>`).join('')}
+          </div>`;
+        }).join('')}
       </div>
     </div>`;
 }

@@ -279,26 +279,30 @@
     background:var(--panel);border-radius:14px;padding:20px;max-width:420px;width:100%;
     box-shadow:0 10px 40px rgba(0,0,0,.25);
   }
-  .modal-box.modal-box-wide{max-width:560px;}
+  .modal-box.modal-box-wide{max-width:700px;}
   .modal-box h3{margin:0 0 14px;}
   .modal-score-row{display:flex;align-items:flex-start;gap:10px;margin-bottom:10px;}
-  .modal-player{flex:1;display:flex;flex-direction:column;gap:6px;text-align:center;}
+  .modal-player{flex:1;display:flex;flex-direction:column;gap:6px;text-align:center;min-width:0;}
   .modal-player label{font-weight:700;font-size:.85rem;}
   .modal-player input{
     width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;font-size:1.1rem;text-align:center;
   }
   .modal-vs{font-weight:700;color:var(--muted);padding-top:34px;}
   .score-picker{
-    display:flex;flex-wrap:wrap;gap:5px;justify-content:center;
-    max-height:180px;overflow-y:auto;padding:4px;border:1px solid var(--line);border-radius:8px;
+    display:flex;flex-wrap:wrap;gap:4px;justify-content:center;
+    padding:4px;border:1px solid var(--line);border-radius:8px;
   }
   .score-opt{
     display:flex;align-items:center;justify-content:center;
-    width:34px;height:34px;border:2px solid var(--line);border-radius:8px;cursor:pointer;
-    font-weight:700;font-size:.85rem;background:#f8fafc;transition:.15s;flex-shrink:0;
+    width:28px;height:28px;border:2px solid var(--line);border-radius:7px;cursor:pointer;
+    font-weight:700;font-size:.75rem;background:#f8fafc;transition:.15s;flex-shrink:0;
   }
   .score-opt:hover{border-color:var(--c1);}
   .score-opt.checked{background:#dbeafe;border-color:var(--c1);color:var(--c1);}
+  @media (max-width:700px){
+    .modal-box.modal-box-wide{max-width:calc(100vw - 32px);}
+    .score-opt{width:24px;height:24px;font-size:.68rem;}
+  }
   .modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px;}
   .backup-row{
     display:flex;align-items:center;justify-content:space-between;gap:10px;
@@ -441,12 +445,12 @@ const ACTIVITIES = {
   'Tennis de table': {
     icon:'🏓', type:'individuel', terrainLabel:'Tables', defisAllowed:true,
     pouleMin:3, pouleMax:4, pouleTerrainMin:6, pouleTerrainMax:8,
-    defisTerrainMin:6, defisTerrainMax:8, defaultTerrains:8,
+    defisTerrainMin:6, defisTerrainMax:8, defaultTerrains:8, scoreMax:15,
   },
   'Badminton': {
     icon:'🏸', type:'individuel', terrainLabel:'Terrains', defisAllowed:true,
     pouleMin:3, pouleMax:4, pouleTerrainMin:6, pouleTerrainMax:13,
-    defisTerrainMin:6, defisTerrainMax:8, defaultTerrains:8,
+    defisTerrainMin:6, defisTerrainMax:8, defaultTerrains:8, scoreMax:25,
   },
   'Handball': {
     icon:'🤾', type:'equipe', terrainLabel:'Terrains', defisAllowed:false,
@@ -1666,18 +1670,19 @@ function computePouleStanding(seance, poule){
 
 /* --------------------------------------------- SAISIE DU SCORE (MODALE) - */
 let scoreModalContext = null;
-// Score maximum proposé dans les cases à cocher (large pour couvrir tous les
-// sports gérés : tennis de table/badminton se jouent rarement au-delà, mais
-// une poule de volley/handball peut aller plus haut).
-const SCORE_PICKER_MAX = 30;
-// Construit la grille de cases à cocher 0..SCORE_PICKER_MAX pour un des deux
-// joueurs, et retourne la valeur actuellement sélectionnée (ou null) via une
-// fermeture : cliquer sur une case la sélectionne (et désélectionne les
-// autres), recliquer dessus la désélectionne.
-function renderScorePicker(containerId, valeurActuelle){
+// Score maximum proposé dans les cases à cocher, par activité (voir
+// ACTIVITIES[...].scoreMax) — tennis de table et badminton ont un plafond
+// réaliste plus bas ; les autres activités gardent cette valeur par défaut,
+// assez large pour couvrir un score de poule en handball/volley/ultimate.
+const SCORE_PICKER_MAX_DEFAUT = 30;
+// Construit la grille de cases à cocher 0..max pour un des deux joueurs, et
+// retourne la valeur actuellement sélectionnée (ou null) via une fermeture :
+// cliquer sur une case la sélectionne (et désélectionne les autres),
+// recliquer dessus la désélectionne.
+function renderScorePicker(containerId, valeurActuelle, max){
   const container = document.getElementById(containerId);
   const opts = [];
-  for(let v=0; v<=SCORE_PICKER_MAX; v++){
+  for(let v=0; v<=max; v++){
     opts.push(`<div class="score-opt ${v===valeurActuelle?'checked':''}" data-score-value="${v}">${v}</div>`);
   }
   container.innerHTML = opts.join('');
@@ -1702,8 +1707,9 @@ function openScoreModal(activite, matchIndex){
   document.getElementById('scoreModalNomB').textContent = participantLabel(activite, match.b);
   const scoreA = (match.scoreA !== undefined && match.scoreA !== null) ? match.scoreA : null;
   const scoreB = (match.scoreB !== undefined && match.scoreB !== null) ? match.scoreB : null;
-  renderScorePicker('scoreModalPickerA', scoreA);
-  renderScorePicker('scoreModalPickerB', scoreB);
+  const max = ACTIVITIES[activite].scoreMax || SCORE_PICKER_MAX_DEFAUT;
+  renderScorePicker('scoreModalPickerA', scoreA, max);
+  renderScorePicker('scoreModalPickerB', scoreB, max);
   document.getElementById('scoreModal').hidden = false;
 }
 function closeScoreModal(){
@@ -2489,28 +2495,12 @@ function renderActivityTab(activite){
     const seancePourClassement = currentSeance(activite);
     const typeCourant = seancePourClassement ? seancePourClassement.tournamentType : '';
     const modePoints = typeCourant === 'poule';
-    const totalMap = modePoints ? cd.poulePoints : cd.wins;
-    const totalLabel = modePoints ? 'points' : 'victoires';
     // Pour les défis (hasard/classement progressif), le classement total est
     // déjà inclus (colonne "Total") dans la carte "Classement détaillé —
     // victoires séance par séance" plus bas : pas besoin de le répéter ici.
-    const tournoiActif = typeCourant === 'poule';
-    if(tournoiActif){
-      const showTotal = !!cd.showClassementTotal;
-      html += `
-        <div class="card classement-total-card">
-          <div class="toolbar">
-            <h3>📊 Classement total — ${totalLabel} depuis le début du cycle</h3>
-            <div style="display:flex;gap:6px;">
-              ${showTotal ? '<button class="btn secondary small" id="btnExportClassement">📊 Exporter Excel</button>' : ''}
-              <button class="btn ghost small" id="btnToggleClassementTotal">${showTotal ? '🙈 Masquer' : '👁️ Afficher'}</button>
-            </div>
-          </div>
-          ${showTotal ? `
-          <p class="hint">Ce total additionne les points de toutes les séances de cette classe depuis le début du cycle. Un point marqué en poule 7 ne valant pas un point marqué en poule 1, le classement est d'abord trié par poule actuelle (poule 1 = niveau le plus fort), puis par points à l'intérieur de chaque poule.</p>
-          ${renderClassementTotalPoule(students, totalMap, seancePourClassement)}` : ''}
-        </div>`;
-    }
+    // Le classement total du tournoi par poule est affiché plus bas, dans la
+    // grille "Ordre des matchs" (voir renderMatchesSection), juste à côté des
+    // matchs de la dernière poule — pas ici en haut de page.
 
     // Classement détaillé des défis : une colonne par séance + le total,
     // affiché tout en haut (au-dessus des onglets de séance) pour qu'il soit
@@ -2940,7 +2930,11 @@ function renderPoulesSection(activite){
 // dessous — plus lisible qu'un long tableau à parcourir ligne par ligne.
 function renderMatchesSection(activite){
   const seance = currentSeance(activite);
-  if(!seance.matches.length) return '';
+  // Même sans matchs encore générés pour cette séance (nouvelle séance d'un
+  // cycle en cours), le classement total cumulé reste utile à consulter —
+  // on l'affiche donc seul dans ce cas, plutôt que de faire disparaître toute
+  // la section.
+  if(!seance.matches.length) return renderClassementTotalCard(activite);
   const act = ACTIVITIES[activite];
   const withIndex = seance.matches.map((m,idx)=>Object.assign({}, m, {idx}));
   const byTable = {};
@@ -2993,8 +2987,32 @@ function renderMatchesSection(activite){
           <button class="btn secondary small" id="btnExportMatchs">📊 Exporter Excel</button>
         </div>
       </div>
-      <p class="hint">Cliquez sur un match pour saisir le score — les points marqués (selon l'écart) et le classement des poules (ci-dessus) se mettent à jour automatiquement.</p>
-      <div class="poules-grid">${tableCards}</div>
+      <p class="hint">Cliquez sur un match pour saisir le score — les points marqués (selon l'écart) et le classement total (ci-dessous) se mettent à jour automatiquement.</p>
+      <div class="poules-grid">${tableCards}${renderClassementTotalCard(activite)}</div>
+    </div>`;
+}
+
+// Carte "Classement total" du tournoi par poule, affichée dans la grille des
+// tables (voir renderMatchesSection) juste après la dernière poule, plutôt
+// qu'en haut de page — pour être visible juste à côté des derniers matchs.
+function renderClassementTotalCard(activite){
+  const cd = currentClasseData(activite);
+  const seance = currentSeance(activite);
+  if(!cd || !seance || seance.tournamentType !== 'poule') return '';
+  const students = STATE.allStudents.filter(s=>s.classe===cd.classe);
+  const showTotal = !!cd.showClassementTotal;
+  return `
+    <div class="card classement-total-card">
+      <div class="toolbar">
+        <h3>📊 Classement total — points depuis le début du cycle</h3>
+        <div style="display:flex;gap:6px;">
+          ${showTotal ? '<button class="btn secondary small" id="btnExportClassement">📊 Exporter Excel</button>' : ''}
+          <button class="btn ghost small" id="btnToggleClassementTotal">${showTotal ? '🙈 Masquer' : '👁️ Afficher'}</button>
+        </div>
+      </div>
+      ${showTotal ? `
+      <p class="hint">Ce total additionne les points de toutes les séances de cette classe depuis le début du cycle. Un point marqué en poule 7 ne valant pas un point marqué en poule 1, le classement est d'abord trié par poule actuelle (poule 1 = niveau le plus fort), puis par points à l'intérieur de chaque poule.</p>
+      ${renderClassementTotalPoule(students, cd.poulePoints, seance)}` : ''}
     </div>`;
 }
 

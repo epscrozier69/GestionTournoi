@@ -3022,7 +3022,7 @@ function renderPresenceCard(activite, students, seance){
     if(!seance.niveaux) seance.niveaux = {};
     const rows = students.map(s=>{
       const statut = reasons[s.id] && PRESENCE_STATUTS[reasons[s.id]];
-      const label = statut ? `${statut.icon} ${statut.label} ` : '✅ ';
+      const label = statut ? `${statut.icon} ${statut.label} ` : '';
       const niveauActuel = seance.niveaux[s.id] || 0;
       const statutActuel = reasons[s.id];
       return `

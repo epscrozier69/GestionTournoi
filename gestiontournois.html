@@ -1969,16 +1969,29 @@ function onGenererMatchs(activite){
     return [...aller, ...retour];
   });
   const maxRounds = Math.max(0, ...pouleRounds.map(r=>r.length));
+  // Chaque poule reçoit un bloc FIXE de numéros de table, dédié à elle seule
+  // pour tout le tournoi (jamais partagé avec une autre poule, même sur des
+  // tours différents) : le nombre de tables qu'il lui faut est le plus grand
+  // nombre de matchs qu'elle joue en même temps sur un tour (en général sa
+  // taille // 2). Sans ça (ancien système : un compteur global cyclait sur le
+  // nombre de tables toutes poules confondues), deux poules pouvaient se
+  // retrouver mélangées sur le même numéro de table selon les tours.
+  const tablesParPoule = pouleRounds.map(rounds => Math.max(1, ...rounds.map(r=>r.length)));
+  const tableDebut = [];
+  let cursor = 1;
+  tablesParPoule.forEach(n=>{ tableDebut.push(cursor); cursor += n; });
+  const totalTablesNecessaires = cursor - 1;
+  if(totalTablesNecessaires > seance.config.terrains){
+    const label = ACTIVITIES[activite].terrainLabel.toLowerCase();
+    if(!confirm(`Pour que toutes les poules jouent en parallèle sans jamais partager une table, il faudrait ${totalTablesNecessaires} ${label} en même temps, mais seulement ${seance.config.terrains} sont configurées. Les numéros de table iront donc au-delà de ce nombre (à répartir sur les ${label} réellement disponibles en réutilisant une table libre). Continuer quand même ?`)) return;
+  }
   const matches = [];
   for(let round=0; round<maxRounds; round++){
-    let counter = 0;
     seance.poules.forEach((p, pi)=>{
       const pairs = pouleRounds[pi][round] || [];
-      pairs.forEach(([a,b])=>{
-        const table = (counter % seance.config.terrains) + 1;
-        const vague = Math.floor(counter / seance.config.terrains) + 1;
-        matches.push({ poule:p.nom, tour:round+1, vague, table, a, b, winner:null });
-        counter++;
+      pairs.forEach(([a,b], j)=>{
+        const table = tableDebut[pi] + j;
+        matches.push({ poule:p.nom, tour:round+1, vague:1, table, a, b, winner:null });
       });
     });
   }

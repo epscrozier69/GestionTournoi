@@ -122,12 +122,17 @@
      un conteneur partagé. La classe active se distingue par sa pleine
      opacité + un léger zoom. */
   .classe-card{
-    flex:0 1 200px;min-width:160px;border:none;font-size:1.1rem;font-weight:800;letter-spacing:.02em;
-    color:#fff;cursor:pointer;opacity:.55;transition:.15s;
+    flex:0 1 200px;min-width:160px;font-size:1.1rem;font-weight:800;letter-spacing:.02em;
+    color:#fff;cursor:pointer;opacity:.45;transition:.15s;
     display:flex;align-items:center;justify-content:center;text-align:center;
+    border:3px solid transparent;
   }
-  .classe-card:hover{opacity:.8;}
-  .classe-card.active{opacity:1;box-shadow:0 6px 18px rgba(0,0,0,.2);transform:scale(1.03);}
+  .classe-card:hover{opacity:.75;}
+  .classe-card.active{
+    opacity:1;box-shadow:0 6px 18px rgba(0,0,0,.25);transform:scale(1.03);
+    border-color:#0f172a;
+  }
+  .classe-card.active::before{content:'✓ ';}
 
   /* Teams / Poules grids */
   .teams-grid, .poules-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-bottom:14px;}
@@ -214,10 +219,10 @@
     text-align:left !important;display:flex;align-items:center;gap:6px;
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
   }
-  .defis-table th:first-child, .defis-table td:first-child{width:170px;}
+  .defis-table th:first-child, .defis-table td:first-child{width:140px;}
   .defis-row{cursor:pointer;}
   .defis-row:hover{background:#dbeafe;}
-  .defis-cell{width:26px;font-weight:800;color:var(--ok);}
+  .defis-cell{width:20px;padding:2px 3px;font-weight:800;color:var(--ok);}
   .defis-undo{opacity:.6;flex:0 0 auto;}
   .btn.small.defis-undo{padding:2px 6px;}
   .defis-undo:hover{opacity:1;}
@@ -856,13 +861,28 @@ function ouvrirModalConflit(local, distant){
     modal.hidden = false;
     const btnLocal = document.getElementById('btnGarderLocal');
     const btnDistant = document.getElementById('btnChargerDistant');
+    const texteLocalOriginal = btnLocal.textContent;
     function cleanup(choix){
       modal.hidden = true;
+      btnLocal.disabled = false;
+      btnDistant.disabled = false;
+      btnLocal.textContent = texteLocalOriginal;
       btnLocal.removeEventListener('click', onLocal);
       btnDistant.removeEventListener('click', onDistant);
       resolve(choix);
     }
-    function onLocal(){ cleanup(false); }
+    async function onLocal(){
+      // On attend que l'envoi en ligne soit VRAIMENT terminé avant de fermer
+      // la fenêtre (au lieu de l'envoyer en arrière-plan) : sans ça, un
+      // rechargement de la page trop rapide après ce choix pouvait retomber
+      // sur l'ancienne version en ligne (l'envoi précédent pas encore
+      // terminé) et faire réapparaître le même conflit indéfiniment.
+      btnLocal.disabled = true;
+      btnDistant.disabled = true;
+      btnLocal.textContent = '🔄 Envoi en cours…';
+      await pushCloudState();
+      cleanup(false);
+    }
     function onDistant(){ cleanup(true); }
     btnLocal.addEventListener('click', onLocal);
     btnDistant.addEventListener('click', onDistant);
@@ -885,18 +905,16 @@ async function loadCloudStateIfAvailable(){
         // Les deux versions diffèrent : on ne remplace JAMAIS sans accord,
         // pour ne jamais écraser silencieusement un travail en cours sur cet
         // appareil avec une version différente trouvée en ligne.
+        // "Garder cet appareil" envoie la version locale en ligne et ATTEND
+        // la confirmation avant de fermer la fenêtre (voir ouvrirModalConflit)
+        // — sans ça, un rechargement de la page trop rapide après ce choix
+        // pouvait retomber sur l'ancienne version en ligne (envoi pas encore
+        // terminé) et faire réapparaître le même conflit indéfiniment.
         const accepte = await ouvrirModalConflit(STATE, distant);
         if(accepte){
           STATE = distant;
           ensureActivityData();
           localStorage.setItem('gt_state', JSON.stringify(STATE));
-        } else {
-          // "Garder cet appareil" : la version en ligne reste plus ancienne
-          // tant qu'on ne l'écrase pas avec la version locale — sans ça, le
-          // même conflit réapparaîtrait à chaque rechargement de la page,
-          // indéfiniment. On envoie donc tout de suite la version locale en
-          // ligne pour que le cloud se mette à jour avec le bon choix.
-          pushCloudState();
         }
       }
     }
@@ -2584,22 +2602,9 @@ function renderActivityTab(activite){
     // hasard : en défis classement progressif, ce même détail est déjà
     // affiché à côté des tables en cours (voir renderDefisClassementSection),
     // pas besoin de le répéter ici.
-    if(typeCourant === 'defisHasard'){
-      const showTotal = !!cd.showClassementTotal;
-      html += `
-        <div class="card classement-total-card">
-          <div class="toolbar">
-            <h3>🏅 Classement détaillé — victoires séance par séance</h3>
-            <div style="display:flex;gap:6px;">
-              ${showTotal ? '<button class="btn secondary small" id="btnExportClassement">📊 Exporter Excel</button>' : ''}
-              <button class="btn ghost small" id="btnToggleClassementTotal">${showTotal ? '🙈 Masquer' : '👁️ Afficher'}</button>
-            </div>
-          </div>
-          ${showTotal ? `
-          <p class="hint">Une colonne par séance de défis (hasard ou classement progressif), et le total cumulé à droite. C'est ce total qui détermine qui affronte qui (seuls les élèves à égalité de victoires se rencontrent).</p>
-          ${renderClassementParSeance(cd, students, false, activite)}` : ''}
-        </div>`;
-    }
+    // Le classement détaillé des défis hasard est affiché plus bas, à côté du
+    // tableau des victoires (voir renderDefisHasardSection), pas ici en haut
+    // de page — même traitement que pour le défis classement progressif.
 
     // Classement de la séance en cours uniquement (2e colonne demandée),
     // agrégé sur toutes les poules de la classe pour le tournoi par poule.
@@ -3416,14 +3421,21 @@ function renderDefisHasardSection(activite){
       <h3>🎲 Défis hasard — Nombre de victoires</h3>
       ${checkboxRangeHtml('defisTerrainCbGroup', act.terrainLabel+' disponibles', act.defisTerrainMin, act.defisTerrainMax, seance.defisTerrains || act.defisTerrainMin)}
       <p class="hint">Cliquez sur la ligne d'un élève pour lui ajouter une victoire.</p>
-      <div class="table-wrap">
-        <table class="defis-table">
-          <thead><tr>
-            <th style="background:${PALETTE[0]}">Élève</th>
-            ${cols.map(c=>`<th style="background:${PALETTE[c % PALETTE.length]}">${c}</th>`).join('')}
-          </tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
+      <div class="defis-layout">
+        <div class="table-wrap">
+          <table class="defis-table">
+            <thead><tr>
+              <th style="background:${PALETTE[0]}">Élève</th>
+              ${cols.map(c=>`<th style="background:${PALETTE[c % PALETTE.length]}">${c}</th>`).join('')}
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        <div class="defis-classement-live">
+          <h4>🏅 Classement — victoires séance par séance</h4>
+          <p class="hint">Se met à jour à chaque victoire ajoutée. La séance la plus récente est la colonne juste après le nom.</p>
+          ${renderClassementParSeance(cd, students, true, activite)}
+        </div>
       </div>
     </div>`;
 }

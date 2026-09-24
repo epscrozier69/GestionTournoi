@@ -511,6 +511,11 @@ function defaultSeance(numero, activite){
     niveaux:{}, // studentId -> 1 (meilleur) à 4 (moins bon) — Ultimate : composition d'équipes
     compositionEquipes:'aleatoire', // 'aleatoire' | 'homogene' | 'heterogene' (Ultimate)
     binomes:[], // Ultimate, évaluation technique : [{id, memberIds:[a,b], essais:[10], bonus:[2]}]
+    // Ultimate uniquement : tournoi par poule et évaluation technique peuvent
+    // être actifs en même temps dans une même séance (contrairement aux
+    // autres activités où tournamentType est exclusif) — voir act.evaluationTechniqueAllowed.
+    pouleActif: act.evaluationTechniqueAllowed ? true : undefined,
+    evalTechActif: act.evaluationTechniqueAllowed ? false : undefined,
   };
 }
 function defaultClasseData(classe, activite){
@@ -555,6 +560,12 @@ function ensureActivityData(){
         if(!s.hasardWins) s.hasardWins = {};
         if(!s.winsOverride) s.winsOverride = {};
         if(!s.binomes) s.binomes = [];
+        if(ACTIVITIES[a].evaluationTechniqueAllowed){
+          // Rattrapage pour les séances créées avant l'ajout du double mode :
+          // on retrouve le choix déjà fait via l'ancien tournamentType exclusif.
+          if(s.pouleActif === undefined) s.pouleActif = (s.tournamentType === 'poule' || !s.tournamentType);
+          if(s.evalTechActif === undefined) s.evalTechActif = (s.tournamentType === 'evaluationTechnique');
+        }
         if(!s.absentReasons) s.absentReasons = {};
         if(s.lastAction === undefined) s.lastAction = null;
         if(!s.niveaux) s.niveaux = {};
@@ -1505,32 +1516,49 @@ function participantLabel(activite, id){
   const s = STATE.allStudents.find(s=>s.id===id);
   return s ? s.nomPrenom : id;
 }
+// Résumé "poule" pour un élève dans une séance de tournoi par poule (partagé
+// par le mode normal et par le mode combiné d'Ultimate ci-dessous).
+function getPouleFragment(act, seance, student){
+  if(!seance.poules.length) return '';
+  if(act.type === 'individuel'){
+    const p = seance.poules.find(p=>p.members.includes(student.id));
+    return p ? p.nom : '';
+  }
+  const team = seance.teams.find(t=>t.memberIds.includes(student.id));
+  if(!team) return '';
+  const p = seance.poules.find(p=>p.members.includes(team.id));
+  return p ? `${p.nom} (${team.nom})` : '';
+}
+// Résumé "évaluation technique" pour un élève (partagé de même).
+function getEvalTechFragment(seance, student){
+  const b = (seance.binomes||[]).find(b=>b.memberIds.includes(student.id));
+  if(!b) return 'Évaluation technique — pas encore en binôme';
+  const totalEssais = b.essais.reduce((a,v)=>a+v, 0);
+  const totalBonus = b.bonus.reduce((a,v)=>a+v, 0);
+  const note = Math.min(20, totalEssais + totalBonus);
+  return `Évaluation technique — ${note}/20`;
+}
 function getPouleLabelForClasse(activite, cd, student){
   const act = ACTIVITIES[activite];
   const seance = cd.seances[cd.currentSeanceIndex] || cd.seances[cd.seances.length-1];
   if(!seance) return '';
-  if(seance.tournamentType === 'poule'){
-    if(!seance.poules.length) return '';
-    if(act.type === 'individuel'){
-      const p = seance.poules.find(p=>p.members.includes(student.id));
-      return p ? p.nom : '';
+  // Ultimate : poule et évaluation technique peuvent être actifs en même
+  // temps dans une même séance (voir seance.pouleActif/evalTechActif), donc
+  // les deux résumés sont combinés au lieu d'être exclusifs.
+  if(act.evaluationTechniqueAllowed){
+    const parts = [];
+    if(seance.pouleActif){
+      const frag = getPouleFragment(act, seance, student);
+      if(frag) parts.push(frag);
     }
-    const team = seance.teams.find(t=>t.memberIds.includes(student.id));
-    if(!team) return '';
-    const p = seance.poules.find(p=>p.members.includes(team.id));
-    return p ? `${p.nom} (${team.nom})` : '';
+    if(seance.evalTechActif) parts.push(getEvalTechFragment(seance, student));
+    return parts.join(' • ');
   }
+  if(seance.tournamentType === 'poule') return getPouleFragment(act, seance, student);
   if(seance.tournamentType === 'defisHasard' || seance.tournamentType === 'defisClassement'){
     const w = cd.wins[student.id] || 0;
     const label = seance.tournamentType === 'defisHasard' ? 'Défis hasard' : 'Défis classement';
     return `${label} — ${w} victoire${w>1?'s':''}`;
-  }
-  if(seance.tournamentType === 'evaluationTechnique'){
-    const b = (seance.binomes||[]).find(b=>b.memberIds.includes(student.id));
-    if(!b) return 'Évaluation technique — pas encore en binôme';
-    const note = b.essais.reduce((a,v)=>a+v, 0);
-    const bonus = b.bonus.reduce((a,v)=>a+v, 0);
-    return `Évaluation technique — ${note}/20${bonus?` (+${bonus} bonus)`:''}`;
   }
   return '';
 }
@@ -2627,15 +2655,20 @@ function renderActivityTab(activite){
             </div>
           </div>`;
       } else if(act.evaluationTechniqueAllowed){
+        // Contrairement aux autres activités (choix exclusif), le tournoi par
+        // poule et l'évaluation technique peuvent être actifs en même temps
+        // dans une même séance : ce sont deux cases à cocher indépendantes,
+        // pas un choix unique.
         html += `
           <div class="card">
             <div class="toolbar">
               <h3>Type de séance</h3>
               ${cd.seances.length ? '<button class="btn small ghost" id="btnEffacerResultats">🧹 Effacer les résultats</button>' : ''}
             </div>
+            <p class="hint">Vous pouvez activer les deux si vous faites les deux dans la même séance.</p>
             <div class="config-grid">
-              <button class="btn ${seance.tournamentType==='poule'?'':'ghost'}" data-tournament-type="poule">🏆 Tournoi par poule</button>
-              <button class="btn ${seance.tournamentType==='evaluationTechnique'?'':'ghost'}" data-tournament-type="evaluationTechnique">🎯 Évaluation technique (passe/réception)</button>
+              <button class="btn ${seance.pouleActif?'':'ghost'}" data-toggle-poule-actif="1">🏆 Tournoi par poule</button>
+              <button class="btn ${seance.evalTechActif?'':'ghost'}" data-toggle-evaltech-actif="1">🎯 Évaluation technique (passe/réception)</button>
             </div>
           </div>`;
       } else if(cd.seances.length){
@@ -2650,13 +2683,21 @@ function renderActivityTab(activite){
           </div>`;
       }
 
-      if(seance.tournamentType === 'poule'){
+      if(act.evaluationTechniqueAllowed){
+        if(seance.pouleActif){
+          html += renderPouleConfigCard(activite);
+          html += renderTeamsSection(activite);
+          html += renderPoulesSection(activite);
+          html += renderMatchesSection(activite);
+        }
+        if(seance.evalTechActif){
+          html += renderEvaluationTechniqueSection(activite);
+        }
+      } else if(seance.tournamentType === 'poule'){
         html += renderPouleConfigCard(activite);
         html += renderTeamsSection(activite);
         html += renderPoulesSection(activite);
         html += renderMatchesSection(activite);
-      } else if(seance.tournamentType === 'evaluationTechnique'){
-        html += renderEvaluationTechniqueSection(activite);
       } else if(seance.tournamentType === 'defisHasard'){
         html += renderDefisHasardSection(activite);
       } else if(seance.tournamentType === 'defisClassement'){
@@ -2708,8 +2749,6 @@ function renderActivityTab(activite){
   panel.querySelectorAll('[data-binome-candidat]').forEach(input=>{
     input.addEventListener('change', ()=>toggleBinomeCandidat(activite, input.dataset.binomeCandidat));
   });
-  const btnCreerBinome = q('#btnCreerBinome');
-  if(btnCreerBinome) btnCreerBinome.addEventListener('click', ()=>creerBinome(activite));
   panel.querySelectorAll('[data-supprimer-binome]').forEach(btn=>{
     btn.addEventListener('click', ()=>supprimerBinome(activite, btn.dataset.supprimerBinome));
   });
@@ -2726,6 +2765,20 @@ function renderActivityTab(activite){
       saveState();
       renderActivityTab(activite);
     });
+  });
+  const btnTogglePouleActif = q('[data-toggle-poule-actif]');
+  if(btnTogglePouleActif) btnTogglePouleActif.addEventListener('click', ()=>{
+    const s = currentSeance(activite);
+    s.pouleActif = !s.pouleActif;
+    saveState();
+    renderActivityTab(activite);
+  });
+  const btnToggleEvalTechActif = q('[data-toggle-evaltech-actif]');
+  if(btnToggleEvalTechActif) btnToggleEvalTechActif.addEventListener('click', ()=>{
+    const s = currentSeance(activite);
+    s.evalTechActif = !s.evalTechActif;
+    saveState();
+    renderActivityTab(activite);
   });
   panel.querySelectorAll('[data-composition-equipes]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
@@ -3074,7 +3127,9 @@ function renderMatchesSection(activite){
 function renderClassementTotalCard(activite){
   const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
-  if(!cd || !seance || seance.tournamentType !== 'poule') return '';
+  const act = ACTIVITIES[activite];
+  const pouleModeActif = act.evaluationTechniqueAllowed ? !!(seance && seance.pouleActif) : (seance && seance.tournamentType === 'poule');
+  if(!cd || !seance || !pouleModeActif) return '';
   const students = STATE.allStudents.filter(s=>s.classe===cd.classe);
   const showTotal = !!cd.showClassementTotal;
   return `
@@ -3244,6 +3299,9 @@ function toggleBinomeCandidat(activite, studentId){
   const idx = binomeSelectionEnCours.indexOf(studentId);
   if(idx !== -1) binomeSelectionEnCours.splice(idx, 1);
   else if(binomeSelectionEnCours.length < 2) binomeSelectionEnCours.push(studentId);
+  // Dès qu'un 2e élève est sélectionné, le binôme est créé directement, sans
+  // clic supplémentaire sur "Créer le binôme".
+  if(binomeSelectionEnCours.length === 2){ creerBinome(activite); return; }
   renderActivityTab(activite);
 }
 function creerBinome(activite){
@@ -3297,6 +3355,10 @@ function renderEvaluationTechniqueSection(activite){
   const binomesHtml = seance.binomes.map(b=>{
     const totalEssais = b.essais.reduce((a,v)=>a+v, 0);
     const totalBonus = b.bonus.reduce((a,v)=>a+v, 0);
+    // Les 2 lancers bonus comptent dans la note sur 20 (ils ne s'ajoutent pas
+    // au-delà) : ils ne servent qu'à compenser si les 10 essais n'ont pas
+    // suffi à atteindre 20 — la note ne dépasse jamais 20/20.
+    const note = Math.min(20, totalEssais + totalBonus);
     const noms = b.memberIds.map(id=>participantLabel(activite, id)).join(' / ');
     const essaiCells = b.essais.map((v,i)=>`
       <div class="essai-opt essai-val-${v}" data-cycler-essai="${b.id}::${i}::0">
@@ -3313,18 +3375,17 @@ function renderEvaluationTechniqueSection(activite){
           <button class="btn ghost small" data-supprimer-binome="${b.id}">🗑️</button>
         </div>
         <div class="essai-picker">${essaiCells}</div>
-        <p class="hint" style="margin:8px 0 2px;">Lancers bonus (optionnels) :</p>
+        <p class="hint" style="margin:8px 0 2px;">Lancers bonus (comptent dans la note, seulement utiles si moins de 20 aux essais) :</p>
         <div class="essai-picker">${bonusCells}</div>
-        <p style="margin:8px 0 0;"><b>Note : ${totalEssais}/20</b>${totalBonus ? ` + ${totalBonus} bonus` : ''}</p>
+        <p style="margin:8px 0 0;"><b>Note : ${note}/20</b></p>
       </div>`;
   }).join('');
 
   return `
     <div class="card">
       <h3>🎯 Évaluation technique — Passe/Réception</h3>
-      <p class="hint">Sélectionnez 2 élèves ci-dessous pour créer un binôme, puis cliquez sur chaque essai pour lui attribuer 0, 1 ou 2 points (recliquer fait tourner la valeur, donc modifiable à tout moment). Chaque binôme a 10 essais (note sur 20) + 2 lancers bonus optionnels.</p>
+      <p class="hint">Cliquez sur 2 élèves ci-dessous pour créer directement leur binôme, puis cliquez sur chaque essai pour lui attribuer 0, 1 ou 2 points (recliquer fait tourner la valeur, donc modifiable à tout moment). Chaque binôme a 10 essais (note sur 20) + 2 lancers bonus optionnels.</p>
       <div class="cb-group" style="margin-bottom:10px;">${selectionHtml || '<span class="muted">Tous les élèves présents sont déjà en binôme.</span>'}</div>
-      <button class="btn small" id="btnCreerBinome" ${binomeSelectionEnCours.length!==2?'disabled':''}>➕ Créer le binôme (${binomeSelectionEnCours.length}/2)</button>
       <div class="poules-grid" style="margin-top:14px;">${binomesHtml || `<span class="muted">Aucun binôme créé pour l'instant.</span>`}</div>
     </div>`;
 }

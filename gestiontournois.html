@@ -192,8 +192,9 @@
   .team-card .team-name{
     width:100%;border:1px solid var(--line);border-radius:7px;padding:5px 7px;background:#fff;
   }
-  .team-name-row{display:flex;align-items:center;gap:6px;margin-bottom:8px;}
-  .team-name-row .team-name{flex:1;width:auto;margin-bottom:0;}
+  .team-name-row{display:flex;align-items:center;gap:6px;margin-bottom:8px;max-width:100%;}
+  .team-name-row .team-name{flex:1 1 auto;width:auto;min-width:0;margin-bottom:0;}
+  .team-name-row .team-count{flex:0 0 auto;white-space:nowrap;font-size:.78rem;}
   .team-card ul, .poule-card ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px;}
   .team-card li, .poule-card li{
     display:flex;justify-content:space-between;align-items:center;gap:6px;font-size:.8rem;
@@ -3118,7 +3119,7 @@ function renderTeamsSection(activite){
           <div class="team-card">
             <div class="team-name-row">
               <input class="team-name" data-team-name="${t.id}" value="${t.nom}">
-              <span class="muted">(${presentsCount})</span>
+              <span class="muted team-count">${presentsCount} élève${presentsCount>1?'s':''}</span>
             </div>
             <ul>
               ${t.memberIds.map(mid=>{

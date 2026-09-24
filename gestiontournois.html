@@ -247,14 +247,20 @@
   .presence-chip.materiel{background:#fef3c7;color:#92400e;border-color:#d97706;text-decoration:line-through;}
   .presence-chip.dispense{background:#e0e7ff;color:#3730a3;border-color:#4f46e5;text-decoration:line-through;}
 
-  /* Présence en liste verticale + niveaux à cocher (Ultimate) */
-  .presence-list-vertical{display:flex;flex-direction:column;gap:6px;}
+  /* Présence en liste verticale + niveaux à cocher (Ultimate) : sur 2
+     colonnes (remplies de haut en bas puis colonne suivante) pour moins
+     défiler verticalement avec une classe entière. */
+  .presence-list-vertical{column-count:2;column-gap:28px;}
   .presence-row-niveau{
     display:flex;align-items:center;gap:14px;
     flex-wrap:wrap;padding:2px 0;border-bottom:1px dashed var(--line);
+    break-inside:avoid;
   }
   .presence-row-niveau:last-child{border-bottom:none;}
-  .presence-row-niveau .presence-chip{flex:0 0 auto;min-width:200px;text-align:left;}
+  .presence-row-niveau .presence-chip{flex:0 0 auto;min-width:180px;text-align:left;}
+  @media (max-width:700px){
+    .presence-list-vertical{column-count:1;}
+  }
   .niveau-group{display:flex;gap:4px;flex:0 0 auto;}
   .niveau-opt{
     width:30px;height:30px;border-radius:8px;border:1px solid var(--line);
@@ -519,7 +525,9 @@ function defaultSeance(numero, activite){
     // Ultimate uniquement : tournoi par poule et évaluation technique peuvent
     // être actifs en même temps dans une même séance (contrairement aux
     // autres activités où tournamentType est exclusif) — voir act.evaluationTechniqueAllowed.
-    pouleActif: act.evaluationTechniqueAllowed ? true : undefined,
+    // Ni l'un ni l'autre par défaut : rien ne s'affiche tant qu'elle n'a pas
+    // explicitement cliqué sur l'un des deux boutons.
+    pouleActif: act.evaluationTechniqueAllowed ? false : undefined,
     evalTechActif: act.evaluationTechniqueAllowed ? false : undefined,
   };
 }
@@ -568,7 +576,7 @@ function ensureActivityData(){
         if(ACTIVITIES[a].evaluationTechniqueAllowed){
           // Rattrapage pour les séances créées avant l'ajout du double mode :
           // on retrouve le choix déjà fait via l'ancien tournamentType exclusif.
-          if(s.pouleActif === undefined) s.pouleActif = (s.tournamentType === 'poule' || !s.tournamentType);
+          if(s.pouleActif === undefined) s.pouleActif = (s.tournamentType === 'poule');
           if(s.evalTechActif === undefined) s.evalTechActif = (s.tournamentType === 'evaluationTechnique');
         }
         if(!s.absentReasons) s.absentReasons = {};
@@ -615,7 +623,13 @@ function switchClasse(activite, classe){
 function addSeance(activite){
   const cd = currentClasseData(activite);
   const numero = cd.seances.length ? Math.max(...cd.seances.map(s=>s.numero)) + 1 : 1;
-  cd.seances.push(defaultSeance(numero, activite));
+  const nouvelleSeance = defaultSeance(numero, activite);
+  // Reprend les niveaux (1-4) attribués lors de la dernière séance : ils
+  // changent rarement d'une séance à l'autre, autant repartir de là plutôt
+  // que de tout re-cocher à chaque nouvelle séance.
+  const derniere = cd.seances[cd.seances.length - 1];
+  if(derniere && derniere.niveaux) nouvelleSeance.niveaux = Object.assign({}, derniere.niveaux);
+  cd.seances.push(nouvelleSeance);
   cd.currentSeanceIndex = cd.seances.length - 1;
   saveState();
   renderActivityTab(activite);

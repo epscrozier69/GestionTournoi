@@ -359,6 +359,9 @@
   .cb-opt .code{font-weight:800;font-size:.85rem;color:var(--ink);}
   .cb-opt.checked{background:#dbeafe;border-color:var(--c1);box-shadow:0 2px 6px rgba(0,0,0,.08);}
   .cb-opt.checked .code{color:var(--c1);}
+  .cb-opt.deja-evalue{background:#dbeafe;border-color:#93c5fd;}
+  .cb-opt.deja-evalue .code{color:#1d4ed8;}
+  .cb-opt.deja-evalue.checked{background:#bfdbfe;border-color:var(--c1);}
 
   @media (max-width:700px){
     header{padding:10px 14px;}
@@ -3472,9 +3475,9 @@ function renderEvaluationTechniqueSection(activite){
     const checked = binomeSelectionEnCours.includes(s.id);
     const deja = dejaAssignes.has(s.id);
     return `
-      <label class="cb-opt ${checked?'checked':''}" style="min-width:auto;">
+      <label class="cb-opt ${checked?'checked':''} ${deja?'deja-evalue':''}" style="min-width:auto;">
         <input type="checkbox" data-binome-candidat="${s.id}" ${checked?'checked':''}>
-        <span class="code">${s.nomPrenom}${deja?' <span class="muted">(déjà évalué)</span>':''}</span>
+        <span class="code">${s.nomPrenom}</span>
       </label>`;
   }).join('');
 
@@ -3536,8 +3539,8 @@ function renderEvaluationTechniqueSection(activite){
         <h4 style="margin:0;">📋 Notes par ordre alphabétique</h4>
         <button class="btn secondary small" id="btnExportEvalTechnique">📊 Exporter Excel</button>
       </div>
-      <div class="table-wrap">
-        <table class="classement-table">
+      <div class="table-wrap" style="max-width:420px;">
+        <table class="classement-table" style="width:auto;">
           <thead><tr>
             <th style="background:${PALETTE[0]}">N°</th>
             <th style="background:${PALETTE[1]}">Nom Prénom</th>

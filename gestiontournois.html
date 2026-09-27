@@ -347,7 +347,10 @@
      binômes par ligne) passe sur davantage de lignes plutôt que de
      déborder. Au moins 2 binômes côte à côte, 3 dès que la largeur le
      permet (iPad paysage, ordinateur). */
-  .essai-picker-essais{display:grid;grid-template-columns:repeat(auto-fill,minmax(58px,1fr));gap:6px;}
+  /* Chaque essai a besoin d'assez de place pour ses 3 boutons (0/1/2) sans
+     déborder — une colonne trop étroite masquait le "2" derrière l'essai
+     suivant. */
+  .essai-picker-essais{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:6px;}
   .essai-picker-bonus{display:grid;grid-template-columns:repeat(2,1fr);gap:6px;max-width:150px;}
   .binomes-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;}
   .essai-item{display:flex;flex-direction:column;align-items:center;gap:3px;flex-shrink:0;}

@@ -351,10 +351,13 @@
      déborder — une colonne trop étroite masquait le "2" derrière l'essai
      suivant. */
   .essai-picker-essais{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:6px;}
-  .essai-picker-bonus{display:grid;grid-template-columns:repeat(2,1fr);gap:6px;max-width:150px;}
   .binomes-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;}
   .essai-item{display:flex;flex-direction:column;align-items:center;gap:3px;flex-shrink:0;}
   .essai-item .essai-num{font-size:.8rem;color:var(--ink);font-weight:800;}
+  /* Lancers bonus : même grille que les essais (juste après L10), distingués
+     par un liseré de couleur plutôt que par un texte d'explication séparé. */
+  .essai-item-bonus .essai-num{color:#b45309;}
+  .essai-item-bonus .essai-btn{border-color:#fbbf24;}
   .essai-choix{display:flex;gap:3px;}
   .essai-btn{
     width:28px;height:28px;border:1px solid var(--line);border-radius:6px;cursor:pointer;
@@ -557,6 +560,7 @@ function defaultSeance(numero, activite){
     compositionEquipes:'aleatoire', // 'aleatoire' | 'homogene' | 'heterogene' (Ultimate)
     binomes:[], // Ultimate, évaluation technique : [{id, memberIds:[a,b], essais:[10], bonus:[2]}]
     nombreEquipesFixe:0, // Ultimate : 0 = auto (déduit de joueursParEquipe), sinon nombre choisi manuellement
+    nombreRencontres:0, // tournoi par poule : 0 = auto (règle habituelle selon la taille), sinon nb de fois où chaque paire se rencontre
     // Ultimate uniquement : tournoi par poule et évaluation technique peuvent
     // être actifs en même temps dans une même séance (contrairement aux
     // autres activités où tournamentType est exclusif) — voir act.evaluationTechniqueAllowed.
@@ -609,6 +613,7 @@ function ensureActivityData(){
         if(!s.winsOverride) s.winsOverride = {};
         if(!s.binomes) s.binomes = [];
         if(s.nombreEquipesFixe === undefined) s.nombreEquipesFixe = 0;
+        if(s.nombreRencontres === undefined) s.nombreRencontres = 0;
         if(ACTIVITIES[a].evaluationTechniqueAllowed){
           // Rattrapage pour les séances créées avant l'ajout du double mode :
           // on retrouve le choix déjà fait via l'ancien tournamentType exclusif.
@@ -1509,6 +1514,35 @@ function generateTeams(studentIds, joueursParEquipe, nombreEquipesFixe){
   });
   return teams;
 }
+// Répartit des groupes d'élèves (par niveau) sur un ensemble d'équipes de
+// tailles données, en "draft" serpentin : on distribue d'abord tous les
+// élèves du 1er niveau de ordreNiveaux un par équipe (en alternant le sens
+// pour rester équilibré), puis tous ceux du niveau suivant, etc. — jamais
+// deux élèves du même niveau d'affilée sur la même équipe tant qu'une autre
+// équipe n'en a pas encore reçu un. Partagé par les compositions homogène
+// (à l'intérieur de chaque vivier fort/faible) et hétérogène (tous niveaux).
+function distribuerParNiveauSerpentin(groupesParNiveau, ordreNiveaux, tailles){
+  const equipes = tailles.map((taille,i)=>({ id:'equipe'+(i+1), nom:'Équipe '+(i+1), memberIds:[], capacite:taille }));
+  const nbEquipes = equipes.length;
+  let idx = 0, sens = 1;
+  ordreNiveaux.forEach(niveau=>{
+    (groupesParNiveau[niveau] || []).forEach(id=>{
+      let essais = 0;
+      while(equipes[idx].memberIds.length >= equipes[idx].capacite && essais < nbEquipes){
+        idx += sens;
+        if(idx >= nbEquipes){ idx = nbEquipes-1; sens = -1; }
+        else if(idx < 0){ idx = 0; sens = 1; }
+        essais++;
+      }
+      equipes[idx].memberIds.push(id);
+      idx += sens;
+      if(idx >= nbEquipes){ idx = nbEquipes-1; sens = -1; }
+      else if(idx < 0){ idx = 0; sens = 1; }
+    });
+  });
+  equipes.forEach(t=>delete t.capacite);
+  return equipes;
+}
 // Équipes "homogènes" (Ultimate) : les niveaux 1-2 forment un vivier de
 // "forts", les niveaux 3-4 un vivier de "moins forts", chaque vivier étant
 // ensuite réparti en équipes indépendamment de l'autre — les équipes issues
@@ -1517,6 +1551,12 @@ function generateTeams(studentIds, joueursParEquipe, nombreEquipesFixe){
 // répartis dans le vivier le moins fourni pour équilibrer les effectifs.
 // Avec un nombre d'équipes fixé manuellement, il est réparti entre les deux
 // viviers au prorata de leurs effectifs (au moins 1 équipe chacun).
+// À L'INTÉRIEUR de chaque vivier, les niveaux 1/2 (ou 3/4) sont eux-mêmes
+// distribués en serpentin entre les équipes de ce vivier : sans ça, un pur
+// tirage au sort pouvait mettre par hasard tous les niveaux 1 dans une seule
+// équipe du vivier fort, en laissant une autre équipe du même vivier sans
+// aucun niveau 1 — déséquilibré alors même que les deux équipes sont censées
+// être de force comparable.
 function generateTeamsHomogenes(studentIds, joueursParEquipe, niveaux, nombreEquipesFixe){
   const shuffled = shuffleArray(studentIds);
   const forts = shuffled.filter(id => niveaux[id] === 1 || niveaux[id] === 2);
@@ -1529,9 +1569,15 @@ function generateTeamsHomogenes(studentIds, joueursParEquipe, niveaux, nombreEqu
     nbFortsFixe = clamp(Math.round(nombreEquipesFixe * forts.length / total), 1, nombreEquipesFixe - 1);
     nbFaiblesFixe = nombreEquipesFixe - nbFortsFixe;
   }
+  const taillesForts = computeTeamSizes(forts.length, joueursParEquipe, nbFortsFixe);
+  const taillesFaibles = computeTeamSizes(faibles.length, joueursParEquipe, nbFaiblesFixe);
+  const groupesForts = {1:[], 2:[]};
+  forts.forEach(id => groupesForts[niveaux[id] === 1 ? 1 : 2].push(id)); // sans niveau -> traité comme "2" (neutre)
+  const groupesFaibles = {3:[], 4:[]};
+  faibles.forEach(id => groupesFaibles[niveaux[id] === 3 ? 3 : 4].push(id)); // sans niveau -> traité comme "4" (neutre)
   const equipes = [
-    ...generateTeams(forts, joueursParEquipe, nbFortsFixe),
-    ...generateTeams(faibles, joueursParEquipe, nbFaiblesFixe),
+    ...distribuerParNiveauSerpentin(groupesForts, [1,2], taillesForts),
+    ...distribuerParNiveauSerpentin(groupesFaibles, [3,4], taillesFaibles),
   ];
   equipes.forEach((t,i)=>{ t.id = 'equipe'+(i+1); t.nom = 'Équipe '+(i+1); });
   return equipes;
@@ -1548,26 +1594,7 @@ function generateTeamsHeterogenes(studentIds, joueursParEquipe, niveaux, nombreE
   // Nombre d'équipes et capacité de chacune calculés avec la même logique
   // que les poules (voir generateTeams) : jamais d'équipe trop petite.
   const tailles = computeTeamSizes(studentIds.length, joueursParEquipe, nombreEquipesFixe);
-  const equipes = tailles.map((taille,i)=>({ id:'equipe'+(i+1), nom:'Équipe '+(i+1), memberIds:[], capacite:taille }));
-  const nbEquipes = equipes.length;
-  let idx = 0, sens = 1;
-  [1,2,3,4,0].forEach(niveau=>{
-    groupes[niveau].forEach(id=>{
-      let essais = 0;
-      while(equipes[idx].memberIds.length >= equipes[idx].capacite && essais < nbEquipes){
-        idx += sens;
-        if(idx >= nbEquipes){ idx = nbEquipes-1; sens = -1; }
-        else if(idx < 0){ idx = 0; sens = 1; }
-        essais++;
-      }
-      equipes[idx].memberIds.push(id);
-      idx += sens;
-      if(idx >= nbEquipes){ idx = nbEquipes-1; sens = -1; }
-      else if(idx < 0){ idx = 0; sens = 1; }
-    });
-  });
-  equipes.forEach(t=>delete t.capacite);
-  return equipes;
+  return distribuerParNiveauSerpentin(groupes, [1,2,3,4,0], tailles);
 }
 // Calcule la taille des poules à créer pour n participants, en respectant les
 // bornes [min, max] de l'activité : priorité à la taille de base souhaitée,
@@ -2084,13 +2111,25 @@ function onGenererMatchs(activite){
   seance.poules.forEach((p, pi) => {
     const table = (pi % terrains) + 1;
     const tableSlot = Math.floor(pi / terrains) + 1;
-    // Poule de 3 : aller-retour (chaque paire se rencontre 2 fois = 6 matchs).
-    // Poule de 4 : aller seul (chaque paire se rencontre 1 fois, tout le
-    // monde s'affronte = 6 matchs aussi) — pour garder un nombre de matchs
-    // comparable entre poules de tailles différentes plutôt que de doubler à
-    // 12. Les autres tailles (sports collectifs) gardent l'aller-retour.
-    const aller = roundRobinRounds(p.members).flat();
-    const pairs = p.members.length === 4 ? aller : [...aller, ...aller.map(([a,b])=>[b,a])];
+    let pairs;
+    if(seance.nombreRencontres){
+      // Nombre de rencontres par paire choisi manuellement (utile surtout
+      // pour une petite poule, ex. 2 équipes, où l'aller-retour habituel ne
+      // fait que 2 matchs) : on répète le tour complet ce nombre de fois, en
+      // alternant le sens à chaque passage pour équilibrer domicile/extérieur.
+      const aller = roundRobinRounds(p.members).flat();
+      pairs = [];
+      for(let r=0; r<seance.nombreRencontres; r++){
+        pairs.push(...(r % 2 === 0 ? aller : aller.map(([a,b])=>[b,a])));
+      }
+    } else {
+      // Auto : poule de 3 -> aller-retour (chaque paire se rencontre 2 fois
+      // = 6 matchs) ; poule de 4 -> aller seul (chaque paire 1 fois, tout le
+      // monde s'affronte = 6 matchs aussi) ; autres tailles (sports
+      // collectifs) -> aller-retour par défaut.
+      const aller = roundRobinRounds(p.members).flat();
+      pairs = p.members.length === 4 ? aller : [...aller, ...aller.map(([a,b])=>[b,a])];
+    }
     pairs.forEach(([a,b], i)=>{
       matches.push({ poule:p.nom, tour:i+1, vague:1, table, tableSlot, a, b, winner:null });
     });
@@ -2541,6 +2580,25 @@ function nombreEquipesFixeHtml(groupId, current){
       </div>
     </div>`;
 }
+// Nombre de fois où chaque paire se rencontre dans une poule : 0 = "Auto"
+// (règle habituelle selon la taille de la poule), sinon un nombre choisi
+// directement — utile surtout pour une petite poule (ex. 2 équipes) où
+// l'aller-retour habituel ne fait que 2 matchs.
+function nombreRencontresHtml(groupId, current){
+  const opts = [{v:0, label:'Auto'}];
+  for(let v=1; v<=6; v++) opts.push({v, label:String(v)});
+  return `
+    <div class="field-row-cb">
+      <label>Nombre de rencontres par paire (Auto = 2, sauf poule de 4 = 1)</label>
+      <div class="cb-group" id="${groupId}">
+        ${opts.map(o=>`
+          <label class="cb-opt ${current===o.v?'checked':''}">
+            <input type="checkbox" data-cb-value="${o.v}" ${current===o.v?'checked':''}>
+            <span class="code">${o.label}</span>
+          </label>`).join('')}
+      </div>
+    </div>`;
+}
 function wireCheckboxRange(root, groupId, onSelect){
   // `root` limite la recherche au panneau de l'activité concernée : ce même
   // id de groupe existe une fois par activité (5 panneaux dans la page).
@@ -2973,6 +3031,10 @@ function renderActivityTab(activite){
     currentSeance(activite).nombreEquipesFixe = v;
     saveState();
   });
+  wireCheckboxRange(panel, 'cfgNombreRencontresCbGroup', (v)=>{
+    currentSeance(activite).nombreRencontres = v;
+    saveState();
+  });
   wireCheckboxRange(panel, 'cfgNombrePoulesCbGroup', (v)=>{
     currentSeance(activite).nombrePoules = v;
     saveState();
@@ -3247,8 +3309,9 @@ function renderPoulesSection(activite){
           </div>`;
         }).join('')}
       </div>
+      ${nombreRencontresHtml('cfgNombreRencontresCbGroup', seance.nombreRencontres || 0)}
       <button class="btn secondary" id="btnGenererMatchs">📅 Générer les matchs</button>
-      <p class="hint" style="margin-top:8px;">Poule de 3 : aller-retour (chaque paire se rencontre 2 fois). Poule de 4 : aller seul (chaque paire se rencontre 1 fois, tout le monde s'affronte). Dans les deux cas : 6 matchs par poule.</p>
+      <p class="hint" style="margin-top:8px;">Auto : poule de 3 -> aller-retour (chaque paire se rencontre 2 fois) ; poule de 4 -> aller seul (chaque paire se rencontre 1 fois, tout le monde s'affronte) — 6 matchs dans les deux cas. Sinon, choisissez vous-même le nombre de rencontres par paire ci-dessus (utile notamment pour une petite poule).</p>
     </div>`;
 }
 
@@ -3590,23 +3653,26 @@ function renderEvaluationTechniqueSection(activite){
     // case qu'il fallait recliquer plusieurs fois pour faire tourner la
     // valeur) : plus rapide et sans ambiguïté sur la valeur obtenue.
     const essaiItem = (v, i, estBonus, labelPrefix)=>`
-      <div class="essai-item">
+      <div class="essai-item ${estBonus?'essai-item-bonus':''}">
         <span class="essai-num">${labelPrefix}${i+1}</span>
         <div class="essai-choix">
           ${[0,1,2].map(val=>`<button class="essai-btn ${v===val?'checked':''}" data-set-essai="${b.id}::${i}::${estBonus}::${val}">${val}</button>`).join('')}
         </div>
       </div>`;
-    const essaiCells = b.essais.map((v,i)=>essaiItem(v, i, 0, 'L')).join('');
-    const bonusCells = b.bonus.map((v,i)=>essaiItem(v, i, 1, 'B')).join('');
+    // Les lancers bonus rejoignent la même grille que les essais (juste
+    // après L10), pour occuper la place restante sur sa ligne au lieu
+    // d'une ligne à part avec un texte d'explication séparé.
+    const essaiEtBonusCells = [
+      ...b.essais.map((v,i)=>essaiItem(v, i, 0, 'L')),
+      ...b.bonus.map((v,i)=>essaiItem(v, i, 1, 'B')),
+    ].join('');
     return `
       <div class="poule-card">
         <div class="toolbar" style="margin-bottom:6px;">
           <h4 style="margin:0;">${noms}</h4>
           <button class="btn ghost small" data-supprimer-binome="${b.id}">🗑️</button>
         </div>
-        <div class="essai-picker essai-picker-essais">${essaiCells}</div>
-        <p class="hint" style="margin:8px 0 2px;">Lancers bonus (comptent dans la note, seulement utiles si moins de 20 aux essais) :</p>
-        <div class="essai-picker essai-picker-bonus">${bonusCells}</div>
+        <div class="essai-picker essai-picker-essais">${essaiEtBonusCells}</div>
         <p style="margin:8px 0 0;"><b>Note : ${note}/20</b> <span class="muted">(${essaisFaits}/10 essais faits)</span></p>
       </div>`;
   }).join('');

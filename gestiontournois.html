@@ -563,7 +563,8 @@ function defaultSeance(numero, activite){
   const act = ACTIVITIES[activite];
   const defaultT = act.defaultTerrains || act.pouleTerrainMin;
   return {
-    numero, tournamentType:'', config:{}, defisTerrains:defaultT, pouleTerrains:defaultT,
+    numero, dateCreation: new Date().toISOString(), // affichée sous "Séance N" dans les tableaux de classement
+    tournamentType:'', config:{}, defisTerrains:defaultT, pouleTerrains:defaultT,
     joueursParEquipe:4, taillePoule:act.pouleMin, // choix par cases à cocher (sports collectifs)
     nombrePoules:2, // sports collectifs : nombre de poules souhaité (répartition équilibrée des équipes)
     demiTerrain:false, // Badminton uniquement : double la capacité de terrains simultanés
@@ -631,6 +632,7 @@ function ensureActivityData(){
         if(!s.binomes) s.binomes = [];
         if(s.nombreEquipesFixe === undefined) s.nombreEquipesFixe = 0;
         if(s.nombreRencontres === undefined) s.nombreRencontres = 0;
+        if(!s.dateCreation) s.dateCreation = ''; // séances créées avant l'ajout de ce champ : date inconnue
         if(ACTIVITIES[a].evaluationTechniqueAllowed){
           // Rattrapage pour les séances créées avant l'ajout du double mode :
           // on retrouve le choix déjà fait via l'ancien tournamentType exclusif.
@@ -851,6 +853,13 @@ function formatHeureSync(iso){
   if(!iso) return '';
   const d = new Date(iso);
   return d.toLocaleDateString('fr-FR') + ' à ' + d.toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+}
+// Date courte (jj/mm) d'une séance, affichée sous "Séance N" dans les
+// tableaux de classement — vide si la séance a été créée avant l'ajout de ce
+// champ (dateCreation inconnue).
+function formatDateSeance(iso){
+  if(!iso) return '';
+  return new Date(iso).toLocaleDateString('fr-FR', {day:'2-digit', month:'2-digit'});
 }
 function setSyncStatus(state){
   syncStatusActuel = state;
@@ -3493,7 +3502,8 @@ function renderClassementParSeancePoule(cd, students, activite){
   });
   const headerCols = seancesPoule.map(s=>{
     const compLabel = activite === 'Ultimate' ? {homogene:'Homogène', heterogene:'Hétérogène'}[s.compositionEquipes] : null;
-    return `<th style="background:${PALETTE[3 + (s.numero % (PALETTE.length-3))]}">Séance ${s.numero}${compLabel ? `<br><span class="th-sub">${compLabel}</span>` : ''}</th>`;
+    const dateLabel = formatDateSeance(s.dateCreation);
+    return `<th style="background:${PALETTE[3 + (s.numero % (PALETTE.length-3))]}">Séance ${s.numero}${dateLabel ? `<br><span class="th-sub">${dateLabel}</span>` : ''}${compLabel ? `<br><span class="th-sub">${compLabel}</span>` : ''}</th>`;
   }).join('');
   const derniere = seancesPoule[seancesPoule.length-1];
   const showEvalTech = activite === 'Ultimate' && derniere.evalTechActif && (derniere.binomes||[]).length;
@@ -3600,7 +3610,10 @@ function renderClassementParSeance(cd, students, recentFirst, activite){
   // des tables en cours, pour voir en priorité la séance en cours.
   if(recentFirst) seancesDefis = seancesDefis.slice().reverse();
   const perSeance = seancesDefis.map(s=>computeSeanceDefisWins(s));
-  const headerCols = seancesDefis.map(s=>`<th style="background:${PALETTE[3 + (s.numero % (PALETTE.length-3))]}">Séance ${s.numero}</th>`).join('');
+  const headerCols = seancesDefis.map(s=>{
+    const dateLabel = formatDateSeance(s.dateCreation);
+    return `<th style="background:${PALETTE[3 + (s.numero % (PALETTE.length-3))]}">Séance ${s.numero}${dateLabel ? `<br><span class="th-sub">${dateLabel}</span>` : ''}</th>`;
+  }).join('');
   const sorted = students.slice().sort((a,b)=> (cd.wins[b.id]||0) - (cd.wins[a.id]||0));
   // Cases éditables (si activite fourni) pour corriger une victoire mal
   // saisie sans avoir à rejouer/ré-arbitrer le match concerné.

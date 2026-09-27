@@ -649,7 +649,7 @@ function ensureActivityData(){
       // désynchronisés par une ancienne version de l'appli (ex. "Effacer les
       // résultats" qui remettait le total à zéro pour toute la classe au lieu
       // de le recalculer sans la séance effacée).
-      recomputeCumulativeTotals(cd);
+      recomputeCumulativeTotals(cd, a);
     });
   });
 }
@@ -709,7 +709,7 @@ function deleteSeance(activite){
   cd.currentSeanceIndex = Math.max(0, cd.currentSeanceIndex - 1);
   // Recalcule le total cumulé à partir des séances restantes (au lieu de le
   // remettre à zéro), pour ne pas fausser le classement des autres séances.
-  recomputeCumulativeTotals(cd);
+  recomputeCumulativeTotals(cd, activite);
   saveState();
   renderActivityTab(activite);
   renderGeneral();
@@ -782,7 +782,7 @@ function clearSeanceResults(activite){
   seance.defisBye = [];
   seance.lastAction = null;
   seance.binomes = [];
-  recomputeCumulativeTotals(cd);
+  recomputeCumulativeTotals(cd, activite);
   saveState();
   renderActivityTab(activite);
   renderGeneral();
@@ -1922,17 +1922,34 @@ function computeSeancePoulePoints(seance){
   });
   return totals;
 }
+// Pour les sports collectifs, computeSeancePoulePoints renvoie des points PAR
+// ÉQUIPE (m.a/m.b sont des ids d'équipe, pas d'élève) : on les répartit donc
+// sur chaque élève de l'équipe (chacun reçoit les points marqués par son
+// équipe ce jour-là), sans quoi le total par élève restait toujours à 0 pour
+// les sports collectifs (les équipes changeant de composition à chaque
+// séance, ce n'est de toute façon exploitable que par élève d'une séance à
+// l'autre).
+function computeSeancePoulePointsParEleve(seance, activite){
+  const parEquipeOuEleve = computeSeancePoulePoints(seance);
+  if(ACTIVITIES[activite].type !== 'equipe') return parEquipeOuEleve;
+  const totals = {};
+  (seance.teams||[]).forEach(t=>{
+    const pts = parEquipeOuEleve[t.id] || 0;
+    t.memberIds.forEach(mid=>{ totals[mid] = (totals[mid]||0) + pts; });
+  });
+  return totals;
+}
 // Recalcule cd.wins et cd.poulePoints depuis zéro en resommant toutes les
 // séances de la classe (au lieu de simplement les remettre à zéro) : utilisé
 // après avoir effacé ou supprimé une séance, pour que le total cumulé
 // reflète exactement ce qu'il reste, sans effacer les autres séances.
-function recomputeCumulativeTotals(cd){
+function recomputeCumulativeTotals(cd, activite){
   const wins = {};
   const poulePoints = {};
   cd.seances.forEach(s=>{
     const w = computeSeanceDefisWins(s);
     Object.keys(w).forEach(id=>{ wins[id] = (wins[id]||0) + w[id]; });
-    const p = computeSeancePoulePoints(s);
+    const p = computeSeancePoulePointsParEleve(s, activite);
     Object.keys(p).forEach(id=>{ poulePoints[id] = (poulePoints[id]||0) + p[id]; });
   });
   cd.wins = wins;
@@ -3461,7 +3478,7 @@ function getEvalTechNoteCourte(seance, studentId){
 function renderClassementParSeancePoule(cd, students, activite){
   const seancesPoule = cd.seances.filter(s=>s.poules && s.poules.length);
   if(!seancesPoule.length) return '';
-  const perSeance = seancesPoule.map(s=>computeSeancePoulePoints(s));
+  const perSeance = seancesPoule.map(s=>computeSeancePoulePointsParEleve(s, activite));
   const headerCols = seancesPoule.map(s=>`<th style="background:${PALETTE[3 + (s.numero % (PALETTE.length-3))]}">Séance ${s.numero}</th>`).join('');
   const derniere = seancesPoule[seancesPoule.length-1];
   const composition = derniere.compositionEquipes;
@@ -3549,7 +3566,7 @@ function setWinsOverride(activite, seanceNumero, studentId, value){
   if(!seance) return;
   if(!seance.winsOverride) seance.winsOverride = {};
   seance.winsOverride[studentId] = Math.max(0, value);
-  recomputeCumulativeTotals(cd);
+  recomputeCumulativeTotals(cd, activite);
   saveState();
   renderActivityTab(activite);
 }

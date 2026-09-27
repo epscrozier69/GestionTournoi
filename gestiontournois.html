@@ -1243,7 +1243,8 @@ function exportEvalTechniqueExcel(activite){
   const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
   if(!cd || !seance) return;
-  const students = STATE.allStudents.filter(s=>s.classe===cd.classe && !seance.absents.includes(s.id));
+  const students = STATE.allStudents.filter(s=>s.classe===cd.classe);
+  const reasons = seance.absentReasons || {};
   const notesParEleve = {};
   (seance.binomes||[]).forEach(b=>{
     const totalEssais = b.essais.reduce((a,v)=>a+v, 0);
@@ -1251,10 +1252,13 @@ function exportEvalTechniqueExcel(activite){
     const note = Math.min(20, totalEssais + totalBonus);
     b.memberIds.forEach(id=>{ notesParEleve[id] = note; });
   });
-  const rows = students.slice().sort((a,b)=>a.nomPrenom.localeCompare(b.nomPrenom, 'fr')).map(s=>({
-    'Nom Prénom': s.nomPrenom,
-    'Note': notesParEleve[s.id] !== undefined ? notesParEleve[s.id] : '',
-  }));
+  const rows = students.slice().sort((a,b)=>a.nomPrenom.localeCompare(b.nomPrenom, 'fr')).map(s=>{
+    const statut = reasons[s.id] && PRESENCE_STATUTS[reasons[s.id]];
+    return {
+      'Nom Prénom': s.nomPrenom,
+      'Note': notesParEleve[s.id] !== undefined ? notesParEleve[s.id] : (statut ? statut.label : ''),
+    };
+  });
   exportRowsToExcel(rows, `evaluation_technique_${slug(activite)}_${slug(cd.classe)}_seance${seance.numero}.xlsx`, 'Évaluation technique');
 }
 // Feuilles de match imprimables (2 pages par table) :
@@ -3600,13 +3604,24 @@ function renderEvaluationTechniqueSection(activite){
     const note = Math.min(20, totalEssais + totalBonus);
     b.memberIds.forEach(id=>{ notesParEleve[id] = note; });
   });
-  const alphabetique = students.slice().sort((a,b)=>a.nomPrenom.localeCompare(b.nomPrenom, 'fr'));
-  const notesRows = alphabetique.map((s,i)=>`
+  // Ce récapitulatif inclut tous les élèves de la classe (même absents ou
+  // dispensés de cette séance), contrairement à la liste de sélection des
+  // binômes ci-dessus qui ne montre que les présents.
+  const tousLesEleves = STATE.allStudents.filter(s=>s.classe===cd.classe);
+  const alphabetique = tousLesEleves.slice().sort((a,b)=>a.nomPrenom.localeCompare(b.nomPrenom, 'fr'));
+  const reasons = seance.absentReasons || {};
+  const notesRows = alphabetique.map((s,i)=>{
+    const statut = reasons[s.id] && PRESENCE_STATUTS[reasons[s.id]];
+    const noteLabel = notesParEleve[s.id] !== undefined
+      ? notesParEleve[s.id] + '/20'
+      : (statut ? statut.label : '—');
+    return `
     <tr>
       <td><b>${i+1}</b></td>
       <td>${s.nomPrenom}</td>
-      <td><b>${notesParEleve[s.id] !== undefined ? notesParEleve[s.id] + '/20' : '—'}</b></td>
-    </tr>`).join('');
+      <td><b>${noteLabel}</b></td>
+    </tr>`;
+  }).join('');
 
   return `
     <div class="card">

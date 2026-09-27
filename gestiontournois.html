@@ -341,6 +341,14 @@
      chaque essai/lancer bonus (au lieu d'une case unique à recliquer
      plusieurs fois pour changer sa valeur). */
   .essai-picker{display:flex;flex-wrap:wrap;gap:8px;}
+  /* 10 essais toujours sur 2 lignes de 5 (au lieu de flotter selon la
+     largeur disponible), et 2 binômes affichables côte à côte. */
+  .essai-picker-essais{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;}
+  .essai-picker-bonus{display:grid;grid-template-columns:repeat(2,1fr);gap:6px;max-width:120px;}
+  .binomes-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;}
+  @media (max-width:820px){
+    .binomes-grid{grid-template-columns:1fr;}
+  }
   .essai-item{display:flex;flex-direction:column;align-items:center;gap:2px;flex-shrink:0;}
   .essai-item .essai-num{font-size:.62rem;color:var(--muted);font-weight:700;}
   .essai-choix{display:flex;gap:2px;}
@@ -1247,8 +1255,8 @@ function exportEvalTechniqueExcel(activite){
   const reasons = seance.absentReasons || {};
   const notesParEleve = {};
   (seance.binomes||[]).forEach(b=>{
-    const totalEssais = b.essais.reduce((a,v)=>a+v, 0);
-    const totalBonus = b.bonus.reduce((a,v)=>a+v, 0);
+    const totalEssais = b.essais.reduce((a,v)=>a+(v||0), 0);
+    const totalBonus = b.bonus.reduce((a,v)=>a+(v||0), 0);
     const note = Math.min(20, totalEssais + totalBonus);
     b.memberIds.forEach(id=>{ notesParEleve[id] = note; });
   });
@@ -1663,8 +1671,8 @@ function getPouleFragment(act, seance, student){
 function getEvalTechFragment(seance, student){
   const b = (seance.binomes||[]).find(b=>b.memberIds.includes(student.id));
   if(!b) return 'Évaluation technique — pas encore en binôme';
-  const totalEssais = b.essais.reduce((a,v)=>a+v, 0);
-  const totalBonus = b.bonus.reduce((a,v)=>a+v, 0);
+  const totalEssais = b.essais.reduce((a,v)=>a+(v||0), 0);
+  const totalBonus = b.bonus.reduce((a,v)=>a+(v||0), 0);
   const note = Math.min(20, totalEssais + totalBonus);
   return `Évaluation technique — ${note}/20`;
 }
@@ -3517,8 +3525,10 @@ function ajouterBinome(activite, memberIds){
   seance.binomes.push({
     id: 'binome' + Date.now() + Math.floor(Math.random()*1000),
     memberIds,
-    essais: Array(10).fill(0),
-    bonus: Array(2).fill(0),
+    // null = pas encore fait (aucune case cochée), pour distinguer un essai
+    // non réalisé d'un essai réalisé et noté 0.
+    essais: Array(10).fill(null),
+    bonus: Array(2).fill(null),
   });
   binomeSelectionEnCours = [];
   saveState();
@@ -3562,8 +3572,9 @@ function renderEvaluationTechniqueSection(activite){
   }).join('');
 
   const binomesHtml = seance.binomes.map(b=>{
-    const totalEssais = b.essais.reduce((a,v)=>a+v, 0);
-    const totalBonus = b.bonus.reduce((a,v)=>a+v, 0);
+    const essaisFaits = b.essais.filter(v=>v!==null).length;
+    const totalEssais = b.essais.reduce((a,v)=>a+(v||0), 0);
+    const totalBonus = b.bonus.reduce((a,v)=>a+(v||0), 0);
     // Les 2 lancers bonus comptent dans la note sur 20 (ils ne s'ajoutent pas
     // au-delà) : ils ne servent qu'à compenser si les 10 essais n'ont pas
     // suffi à atteindre 20 — la note ne dépasse jamais 20/20.
@@ -3587,10 +3598,10 @@ function renderEvaluationTechniqueSection(activite){
           <h4 style="margin:0;">${noms}</h4>
           <button class="btn ghost small" data-supprimer-binome="${b.id}">🗑️</button>
         </div>
-        <div class="essai-picker">${essaiCells}</div>
+        <div class="essai-picker essai-picker-essais">${essaiCells}</div>
         <p class="hint" style="margin:8px 0 2px;">Lancers bonus (comptent dans la note, seulement utiles si moins de 20 aux essais) :</p>
-        <div class="essai-picker">${bonusCells}</div>
-        <p style="margin:8px 0 0;"><b>Note : ${note}/20</b></p>
+        <div class="essai-picker essai-picker-bonus">${bonusCells}</div>
+        <p style="margin:8px 0 0;"><b>Note : ${note}/20</b> <span class="muted">(${essaisFaits}/10 essais faits)</span></p>
       </div>`;
   }).join('');
 
@@ -3599,8 +3610,8 @@ function renderEvaluationTechniqueSection(activite){
   // copiable-collable directement dans un autre fichier Excel.
   const notesParEleve = {};
   seance.binomes.forEach(b=>{
-    const totalEssais = b.essais.reduce((a,v)=>a+v, 0);
-    const totalBonus = b.bonus.reduce((a,v)=>a+v, 0);
+    const totalEssais = b.essais.reduce((a,v)=>a+(v||0), 0);
+    const totalBonus = b.bonus.reduce((a,v)=>a+(v||0), 0);
     const note = Math.min(20, totalEssais + totalBonus);
     b.memberIds.forEach(id=>{ notesParEleve[id] = note; });
   });
@@ -3629,7 +3640,7 @@ function renderEvaluationTechniqueSection(activite){
       <p class="hint">Cliquez sur 2 élèves ci-dessous pour créer directement leur binôme, puis cliquez sur chaque essai pour lui attribuer 0, 1 ou 2 points (recliquer fait tourner la valeur, donc modifiable à tout moment). Chaque binôme a 10 essais (note sur 20) + 2 lancers bonus optionnels. Un élève déjà évalué reste sélectionnable (utile si le nombre d'élèves est impair : il passe alors deux fois).</p>
       <div class="cb-group" style="margin-bottom:10px;">${selectionHtml || '<span class="muted">Aucun élève présent.</span>'}</div>
       ${binomeSelectionEnCours.length === 1 ? `<button class="btn secondary small" id="btnBinomeSolo" style="margin-bottom:10px;">➕ Évaluer ${participantLabel(activite, binomeSelectionEnCours[0])} seul(e) (nombre impair)</button>` : ''}
-      <div class="poules-grid" style="margin-top:14px;">${binomesHtml || `<span class="muted">Aucun binôme créé pour l'instant.</span>`}</div>
+      <div class="binomes-grid" style="margin-top:14px;">${binomesHtml || `<span class="muted">Aucun binôme créé pour l'instant.</span>`}</div>
       <div class="toolbar" style="margin-top:18px;">
         <h4 style="margin:0;">📋 Notes par ordre alphabétique</h4>
         <button class="btn secondary small" id="btnExportEvalTechnique">📊 Exporter Excel</button>

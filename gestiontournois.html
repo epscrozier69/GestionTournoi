@@ -229,11 +229,26 @@
   .defis-undo{opacity:.6;flex:0 0 auto;}
   .btn.small.defis-undo{padding:2px 6px;}
   .defis-undo:hover{opacity:1;}
-  .classement-table th:nth-child(1), .classement-table td:nth-child(1){width:60px;}
-  .classement-table th:nth-child(2), .classement-table td:nth-child(2){width:180px;overflow:hidden;text-overflow:ellipsis;}
+  /* Rang + Nom Prénom restent figées en défilant horizontalement (utile
+     quand il y a beaucoup de colonnes, une par séance). Le fond doit
+     reprendre la couleur de la ligne (zébrage tbody tr:nth-child) plutôt
+     qu'un fond fixe, sinon les 2 colonnes figées ne suivent plus le zébrage. */
+  .classement-table th:nth-child(1), .classement-table td:nth-child(1){width:60px;position:sticky;left:0;z-index:2;}
+  .classement-table th:nth-child(2), .classement-table td:nth-child(2){
+    width:180px;overflow:hidden;text-overflow:ellipsis;
+    position:sticky;left:60px;z-index:2;box-shadow:2px 0 4px rgba(0,0,0,.06);
+  }
+  .classement-table thead th:nth-child(1), .classement-table thead th:nth-child(2){z-index:3;}
+  .classement-table tbody tr:nth-child(odd) td:nth-child(1), .classement-table tbody tr:nth-child(odd) td:nth-child(2){background:#ffffff;}
+  .classement-table tbody tr:nth-child(even) td:nth-child(1), .classement-table tbody tr:nth-child(even) td:nth-child(2){background:#eef1f6;}
   /* Toutes les colonnes de chiffres (Séance 1, Séance 2..., Total) gardent la
      même largeur resserrée, quel que soit le nombre de séances affichées. */
   .classement-table th:nth-child(n+3), .classement-table td:nth-child(n+3){width:90px;}
+  /* Composition homogène (Ultimate) : poule 1 (vivier fort) en vert, poule 2
+     (vivier faible) en orange, comme les niveaux 1/2/3/4. */
+  .classement-table td.poule-forte{color:#16a34a;font-weight:700;}
+  .classement-table td.poule-faible{color:#f59e0b;font-weight:700;}
+  .th-sub{display:block;font-size:.65rem;font-weight:600;opacity:.85;}
   .win-edit-input{
     width:100%;box-sizing:border-box;text-align:center;padding:3px 2px;
     border:1px solid var(--line);border-radius:6px;font-size:.8rem;font-family:inherit;
@@ -443,7 +458,7 @@
         <button class="btn ghost small" id="btnAbandonB">Abandon</button>
       </div>
     </div>
-    <p class="hint">Barème : victoire (écart ≥ 5) = 5 pts, victoire (écart &lt; 5) = 3 pts, défaite (écart &lt; 5) = 2 pts, défaite (écart ≥ 5) = 1 pt, abandon = 0 pt.</p>
+    <p class="hint" id="scoreModalBareme"></p>
     <div class="modal-actions">
       <button class="btn ghost" id="btnAnnulerScore">Annuler</button>
       <button class="btn" id="btnValiderScore">✅ Valider</button>
@@ -1855,10 +1870,11 @@ function renameTeam(activite, teamId, newName){
   if(t){ t.nom = newName || t.nom; saveState(); renderGeneral(); }
 }
 
-// Barème de points selon l'écart de score (voir carte Règlement des feuilles
-// PDF) : victoire ou défaite "large" (écart >= 5) rapporte respectivement 5
-// ou 1 point ; victoire ou défaite "courte" (écart < 5) rapporte 3 ou 2
-// points. Un score à égalité est refusé (il doit y avoir un vainqueur).
+// Barème de points selon l'écart de score (sports de raquette — Tennis de
+// table, Badminton — voir carte Règlement des feuilles PDF) : victoire ou
+// défaite "large" (écart >= 5) rapporte respectivement 5 ou 1 point ;
+// victoire ou défaite "courte" (écart < 5) rapporte 3 ou 2 points. Un score
+// à égalité est refusé (il doit y avoir un vainqueur).
 function computeMatchPoints(scoreA, scoreB){
   if(scoreA === scoreB) return null;
   const diff = Math.abs(scoreA - scoreB);
@@ -1870,6 +1886,19 @@ function computeMatchPoints(scoreA, scoreB){
     winnerIsA,
     pointsA: winnerIsA ? pointsWinner : pointsLoser,
     pointsB: winnerIsA ? pointsLoser : pointsWinner,
+  };
+}
+// Barème de points pour les sports collectifs (Handball, Ultimate, Volley) :
+// fixe selon le résultat (pas selon l'écart), et un match nul est possible
+// (contrairement aux sports de raquette où un score à égalité est refusé).
+// Victoire = 4 pts, Nul = 2 pts chacun, Défaite = 1 pt.
+function computeMatchPointsEquipe(scoreA, scoreB){
+  if(scoreA === scoreB) return { winnerIsA:null, pointsA:2, pointsB:2 };
+  const winnerIsA = scoreA > scoreB;
+  return {
+    winnerIsA,
+    pointsA: winnerIsA ? 4 : 1,
+    pointsB: winnerIsA ? 1 : 4,
   };
 }
 // Total de points marqués (barème ci-dessus) par membre d'une poule, à partir
@@ -1959,6 +1988,9 @@ function openScoreModal(activite, matchIndex){
   const max = ACTIVITIES[activite].scoreMax || SCORE_PICKER_MAX_DEFAUT;
   renderScorePicker('scoreModalPickerA', scoreA, max);
   renderScorePicker('scoreModalPickerB', scoreB, max);
+  document.getElementById('scoreModalBareme').textContent = ACTIVITIES[activite].type === 'equipe'
+    ? 'Barème : victoire = 4 pts, match nul = 2 pts, défaite = 1 pt, abandon = 0 pt.'
+    : 'Barème : victoire (écart ≥ 5) = 5 pts, victoire (écart < 5) = 3 pts, défaite (écart < 5) = 2 pts, défaite (écart ≥ 5) = 1 pt, abandon = 0 pt.';
   document.getElementById('scoreModal').hidden = false;
 }
 function closeScoreModal(){
@@ -2006,27 +2038,32 @@ function validerScoreModal(){
   const scoreA = getScorePickerValue('scoreModalPickerA');
   const scoreB = getScorePickerValue('scoreModalPickerB');
   if(scoreA === null || scoreB === null){ alert('Cochez les deux scores.'); return; }
-  const result = computeMatchPoints(scoreA, scoreB);
+  // Sports collectifs : barème fixe par résultat (victoire/nul/défaite), match
+  // nul autorisé. Sports de raquette : barème selon l'écart, égalité refusée.
+  const estEquipe = ACTIVITIES[activite].type === 'equipe';
+  const result = estEquipe ? computeMatchPointsEquipe(scoreA, scoreB) : computeMatchPoints(scoreA, scoreB);
   if(!result){ alert('Les deux scores ne peuvent pas être égaux : il doit y avoir un vainqueur.'); return; }
   appliquerDeltaPoulePoints(activite, match, result.pointsA, result.pointsB);
   match.scoreA = scoreA; match.scoreB = scoreB;
   match.pointsA = result.pointsA; match.pointsB = result.pointsB;
-  match.winner = result.winnerIsA ? match.a : match.b;
+  match.winner = result.winnerIsA === null ? null : (result.winnerIsA ? match.a : match.b);
   match.abandon = null;
   saveState();
   closeScoreModal();
   renderActivityTab(activite);
 }
 // Abandon d'un des deux participants : il marque 0 point, l'autre remporte le
-// match avec le maximum (5 points), sans qu'un score n'ait besoin d'être saisi.
+// match avec le maximum de points prévu par le barème de l'activité, sans
+// qu'un score n'ait besoin d'être saisi.
 function abandonScoreModal(who){
   if(!scoreModalContext) return;
   const { activite, matchIndex } = scoreModalContext;
   const seance = currentSeance(activite);
   const match = seance.matches[matchIndex];
   if(!match) return;
-  const newPointsA = who === 'a' ? 0 : 5;
-  const newPointsB = who === 'a' ? 5 : 0;
+  const pointsVictoire = ACTIVITIES[activite].type === 'equipe' ? 4 : 5;
+  const newPointsA = who === 'a' ? 0 : pointsVictoire;
+  const newPointsB = who === 'a' ? pointsVictoire : 0;
   appliquerDeltaPoulePoints(activite, match, newPointsA, newPointsB);
   match.pointsA = newPointsA; match.pointsB = newPointsB;
   match.winner = who === 'a' ? match.b : match.a;
@@ -2804,7 +2841,6 @@ function renderActivityTab(activite){
     // victoires) d'une séance à l'autre.
     const seancePourClassement = currentSeance(activite);
     const typeCourant = seancePourClassement ? seancePourClassement.tournamentType : '';
-    const modePoints = typeCourant === 'poule';
     // Pour les défis (hasard/classement progressif), le classement total est
     // déjà inclus (colonne "Total") dans la carte "Classement détaillé —
     // victoires séance par séance" plus bas : pas besoin de le répéter ici.
@@ -2822,21 +2858,9 @@ function renderActivityTab(activite){
     // tableau des victoires (voir renderDefisHasardSection), pas ici en haut
     // de page — même traitement que pour le défis classement progressif.
 
-    // Classement de la séance en cours uniquement (2e colonne demandée),
-    // agrégé sur toutes les poules de la classe pour le tournoi par poule.
-    if(modePoints && seancePourClassement.poules && seancePourClassement.poules.length){
-      const seanceTotals = {};
-      seancePourClassement.poules.forEach(p=>{
-        const pts = computePoulePoints(seancePourClassement, p);
-        Object.keys(pts).forEach(id=>{ seanceTotals[id] = (seanceTotals[id]||0) + pts[id]; });
-      });
-      html += `
-        <div class="card">
-          <h3>🏅 Classement de cette séance (points de cette séance uniquement)</h3>
-          <p class="hint">Trié par poule actuelle (poule 1 = niveau le plus fort), puis par points à l'intérieur de chaque poule — un point marqué en poule 7 ne valant pas un point marqué en poule 1.</p>
-          ${renderClassementTotalPoule(students, seanceTotals, seancePourClassement)}
-        </div>`;
-    }
+    // Le classement de la séance en cours est maintenant l'une des colonnes
+    // du tableau "Classement total" (une colonne par séance), pas une carte
+    // séparée — voir renderClassementTotalCard / renderClassementParSeancePoule.
 
     html += `
       <div class="card">
@@ -3412,39 +3436,52 @@ function renderClassementTotalCard(activite){
         </div>
       </div>
       ${showTotal ? `
-      <p class="hint">Ce total additionne les points de toutes les séances de cette classe depuis le début du cycle. Un point marqué en poule 7 ne valant pas un point marqué en poule 1, le classement est d'abord trié par poule actuelle (poule 1 = niveau le plus fort), puis par points à l'intérieur de chaque poule.</p>
-      ${renderClassementTotalPoule(students, cd.poulePoints, seance)}` : ''}
+      <p class="hint">Une colonne par séance de tournoi par poule, et le total cumulé à droite.</p>
+      ${renderClassementParSeancePoule(cd, students, activite)}` : ''}
     </div>`;
 }
+// Note d'évaluation technique d'un élève, format compact (juste "X/20"), pour
+// une cellule de tableau — voir getEvalTechFragment pour la version complète.
+function getEvalTechNoteCourte(seance, studentId){
+  const b = (seance.binomes||[]).find(b=>b.memberIds.includes(studentId));
+  if(!b) return '—';
+  const totalEssais = b.essais.reduce((a,v)=>a+(v||0), 0);
+  const totalBonus = b.bonus.reduce((a,v)=>a+(v||0), 0);
+  return Math.min(20, totalEssais + totalBonus) + '/20';
+}
 
-// Classement total du tournoi par poule : un point marqué en poule 7 (face à
-// des adversaires plus faibles) ne vaut pas un point marqué en poule 1, donc
-// un simple tri par points bruts toutes poules confondues mélangerait des
-// niveaux différents. On trie donc d'abord par poule actuelle (poule 1 =
-// niveau le plus fort, cohérent avec la logique de montée/descente), puis
-// par points à l'intérieur de chaque poule. La poule de référence est celle
-// de la séance en cours (seanceRef) ; les élèves qui n'y figurent pas encore
-// (nouveaux, jamais placés en poule) sont listés en dernier.
-function renderClassementTotalPoule(students, totalMap, seanceRef){
-  const poules = (seanceRef && seanceRef.poules) || [];
+// Classement détaillé du tournoi par poule : une colonne par séance de
+// poule jouée par cette classe (points marqués ce jour-là), plus une colonne
+// Total — même principe que renderClassementParSeance pour les défis, plutôt
+// qu'une colonne "Poule" qui n'a de sens que pour une seule séance à la
+// fois. La coloration homogène/hétérogène (Ultimate) est reportée sur le nom
+// de l'élève (vert = poule 1/vivier fort, orange = poule 2/vivier faible,
+// d'après la composition et la poule de la séance la plus récente), et une
+// colonne Éval. technique est ajoutée si la dernière séance en comportait une.
+function renderClassementParSeancePoule(cd, students, activite){
+  const seancesPoule = cd.seances.filter(s=>s.poules && s.poules.length);
+  if(!seancesPoule.length) return '';
+  const perSeance = seancesPoule.map(s=>computeSeancePoulePoints(s));
+  const headerCols = seancesPoule.map(s=>`<th style="background:${PALETTE[3 + (s.numero % (PALETTE.length-3))]}">Séance ${s.numero}</th>`).join('');
+  const derniere = seancesPoule[seancesPoule.length-1];
+  const composition = derniere.compositionEquipes;
+  const compositionLabel = {homogene:'Homogène', heterogene:'Hétérogène'}[composition];
+  const showComposition = activite === 'Ultimate' && compositionLabel;
+  const showEvalTech = activite === 'Ultimate' && derniere.evalTechActif && (derniere.binomes||[]).length;
   const pouleIndex = {};
-  poules.forEach((p, idx)=>{ p.members.forEach(id=>{ pouleIndex[id] = idx; }); });
-  const sorted = students.slice().sort((a,b)=>{
-    const pa = pouleIndex[a.id], pb = pouleIndex[b.id];
-    const hasA = pa !== undefined, hasB = pb !== undefined;
-    if(hasA && hasB && pa !== pb) return pa - pb;
-    if(hasA !== hasB) return hasA ? -1 : 1;
-    return (totalMap[b.id]||0) - (totalMap[a.id]||0);
-  });
+  (derniere.poules||[]).forEach((p, idx)=>{ p.members.forEach(id=>{ pouleIndex[id] = idx; }); });
+  const sorted = students.slice().sort((a,b)=>(cd.poulePoints[b.id]||0)-(cd.poulePoints[a.id]||0));
   const rows = sorted.map((s,i)=>{
+    const cells = perSeance.map(map=>`<td>${map[s.id]||0}</td>`).join('');
     const pIdx = pouleIndex[s.id];
-    const pouleLabel = pIdx !== undefined ? (poules[pIdx].nom || `Poule ${pIdx+1}`) : '—';
+    const nomClass = composition === 'homogene' ? (pIdx === 0 ? 'poule-forte' : pIdx === 1 ? 'poule-faible' : '') : '';
     return `
       <tr>
         <td><b>${i+1}</b></td>
-        <td>${s.nomPrenom}</td>
-        <td>${pouleLabel}</td>
-        <td>${totalMap[s.id]||0}</td>
+        <td class="${nomClass}">${s.nomPrenom}</td>
+        ${cells}
+        <td><b>${cd.poulePoints[s.id]||0}</b></td>
+        ${showEvalTech ? `<td>${getEvalTechNoteCourte(derniere, s.id)}</td>` : ''}
       </tr>`;
   }).join('');
   return `
@@ -3453,8 +3490,9 @@ function renderClassementTotalPoule(students, totalMap, seanceRef){
         <thead><tr>
           <th style="background:${PALETTE[0]}">Rang</th>
           <th style="background:${PALETTE[1]}">Nom Prénom</th>
-          <th style="background:${PALETTE[3]}">Poule</th>
-          <th style="background:${PALETTE[2]}">Points</th>
+          ${headerCols}
+          <th style="background:${PALETTE[2]}">Total${showComposition ? `<br><span class="th-sub">${compositionLabel}</span>` : ''}</th>
+          ${showEvalTech ? `<th style="background:${PALETTE[4]}">Éval. technique</th>` : ''}
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>

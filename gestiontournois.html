@@ -337,21 +337,19 @@
   .score-opt:hover{border-color:var(--c1);}
   .score-opt.checked{background:#dbeafe;border-color:var(--c1);color:var(--c1);}
 
-  /* Évaluation technique Ultimate : essais/lancers bonus (0/1/2 par clic) */
-  .essai-picker{display:flex;flex-wrap:wrap;gap:5px;}
-  .essai-opt{
-    display:flex;flex-direction:column;align-items:center;justify-content:center;
-    width:42px;height:42px;border:2px solid var(--line);border-radius:8px;cursor:pointer;
-    background:#f8fafc;transition:.15s;flex-shrink:0;
+  /* Évaluation technique Ultimate : un choix direct 0/1/2 à cocher pour
+     chaque essai/lancer bonus (au lieu d'une case unique à recliquer
+     plusieurs fois pour changer sa valeur). */
+  .essai-picker{display:flex;flex-wrap:wrap;gap:8px;}
+  .essai-item{display:flex;flex-direction:column;align-items:center;gap:2px;flex-shrink:0;}
+  .essai-item .essai-num{font-size:.62rem;color:var(--muted);font-weight:700;}
+  .essai-choix{display:flex;gap:2px;}
+  .essai-btn{
+    width:22px;height:22px;border:1px solid var(--line);border-radius:5px;cursor:pointer;
+    background:#f8fafc;color:var(--muted);font-weight:800;font-size:.7rem;padding:0;
   }
-  .essai-opt:hover{border-color:var(--c1);}
-  .essai-opt .essai-num{font-size:.62rem;color:var(--muted);font-weight:700;}
-  .essai-opt .essai-val{font-size:1rem;font-weight:800;}
-  .essai-opt.essai-val-0{background:#f8fafc;}
-  .essai-opt.essai-val-1{background:#dbeafe;border-color:#60a5fa;}
-  .essai-opt.essai-val-1 .essai-val{color:#1d4ed8;}
-  .essai-opt.essai-val-2{background:#2563eb;border-color:#1d4ed8;}
-  .essai-opt.essai-val-2 .essai-val, .essai-opt.essai-val-2 .essai-num{color:#fff;}
+  .essai-btn:hover{border-color:var(--c1);}
+  .essai-btn.checked{background:#2563eb;border-color:#1d4ed8;color:#fff;}
   @media (max-width:700px){
     .modal-box.modal-box-wide{max-width:calc(100vw - 32px);}
     .score-opt{width:24px;height:24px;font-size:.68rem;}
@@ -546,6 +544,7 @@ function defaultSeance(numero, activite){
     niveaux:{}, // studentId -> 1 (meilleur) à 4 (moins bon) — Ultimate : composition d'équipes
     compositionEquipes:'aleatoire', // 'aleatoire' | 'homogene' | 'heterogene' (Ultimate)
     binomes:[], // Ultimate, évaluation technique : [{id, memberIds:[a,b], essais:[10], bonus:[2]}]
+    nombreEquipesFixe:0, // Ultimate : 0 = auto (déduit de joueursParEquipe), sinon nombre choisi manuellement
     // Ultimate uniquement : tournoi par poule et évaluation technique peuvent
     // être actifs en même temps dans une même séance (contrairement aux
     // autres activités où tournamentType est exclusif) — voir act.evaluationTechniqueAllowed.
@@ -597,6 +596,7 @@ function ensureActivityData(){
         if(!s.hasardWins) s.hasardWins = {};
         if(!s.winsOverride) s.winsOverride = {};
         if(!s.binomes) s.binomes = [];
+        if(s.nombreEquipesFixe === undefined) s.nombreEquipesFixe = 0;
         if(ACTIVITIES[a].evaluationTechniqueAllowed){
           // Rattrapage pour les séances créées avant l'ajout du double mode :
           // on retrouve le choix déjà fait via l'ancien tournamentType exclusif.
@@ -1474,9 +1474,17 @@ function exportClassementExcel(activite){
 // plusieurs équipes d'un joueur de plus plutôt que de laisser une équipe
 // minuscule (1 ou 2 joueurs) — jamais d'équipe plus petite que demandé, sauf
 // s'il n'y a vraiment pas de quoi former 2 équipes complètes.
-function generateTeams(studentIds, joueursParEquipe){
+// Détermine la taille des équipes à créer pour n élèves : soit un nombre
+// d'équipes FIXE choisi manuellement (nombreEquipesFixe, réparti le plus
+// équitablement possible), soit — par défaut — déduit du nombre de joueurs
+// par équipe souhaité (comportement historique).
+function computeTeamSizes(n, joueursParEquipe, nombreEquipesFixe){
+  if(nombreEquipesFixe) return computePouleSizesParNombre(n, nombreEquipesFixe);
+  return computePouleSizes(n, joueursParEquipe, joueursParEquipe, joueursParEquipe + 1);
+}
+function generateTeams(studentIds, joueursParEquipe, nombreEquipesFixe){
   const shuffled = shuffleArray(studentIds);
-  const tailles = computePouleSizes(shuffled.length, joueursParEquipe, joueursParEquipe, joueursParEquipe + 1);
+  const tailles = computeTeamSizes(shuffled.length, joueursParEquipe, nombreEquipesFixe);
   const teams = [];
   let idx = 0;
   tailles.forEach((taille, i)=>{
@@ -1491,13 +1499,24 @@ function generateTeams(studentIds, joueursParEquipe){
 // d'un même vivier sont donc de niveau proche entre elles, mais les deux
 // viviers ne se mélangent jamais. Les élèves sans niveau renseigné sont
 // répartis dans le vivier le moins fourni pour équilibrer les effectifs.
-function generateTeamsHomogenes(studentIds, joueursParEquipe, niveaux){
+// Avec un nombre d'équipes fixé manuellement, il est réparti entre les deux
+// viviers au prorata de leurs effectifs (au moins 1 équipe chacun).
+function generateTeamsHomogenes(studentIds, joueursParEquipe, niveaux, nombreEquipesFixe){
   const shuffled = shuffleArray(studentIds);
   const forts = shuffled.filter(id => niveaux[id] === 1 || niveaux[id] === 2);
   const faibles = shuffled.filter(id => niveaux[id] === 3 || niveaux[id] === 4);
   const sansNiveau = shuffled.filter(id => !niveaux[id]);
   sansNiveau.forEach(id => (forts.length <= faibles.length ? forts : faibles).push(id));
-  const equipes = [...generateTeams(forts, joueursParEquipe), ...generateTeams(faibles, joueursParEquipe)];
+  let nbFortsFixe, nbFaiblesFixe;
+  if(nombreEquipesFixe){
+    const total = forts.length + faibles.length;
+    nbFortsFixe = clamp(Math.round(nombreEquipesFixe * forts.length / total), 1, nombreEquipesFixe - 1);
+    nbFaiblesFixe = nombreEquipesFixe - nbFortsFixe;
+  }
+  const equipes = [
+    ...generateTeams(forts, joueursParEquipe, nbFortsFixe),
+    ...generateTeams(faibles, joueursParEquipe, nbFaiblesFixe),
+  ];
   equipes.forEach((t,i)=>{ t.id = 'equipe'+(i+1); t.nom = 'Équipe '+(i+1); });
   return equipes;
 }
@@ -1507,12 +1526,12 @@ function generateTeamsHomogenes(studentIds, joueursParEquipe, niveaux){
 // chaque équipe reçoive un mélange de niveaux tout en restant équilibrée par
 // rapport aux autres. Les élèves sans niveau renseigné sont distribués en
 // dernier, de la même façon.
-function generateTeamsHeterogenes(studentIds, joueursParEquipe, niveaux){
+function generateTeamsHeterogenes(studentIds, joueursParEquipe, niveaux, nombreEquipesFixe){
   const groupes = {1:[], 2:[], 3:[], 4:[], 0:[]};
   shuffleArray(studentIds).forEach(id => groupes[niveaux[id] || 0].push(id));
   // Nombre d'équipes et capacité de chacune calculés avec la même logique
   // que les poules (voir generateTeams) : jamais d'équipe trop petite.
-  const tailles = computePouleSizes(studentIds.length, joueursParEquipe, joueursParEquipe, joueursParEquipe + 1);
+  const tailles = computeTeamSizes(studentIds.length, joueursParEquipe, nombreEquipesFixe);
   const equipes = tailles.map((taille,i)=>({ id:'equipe'+(i+1), nom:'Équipe '+(i+1), memberIds:[], capacite:taille }));
   const nbEquipes = equipes.length;
   let idx = 0, sens = 1;
@@ -1717,11 +1736,15 @@ function onGenererPoules(activite){
 
   if(act.type === 'equipe'){
     const joueursParEquipe = clamp(seance.joueursParEquipe || 4, 2, 15);
-    seance.config = { terrains, nombrePoules, joueursParEquipe };
+    // Nombre d'équipes fixé manuellement (0 = automatique, déduit du nombre
+    // de joueurs par équipe ci-dessus) : permet de reprendre la main quand la
+    // répartition automatique ne convenait pas.
+    const nombreEquipesFixe = activite === 'Ultimate' ? (seance.nombreEquipesFixe || 0) : 0;
+    seance.config = { terrains, nombrePoules, joueursParEquipe, nombreEquipesFixe };
     const composition = activite === 'Ultimate' ? (seance.compositionEquipes || 'aleatoire') : 'aleatoire';
-    if(composition === 'homogene') seance.teams = generateTeamsHomogenes(studentIds, joueursParEquipe, seance.niveaux || {});
-    else if(composition === 'heterogene') seance.teams = generateTeamsHeterogenes(studentIds, joueursParEquipe, seance.niveaux || {});
-    else seance.teams = generateTeams(studentIds, joueursParEquipe);
+    if(composition === 'homogene') seance.teams = generateTeamsHomogenes(studentIds, joueursParEquipe, seance.niveaux || {}, nombreEquipesFixe);
+    else if(composition === 'heterogene') seance.teams = generateTeamsHeterogenes(studentIds, joueursParEquipe, seance.niveaux || {}, nombreEquipesFixe);
+    else seance.teams = generateTeams(studentIds, joueursParEquipe, nombreEquipesFixe);
     // En composition homogène, les équipes sont déjà créées des plus fortes
     // aux plus faibles (voir generateTeamsHomogenes) : on garde cet ordre pour
     // que la poule 1 reçoive les meilleures équipes, comme demandé — sinon
@@ -2484,6 +2507,24 @@ function checkboxRangeHtml(groupId, label, min, max, current){
       <div class="cb-group" id="${groupId}">${opts.join('')}</div>
     </div>`;
 }
+// Nombre d'équipes fixé manuellement (Ultimate) : 0 = "Auto" (déduit du
+// nombre de joueurs par équipe), sinon un nombre choisi directement — pour
+// reprendre la main quand la répartition automatique ne convient pas.
+function nombreEquipesFixeHtml(groupId, current){
+  const opts = [{v:0, label:'Auto'}];
+  for(let v=2; v<=15; v++) opts.push({v, label:String(v)});
+  return `
+    <div class="field-row-cb">
+      <label>Nombre d'équipes (Auto = déduit du nombre de joueurs par équipe ci-dessus)</label>
+      <div class="cb-group" id="${groupId}">
+        ${opts.map(o=>`
+          <label class="cb-opt ${current===o.v?'checked':''}">
+            <input type="checkbox" data-cb-value="${o.v}" ${current===o.v?'checked':''}>
+            <span class="code">${o.label}</span>
+          </label>`).join('')}
+      </div>
+    </div>`;
+}
 function wireCheckboxRange(root, groupId, onSelect){
   // `root` limite la recherche au panneau de l'activité concernée : ce même
   // id de groupe existe une fois par activité (5 panneaux dans la page).
@@ -2638,6 +2679,10 @@ function renderGeneral(){
 function renderActivityTab(activite){
   const panel = document.getElementById('panel-'+slug(activite));
   if(!panel) return;
+  // Reconstruire tout le HTML du panneau à chaque petite action (cocher un
+  // score, un niveau...) faisait sauter le défilement en haut de page à
+  // chaque clic. On mémorise la position et on la restaure juste après.
+  const scrollAvant = window.scrollY;
   const act = ACTIVITIES[activite];
   const data = STATE.activityData[activite];
   const classesDisponibles = [...new Set(STATE.allStudents.map(s=>s.classe))].sort((a,b)=>a.localeCompare(b,'fr'));
@@ -2809,6 +2854,7 @@ function renderActivityTab(activite){
   }
 
   panel.innerHTML = html;
+  window.scrollTo(0, scrollAvant);
 
   // IMPORTANT : toutes les activités partagent les mêmes id (ex. "selectClasse",
   // "btnNouvelleSeance"...) car chaque panneau reprend le même gabarit. Comme
@@ -2863,10 +2909,10 @@ function renderActivityTab(activite){
   panel.querySelectorAll('[data-supprimer-binome]').forEach(btn=>{
     btn.addEventListener('click', ()=>supprimerBinome(activite, btn.dataset.supprimerBinome));
   });
-  panel.querySelectorAll('[data-cycler-essai]').forEach(cell=>{
-    cell.addEventListener('click', ()=>{
-      const [binomeId, index, estBonus] = cell.dataset.cyclerEssai.split('::');
-      cyclerEssaiBinome(activite, binomeId, parseInt(index, 10), estBonus === '1');
+  panel.querySelectorAll('[data-set-essai]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const [binomeId, index, estBonus, valeur] = btn.dataset.setEssai.split('::');
+      setEssaiBinome(activite, binomeId, parseInt(index, 10), estBonus === '1', parseInt(valeur, 10));
     });
   });
 
@@ -2905,6 +2951,10 @@ function renderActivityTab(activite){
   });
   wireCheckboxRange(panel, 'cfgJoueursEquipeCbGroup', (v)=>{
     currentSeance(activite).joueursParEquipe = v;
+    saveState();
+  });
+  wireCheckboxRange(panel, 'cfgNombreEquipesFixeCbGroup', (v)=>{
+    currentSeance(activite).nombreEquipesFixe = v;
     saveState();
   });
   wireCheckboxRange(panel, 'cfgNombrePoulesCbGroup', (v)=>{
@@ -3069,6 +3119,9 @@ function renderPouleConfigCard(activite){
   let fields = checkboxRangeHtml('pouleTerrainCbGroup', act.terrainLabel+' disponibles', act.pouleTerrainMin, act.pouleTerrainMax, seance.pouleTerrains || act.pouleTerrainMin);
   if(act.type === 'equipe'){
     fields += checkboxRangeHtml('cfgJoueursEquipeCbGroup', 'Joueurs par équipe', 2, 15, seance.joueursParEquipe || 4);
+    if(activite === 'Ultimate'){
+      fields += nombreEquipesFixeHtml('cfgNombreEquipesFixeCbGroup', seance.nombreEquipesFixe || 0);
+    }
     fields += checkboxRangeHtml('cfgNombrePoulesCbGroup', 'Nombre de poules', 1, 10, seance.nombrePoules || 2);
     fields += '<p class="hint">Les équipes sont réparties le plus équitablement possible entre les poules, pour équilibrer le nombre de matchs à jouer dans chacune.</p>';
     if(activite === 'Ultimate'){
@@ -3473,14 +3526,13 @@ function supprimerBinome(activite, binomeId){
   saveState();
   renderActivityTab(activite);
 }
-// Un clic fait tourner la valeur de l'essai 0 -> 1 -> 2 -> 0 (permet de
-// corriger facilement en reçliquant, comme demandé).
-function cyclerEssaiBinome(activite, binomeId, index, estBonus){
+// Valeur choisie directement (0, 1 ou 2) pour un essai, en un seul clic.
+function setEssaiBinome(activite, binomeId, index, estBonus, valeur){
   const seance = currentSeance(activite);
   const b = (seance.binomes||[]).find(b=>b.id===binomeId);
   if(!b) return;
   const arr = estBonus ? b.bonus : b.essais;
-  arr[index] = (arr[index] + 1) % 3;
+  arr[index] = valeur;
   saveState();
   renderActivityTab(activite);
 }
@@ -3513,14 +3565,18 @@ function renderEvaluationTechniqueSection(activite){
     // suffi à atteindre 20 — la note ne dépasse jamais 20/20.
     const note = Math.min(20, totalEssais + totalBonus);
     const noms = b.memberIds.map(id=>participantLabel(activite, id)).join(' / ');
-    const essaiCells = b.essais.map((v,i)=>`
-      <div class="essai-opt essai-val-${v}" data-cycler-essai="${b.id}::${i}::0">
-        <span class="essai-num">${i+1}</span><span class="essai-val">${v}</span>
-      </div>`).join('');
-    const bonusCells = b.bonus.map((v,i)=>`
-      <div class="essai-opt essai-val-${v}" data-cycler-essai="${b.id}::${i}::1">
-        <span class="essai-num">B${i+1}</span><span class="essai-val">${v}</span>
-      </div>`).join('');
+    // Un choix direct 0/1/2 à cocher pour chaque essai (au lieu d'une seule
+    // case qu'il fallait recliquer plusieurs fois pour faire tourner la
+    // valeur) : plus rapide et sans ambiguïté sur la valeur obtenue.
+    const essaiItem = (v, i, estBonus, labelPrefix)=>`
+      <div class="essai-item">
+        <span class="essai-num">${labelPrefix}${i+1}</span>
+        <div class="essai-choix">
+          ${[0,1,2].map(val=>`<button class="essai-btn ${v===val?'checked':''}" data-set-essai="${b.id}::${i}::${estBonus}::${val}">${val}</button>`).join('')}
+        </div>
+      </div>`;
+    const essaiCells = b.essais.map((v,i)=>essaiItem(v, i, 0, '')).join('');
+    const bonusCells = b.bonus.map((v,i)=>essaiItem(v, i, 1, 'B')).join('');
     return `
       <div class="poule-card">
         <div class="toolbar" style="margin-bottom:6px;">

@@ -341,20 +341,21 @@
      chaque essai/lancer bonus (au lieu d'une case unique à recliquer
      plusieurs fois pour changer sa valeur). */
   .essai-picker{display:flex;flex-wrap:wrap;gap:8px;}
-  /* 10 essais toujours sur 2 lignes de 5 (au lieu de flotter selon la
-     largeur disponible), et 2 binômes affichables côte à côte. */
-  .essai-picker-essais{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;}
-  .essai-picker-bonus{display:grid;grid-template-columns:repeat(2,1fr);gap:6px;max-width:120px;}
-  .binomes-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;}
-  @media (max-width:820px){
-    .binomes-grid{grid-template-columns:1fr;}
-  }
-  .essai-item{display:flex;flex-direction:column;align-items:center;gap:2px;flex-shrink:0;}
-  .essai-item .essai-num{font-size:.62rem;color:var(--muted);font-weight:700;}
-  .essai-choix{display:flex;gap:2px;}
+  /* Les essais s'adaptent à la largeur de la carte (plutôt qu'un nombre de
+     colonnes figé) : sur une carte assez large (2 binômes par ligne sur
+     iPad portrait), ça tient sur 2 lignes de 5 ; une carte plus étroite (3
+     binômes par ligne) passe sur davantage de lignes plutôt que de
+     déborder. Au moins 2 binômes côte à côte, 3 dès que la largeur le
+     permet (iPad paysage, ordinateur). */
+  .essai-picker-essais{display:grid;grid-template-columns:repeat(auto-fill,minmax(58px,1fr));gap:6px;}
+  .essai-picker-bonus{display:grid;grid-template-columns:repeat(2,1fr);gap:6px;max-width:150px;}
+  .binomes-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;}
+  .essai-item{display:flex;flex-direction:column;align-items:center;gap:3px;flex-shrink:0;}
+  .essai-item .essai-num{font-size:.8rem;color:var(--ink);font-weight:800;}
+  .essai-choix{display:flex;gap:3px;}
   .essai-btn{
-    width:22px;height:22px;border:1px solid var(--line);border-radius:5px;cursor:pointer;
-    background:#f8fafc;color:var(--muted);font-weight:800;font-size:.7rem;padding:0;
+    width:28px;height:28px;border:1px solid var(--line);border-radius:6px;cursor:pointer;
+    background:#f8fafc;color:var(--muted);font-weight:800;font-size:.82rem;padding:0;
   }
   .essai-btn:hover{border-color:var(--c1);}
   .essai-btn.checked{background:#2563eb;border-color:#1d4ed8;color:#fff;}
@@ -3546,7 +3547,9 @@ function setEssaiBinome(activite, binomeId, index, estBonus, valeur){
   const b = (seance.binomes||[]).find(b=>b.id===binomeId);
   if(!b) return;
   const arr = estBonus ? b.bonus : b.essais;
-  arr[index] = valeur;
+  // Recliquer sur la valeur déjà cochée la décoche (retour à "pas encore
+  // fait") au lieu de rester bloqué dessus.
+  arr[index] = (arr[index] === valeur) ? null : valeur;
   saveState();
   renderActivityTab(activite);
 }
@@ -3590,7 +3593,7 @@ function renderEvaluationTechniqueSection(activite){
           ${[0,1,2].map(val=>`<button class="essai-btn ${v===val?'checked':''}" data-set-essai="${b.id}::${i}::${estBonus}::${val}">${val}</button>`).join('')}
         </div>
       </div>`;
-    const essaiCells = b.essais.map((v,i)=>essaiItem(v, i, 0, '')).join('');
+    const essaiCells = b.essais.map((v,i)=>essaiItem(v, i, 0, 'L')).join('');
     const bonusCells = b.bonus.map((v,i)=>essaiItem(v, i, 1, 'B')).join('');
     return `
       <div class="poule-card">

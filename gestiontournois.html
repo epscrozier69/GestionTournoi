@@ -246,8 +246,10 @@
   .classement-table th:nth-child(n+3), .classement-table td:nth-child(n+3){width:90px;}
   /* Composition homogène (Ultimate) : poule 1 (vivier fort) en vert, poule 2
      (vivier faible) en orange, comme les niveaux 1/2/3/4. */
-  .classement-table td.poule-forte{color:#16a34a;font-weight:700;}
-  .classement-table td.poule-faible{color:#f59e0b;font-weight:700;}
+  /* Fond plein (pas juste du texte coloré) pour rester lisible sur tablette,
+     y compris sur une ligne zébrée grise. */
+  .classement-table td.poule-forte{background:#16a34a;color:#fff;font-weight:800;}
+  .classement-table td.poule-faible{background:#dc2626;color:#fff;font-weight:800;}
   .th-sub{display:block;font-size:.65rem;font-weight:600;opacity:.85;}
   .win-edit-input{
     width:100%;box-sizing:border-box;text-align:center;padding:3px 2px;
@@ -3471,31 +3473,46 @@ function getEvalTechNoteCourte(seance, studentId){
 // poule jouée par cette classe (points marqués ce jour-là), plus une colonne
 // Total — même principe que renderClassementParSeance pour les défis, plutôt
 // qu'une colonne "Poule" qui n'a de sens que pour une seule séance à la
-// fois. La coloration homogène/hétérogène (Ultimate) est reportée sur le nom
-// de l'élève (vert = poule 1/vivier fort, orange = poule 2/vivier faible,
-// d'après la composition et la poule de la séance la plus récente), et une
-// colonne Éval. technique est ajoutée si la dernière séance en comportait une.
+// fois. Composition homogène (Ultimate) : la case de points de CHAQUE séance
+// est coloriée selon la poule de CETTE séance-là (vert = poule 1/vivier
+// fort, orange = poule 2/vivier faible) ; en hétérogène (ou aléatoire), la
+// case reste en noir. Un élève absent/dispensé cette séance-là affiche son
+// statut plutôt qu'un 0 trompeur. Une colonne Éval. technique est ajoutée si
+// la dernière séance en comportait une.
 function renderClassementParSeancePoule(cd, students, activite){
   const seancesPoule = cd.seances.filter(s=>s.poules && s.poules.length);
   if(!seancesPoule.length) return '';
   const perSeance = seancesPoule.map(s=>computeSeancePoulePointsParEleve(s, activite));
-  const headerCols = seancesPoule.map(s=>`<th style="background:${PALETTE[3 + (s.numero % (PALETTE.length-3))]}">Séance ${s.numero}</th>`).join('');
+  // Poule (et donc coloration homogène) de chaque élève, séance par séance :
+  // ça peut changer d'une séance à l'autre (composition différente, montée-
+  // descente...), donc c'est calculé pour chaque colonne indépendamment.
+  const pouleIndexParSeance = seancesPoule.map(s=>{
+    const idx = {};
+    (s.poules||[]).forEach((p, pi)=>{ p.members.forEach(id=>{ idx[id] = pi; }); });
+    return idx;
+  });
+  const headerCols = seancesPoule.map(s=>{
+    const compLabel = activite === 'Ultimate' ? {homogene:'Homogène', heterogene:'Hétérogène'}[s.compositionEquipes] : null;
+    return `<th style="background:${PALETTE[3 + (s.numero % (PALETTE.length-3))]}">Séance ${s.numero}${compLabel ? `<br><span class="th-sub">${compLabel}</span>` : ''}</th>`;
+  }).join('');
   const derniere = seancesPoule[seancesPoule.length-1];
-  const composition = derniere.compositionEquipes;
-  const compositionLabel = {homogene:'Homogène', heterogene:'Hétérogène'}[composition];
-  const showComposition = activite === 'Ultimate' && compositionLabel;
   const showEvalTech = activite === 'Ultimate' && derniere.evalTechActif && (derniere.binomes||[]).length;
-  const pouleIndex = {};
-  (derniere.poules||[]).forEach((p, idx)=>{ p.members.forEach(id=>{ pouleIndex[id] = idx; }); });
   const sorted = students.slice().sort((a,b)=>(cd.poulePoints[b.id]||0)-(cd.poulePoints[a.id]||0));
   const rows = sorted.map((s,i)=>{
-    const cells = perSeance.map(map=>`<td>${map[s.id]||0}</td>`).join('');
-    const pIdx = pouleIndex[s.id];
-    const nomClass = composition === 'homogene' ? (pIdx === 0 ? 'poule-forte' : pIdx === 1 ? 'poule-faible' : '') : '';
+    const cells = seancesPoule.map((se,si)=>{
+      if(se.absents.includes(s.id)){
+        const statut = se.absentReasons && se.absentReasons[s.id] && PRESENCE_STATUTS[se.absentReasons[s.id]];
+        return `<td class="muted">${statut ? statut.label : '—'}</td>`;
+      }
+      const val = perSeance[si][s.id] || 0;
+      const pIdx = pouleIndexParSeance[si][s.id];
+      const cls = se.compositionEquipes === 'homogene' ? (pIdx === 0 ? 'poule-forte' : pIdx === 1 ? 'poule-faible' : '') : '';
+      return `<td class="${cls}">${val}</td>`;
+    }).join('');
     return `
       <tr>
         <td><b>${i+1}</b></td>
-        <td class="${nomClass}">${s.nomPrenom}</td>
+        <td>${s.nomPrenom}</td>
         ${cells}
         <td><b>${cd.poulePoints[s.id]||0}</b></td>
         ${showEvalTech ? `<td>${getEvalTechNoteCourte(derniere, s.id)}</td>` : ''}
@@ -3508,7 +3525,7 @@ function renderClassementParSeancePoule(cd, students, activite){
           <th style="background:${PALETTE[0]}">Rang</th>
           <th style="background:${PALETTE[1]}">Nom Prénom</th>
           ${headerCols}
-          <th style="background:${PALETTE[2]}">Total${showComposition ? `<br><span class="th-sub">${compositionLabel}</span>` : ''}</th>
+          <th style="background:${PALETTE[2]}">Total</th>
           ${showEvalTech ? `<th style="background:${PALETTE[4]}">Éval. technique</th>` : ''}
         </tr></thead>
         <tbody>${rows}</tbody>

@@ -118,7 +118,8 @@
   }
   .seance-tabs button:hover{color:var(--ink);}
   .seance-tabs button.active{background:var(--c7);color:#fff;box-shadow:0 3px 10px rgba(37,99,235,.3);}
-  .seance-tab-date{font-size:.68rem;font-weight:600;opacity:.8;}
+  .seance-tab-date{font-size:.68rem;font-weight:600;opacity:.8;border-bottom:1px dotted currentColor;cursor:pointer;}
+  .seance-tab-date:hover{opacity:1;}
   /* Chaque classe importée est sa propre vignette (même gabarit que les
      cartes de l'appli : coins arrondis, ombre), plutôt qu'une pastille dans
      un conteneur partagé. La classe active se distingue par sa pleine
@@ -240,6 +241,9 @@
   .classement-table th, .classement-table td{padding:4px 6px;}
   .classement-table th:nth-child(1), .classement-table td:nth-child(1){width:44px;position:sticky;left:0;z-index:2;}
   .classement-table th:nth-child(2), .classement-table td:nth-child(2){
+    /* Largeur par défaut (tableaux sans largeur calculée dynamiquement,
+       ex. défis) ; renderClassementParSeancePoule la surcharge en ligne pour
+       s'ajuster au nom le plus long. */
     width:150px;overflow:hidden;text-overflow:ellipsis;
     position:sticky;left:44px;z-index:2;box-shadow:2px 0 4px rgba(0,0,0,.06);
   }
@@ -584,7 +588,8 @@ function defaultSeance(numero, activite){
     compositionEquipes:'aleatoire', // 'aleatoire' | 'homogene' | 'heterogene' (Ultimate)
     binomes:[], // Ultimate, évaluation technique : [{id, memberIds:[a,b], essais:[10], bonus:[2]}]
     nombreEquipesFixe:0, // Ultimate : 0 = auto (déduit de joueursParEquipe), sinon nombre choisi manuellement
-    nombreRencontres:0, // tournoi par poule : 0 = auto (règle habituelle selon la taille), sinon nb de fois où chaque paire se rencontre
+    nombreRencontresPoule3:0, // tournoi par poule, poules de 3 : 0 = auto (aller-retour), sinon nb de rencontres par paire
+    nombreRencontresPoule4:0, // tournoi par poule, poules de 4 : 0 = auto (aller seul), sinon nb de rencontres par paire
     // Ultimate uniquement : tournoi par poule et évaluation technique peuvent
     // être actifs en même temps dans une même séance (contrairement aux
     // autres activités où tournamentType est exclusif) — voir act.evaluationTechniqueAllowed.
@@ -637,7 +642,8 @@ function ensureActivityData(){
         if(!s.winsOverride) s.winsOverride = {};
         if(!s.binomes) s.binomes = [];
         if(s.nombreEquipesFixe === undefined) s.nombreEquipesFixe = 0;
-        if(s.nombreRencontres === undefined) s.nombreRencontres = 0;
+        if(s.nombreRencontresPoule3 === undefined) s.nombreRencontresPoule3 = 0;
+        if(s.nombreRencontresPoule4 === undefined) s.nombreRencontresPoule4 = 0;
         if(!s.dateCreation) s.dateCreation = ''; // séances créées avant l'ajout de ce champ : date inconnue
         if(ACTIVITIES[a].evaluationTechniqueAllowed){
           // Rattrapage pour les séances créées avant l'ajout du double mode :
@@ -866,6 +872,24 @@ function formatHeureSync(iso){
 function formatDateSeance(iso){
   if(!iso) return '';
   return new Date(iso).toLocaleDateString('fr-FR', {day:'2-digit', month:'2-digit'});
+}
+// Modifie la date d'une séance (affichée sous son onglet) : utile pour les
+// séances créées avant l'ajout de ce champ, ou pour corriger une date.
+function editerDateSeance(activite, seanceIndex){
+  const cd = currentClasseData(activite);
+  const seance = cd.seances[seanceIndex];
+  if(!seance) return;
+  const defaut = seance.dateCreation ? new Date(seance.dateCreation).toLocaleDateString('fr-FR') : '';
+  const saisie = prompt('Date de la séance (jj/mm/aaaa) :', defaut);
+  if(saisie === null) return;
+  const m = saisie.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if(!m){ alert('Format invalide. Utilisez jj/mm/aaaa (ex : 05/10/2026).'); return; }
+  const jour = parseInt(m[1], 10), mois = parseInt(m[2], 10), annee = parseInt(m[3], 10);
+  const d = new Date(annee, mois - 1, jour, 12); // midi pour éviter tout décalage de fuseau horaire
+  if(isNaN(d.getTime()) || d.getMonth() !== mois - 1){ alert('Date invalide.'); return; }
+  seance.dateCreation = d.toISOString();
+  saveState();
+  renderActivityTab(activite);
 }
 function setSyncStatus(state){
   syncStatusActuel = state;
@@ -2071,7 +2095,20 @@ function validerScoreModal(){
   if(!match) return;
   const scoreA = getScorePickerValue('scoreModalPickerA');
   const scoreB = getScorePickerValue('scoreModalPickerB');
-  if(scoreA === null || scoreB === null){ alert('Cochez les deux scores.'); return; }
+  if(scoreA === null && scoreB === null){
+    // Les deux scores décochés : on efface le résultat existant (le match
+    // redevient "non joué") au lieu d'obliger à ressaisir un résultat.
+    match.scoreA = null; match.scoreB = null;
+    match.pointsA = null; match.pointsB = null;
+    match.winner = null;
+    match.abandon = null;
+    recomputeCumulativeTotals(currentClasseData(activite), activite);
+    saveState();
+    closeScoreModal();
+    renderActivityTab(activite);
+    return;
+  }
+  if(scoreA === null || scoreB === null){ alert('Cochez les deux scores (ou décochez les deux pour effacer ce résultat).'); return; }
   // Sports collectifs : barème fixe par résultat (victoire/nul/défaite), match
   // nul autorisé. Sports de raquette : barème selon l'écart, égalité refusée.
   const estEquipe = ACTIVITIES[activite].type === 'equipe';
@@ -2182,24 +2219,17 @@ function onGenererMatchs(activite){
   seance.poules.forEach((p, pi) => {
     const table = (pi % terrains) + 1;
     const tableSlot = Math.floor(pi / terrains) + 1;
-    let pairs;
-    if(seance.nombreRencontres){
-      // Nombre de rencontres par paire choisi manuellement (utile surtout
-      // pour une petite poule, ex. 2 équipes, où l'aller-retour habituel ne
-      // fait que 2 matchs) : on répète le tour complet ce nombre de fois, en
-      // alternant le sens à chaque passage pour équilibrer domicile/extérieur.
-      const aller = roundRobinRounds(p.members).flat();
-      pairs = [];
-      for(let r=0; r<seance.nombreRencontres; r++){
-        pairs.push(...(r % 2 === 0 ? aller : aller.map(([a,b])=>[b,a])));
-      }
-    } else {
-      // Auto : poule de 3 -> aller-retour (chaque paire se rencontre 2 fois
-      // = 6 matchs) ; poule de 4 -> aller seul (chaque paire 1 fois, tout le
-      // monde s'affronte = 6 matchs aussi) ; autres tailles (sports
-      // collectifs) -> aller-retour par défaut.
-      const aller = roundRobinRounds(p.members).flat();
-      pairs = p.members.length === 4 ? aller : [...aller, ...aller.map(([a,b])=>[b,a])];
+    // Nombre de rencontres par paire, réglable séparément pour les poules de
+    // 3 et de 4 (0 = auto : poule de 3 -> aller-retour, poule de 4 -> aller
+    // seul) ; les autres tailles (sports collectifs) restent en aller-retour.
+    let nombreRencontres;
+    if(p.members.length === 3) nombreRencontres = seance.nombreRencontresPoule3 || 2;
+    else if(p.members.length === 4) nombreRencontres = seance.nombreRencontresPoule4 || 1;
+    else nombreRencontres = 2;
+    const aller = roundRobinRounds(p.members).flat();
+    const pairs = [];
+    for(let r=0; r<nombreRencontres; r++){
+      pairs.push(...(r % 2 === 0 ? aller : aller.map(([a,b])=>[b,a])));
     }
     pairs.forEach(([a,b], i)=>{
       matches.push({ poule:p.nom, tour:i+1, vague:1, table, tableSlot, a, b, winner:null });
@@ -2654,13 +2684,15 @@ function nombreEquipesFixeHtml(groupId, current){
 // Nombre de fois où chaque paire se rencontre dans une poule : 0 = "Auto"
 // (règle habituelle selon la taille de la poule), sinon un nombre choisi
 // directement — utile surtout pour une petite poule (ex. 2 équipes) où
-// l'aller-retour habituel ne fait que 2 matchs.
-function nombreRencontresHtml(groupId, current){
+// l'aller-retour habituel ne fait que 2 matchs. Un contrôle distinct existe
+// pour les poules de 3 et de 4 (voir renderPoulesSection), pour pouvoir
+// régler l'un sans toucher à l'autre.
+function nombreRencontresHtml(groupId, label, current){
   const opts = [{v:0, label:'Auto'}];
   for(let v=1; v<=6; v++) opts.push({v, label:String(v)});
   return `
     <div class="field-row-cb">
-      <label>Nombre de rencontres par paire (Auto = 2, sauf poule de 4 = 1)</label>
+      <label>${label}</label>
       <div class="cb-group" id="${groupId}">
         ${opts.map(o=>`
           <label class="cb-opt ${current===o.v?'checked':''}">
@@ -2901,7 +2933,7 @@ function renderActivityTab(activite){
         <div class="toolbar" style="margin-bottom:0;">
           <div class="seance-tabs">
             ${cd.seances.length
-              ? cd.seances.map((s,i)=>`<button class="${i===cd.currentSeanceIndex?'active':''}" data-seance-index="${i}">Séance ${s.numero}${formatDateSeance(s.dateCreation) ? `<span class="seance-tab-date">${formatDateSeance(s.dateCreation)}</span>` : ''}</button>`).join('')
+              ? cd.seances.map((s,i)=>`<button class="${i===cd.currentSeanceIndex?'active':''}" data-seance-index="${i}">Séance ${s.numero}<span class="seance-tab-date" data-edit-date="${i}">${formatDateSeance(s.dateCreation) || '+ date'}</span></button>`).join('')
               : '<span class="muted">Aucune séance pour l\'instant</span>'}
           </div>
           <div style="display:flex;gap:6px;">
@@ -3017,6 +3049,12 @@ function renderActivityTab(activite){
   panel.querySelectorAll('[data-seance-index]').forEach(btn=>{
     btn.addEventListener('click', ()=>switchSeance(activite, parseInt(btn.dataset.seanceIndex, 10)));
   });
+  panel.querySelectorAll('[data-edit-date]').forEach(span=>{
+    span.addEventListener('click', (e)=>{
+      e.stopPropagation(); // ne pas aussi déclencher le changement de séance
+      editerDateSeance(activite, parseInt(span.dataset.editDate, 10));
+    });
+  });
   panel.querySelectorAll('[data-open-presence]').forEach(btn=>{
     btn.addEventListener('click', ()=>openPresenceModal(activite, btn.dataset.openPresence));
   });
@@ -3089,8 +3127,12 @@ function renderActivityTab(activite){
     currentSeance(activite).nombreEquipesFixe = v;
     saveState();
   });
-  wireCheckboxRange(panel, 'cfgNombreRencontresCbGroup', (v)=>{
-    currentSeance(activite).nombreRencontres = v;
+  wireCheckboxRange(panel, 'cfgNombreRencontresPoule3CbGroup', (v)=>{
+    currentSeance(activite).nombreRencontresPoule3 = v;
+    saveState();
+  });
+  wireCheckboxRange(panel, 'cfgNombreRencontresPoule4CbGroup', (v)=>{
+    currentSeance(activite).nombreRencontresPoule4 = v;
     saveState();
   });
   wireCheckboxRange(panel, 'cfgNombrePoulesCbGroup', (v)=>{
@@ -3370,9 +3412,10 @@ function renderPoulesSection(activite){
           </div>`;
         }).join('')}
       </div>
-      ${nombreRencontresHtml('cfgNombreRencontresCbGroup', seance.nombreRencontres || 0)}
+      ${nombreRencontresHtml('cfgNombreRencontresPoule3CbGroup', 'Poules de 3 : nombre de rencontres par paire (Auto = 2)', seance.nombreRencontresPoule3 || 0)}
+      ${nombreRencontresHtml('cfgNombreRencontresPoule4CbGroup', 'Poules de 4 : nombre de rencontres par paire (Auto = 1)', seance.nombreRencontresPoule4 || 0)}
       <button class="btn secondary" id="btnGenererMatchs">📅 Générer les matchs</button>
-      <p class="hint" style="margin-top:8px;">Auto : poule de 3 -> aller-retour (chaque paire se rencontre 2 fois) ; poule de 4 -> aller seul (chaque paire se rencontre 1 fois, tout le monde s'affronte) — 6 matchs dans les deux cas. Sinon, choisissez vous-même le nombre de rencontres par paire ci-dessus (utile notamment pour une petite poule).</p>
+      <p class="hint" style="margin-top:8px;">Auto : poule de 3 -> aller-retour (chaque paire se rencontre 2 fois) ; poule de 4 -> aller seul (chaque paire se rencontre 1 fois, tout le monde s'affronte) — 6 matchs dans les deux cas. Sinon, réglez séparément le nombre de rencontres pour les poules de 3 et de 4 ci-dessus (les autres tailles de poule restent en aller-retour).</p>
     </div>`;
 }
 
@@ -3557,6 +3600,11 @@ function renderClassementParSeancePoule(cd, students, activite){
     return classementPouleSortDir === 'asc' ? cmp : -cmp;
   });
   const fleche = (field)=> classementPouleSortField === field ? (classementPouleSortDir === 'asc' ? ' ▲' : ' ▼') : '';
+  // Largeur de la colonne Nom Prénom ajustée au nom le plus long affiché
+  // (au lieu d'une largeur fixe qui laissait un grand vide pour les noms
+  // courts), plutôt qu'une largeur fixe.
+  const maxNomLen = Math.max(8, ...sorted.map(s=>s.nomPrenom.length));
+  const largeurNom = Math.min(260, maxNomLen * 7.2 + 20);
   const rows = sorted.map((s,i)=>{
     const cells = seancesPoule.map((se,si)=>{
       if(se.absents.includes(s.id)){
@@ -3586,7 +3634,7 @@ function renderClassementParSeancePoule(cd, students, activite){
         <thead>
         <tr>
           <th rowspan="2" style="background:${PALETTE[0]}">Rang</th>
-          <th rowspan="2" style="background:${PALETTE[1]}" data-sort-classement="nom">Nom Prénom${fleche('nom')}</th>
+          <th rowspan="2" style="background:${PALETTE[1]};width:${largeurNom}px;" data-sort-classement="nom">Nom Prénom${fleche('nom')}</th>
           ${headerRow1}
           <th rowspan="2" style="background:${PALETTE[2]}" data-sort-classement="total">Total${fleche('total')}</th>
         </tr>

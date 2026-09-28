@@ -114,9 +114,11 @@
   .seance-tabs button{
     border:none;background:#f1f5f9;color:var(--muted);padding:9px 18px;border-radius:999px;cursor:pointer;
     font-weight:700;font-size:.92rem;transition:.15s;
+    display:flex;flex-direction:column;align-items:center;gap:1px;line-height:1.15;
   }
   .seance-tabs button:hover{color:var(--ink);}
   .seance-tabs button.active{background:var(--c7);color:#fff;box-shadow:0 3px 10px rgba(37,99,235,.3);}
+  .seance-tab-date{font-size:.68rem;font-weight:600;opacity:.8;}
   /* Chaque classe importée est sa propre vignette (même gabarit que les
      cartes de l'appli : coins arrondis, ombre), plutôt qu'une pastille dans
      un conteneur partagé. La classe active se distingue par sa pleine
@@ -233,17 +235,20 @@
      quand il y a beaucoup de colonnes, une par séance). Le fond doit
      reprendre la couleur de la ligne (zébrage tbody tr:nth-child) plutôt
      qu'un fond fixe, sinon les 2 colonnes figées ne suivent plus le zébrage. */
-  .classement-table th:nth-child(1), .classement-table td:nth-child(1){width:60px;position:sticky;left:0;z-index:2;}
+  /* Colonnes resserrées (moins de marge, largeurs réduites) pour une lecture
+     plus facile quand il y a beaucoup de colonnes (une par séance). */
+  .classement-table th, .classement-table td{padding:4px 6px;}
+  .classement-table th:nth-child(1), .classement-table td:nth-child(1){width:44px;position:sticky;left:0;z-index:2;}
   .classement-table th:nth-child(2), .classement-table td:nth-child(2){
-    width:180px;overflow:hidden;text-overflow:ellipsis;
-    position:sticky;left:60px;z-index:2;box-shadow:2px 0 4px rgba(0,0,0,.06);
+    width:150px;overflow:hidden;text-overflow:ellipsis;
+    position:sticky;left:44px;z-index:2;box-shadow:2px 0 4px rgba(0,0,0,.06);
   }
   .classement-table thead th:nth-child(1), .classement-table thead th:nth-child(2){z-index:3;}
   .classement-table tbody tr:nth-child(odd) td:nth-child(1), .classement-table tbody tr:nth-child(odd) td:nth-child(2){background:#ffffff;}
   .classement-table tbody tr:nth-child(even) td:nth-child(1), .classement-table tbody tr:nth-child(even) td:nth-child(2){background:#eef1f6;}
   /* Toutes les colonnes de chiffres (Séance 1, Séance 2..., Total) gardent la
      même largeur resserrée, quel que soit le nombre de séances affichées. */
-  .classement-table th:nth-child(n+3), .classement-table td:nth-child(n+3){width:90px;}
+  .classement-table th:nth-child(n+3), .classement-table td:nth-child(n+3){width:64px;}
   /* Composition homogène (Ultimate) : poule 1 (vivier fort) en vert, poule 2
      (vivier faible) en orange, comme les niveaux 1/2/3/4. */
   /* Fond plein (pas juste du texte coloré) pour rester lisible sur tablette,
@@ -251,6 +256,8 @@
   .classement-table td.poule-forte{background:#16a34a;color:#fff;font-weight:800;}
   .classement-table td.poule-faible{background:#dc2626;color:#fff;font-weight:800;}
   .th-sub{display:block;font-size:.65rem;font-weight:600;opacity:.85;}
+  .th-sub-cell{display:block;font-size:.62rem;font-weight:600;opacity:.85;}
+  .classement-table thead th[data-sort-classement]{cursor:pointer;}
   .win-edit-input{
     width:100%;box-sizing:border-box;text-align:center;padding:3px 2px;
     border:1px solid var(--line);border-radius:6px;font-size:.8rem;font-family:inherit;
@@ -2895,7 +2902,7 @@ function renderActivityTab(activite){
         <div class="toolbar" style="margin-bottom:0;">
           <div class="seance-tabs">
             ${cd.seances.length
-              ? cd.seances.map((s,i)=>`<button class="${i===cd.currentSeanceIndex?'active':''}" data-seance-index="${i}">Séance ${s.numero}</button>`).join('')
+              ? cd.seances.map((s,i)=>`<button class="${i===cd.currentSeanceIndex?'active':''}" data-seance-index="${i}">Séance ${s.numero}${formatDateSeance(s.dateCreation) ? `<span class="seance-tab-date">${formatDateSeance(s.dateCreation)}</span>` : ''}</button>`).join('')
               : '<span class="muted">Aucune séance pour l\'instant</span>'}
           </div>
           <div style="display:flex;gap:6px;">
@@ -3127,6 +3134,9 @@ function renderActivityTab(activite){
   if(btnExportPoules) btnExportPoules.addEventListener('click', ()=>exportPoulesExcel(activite));
   const btnExportEvalTechnique = q('#btnExportEvalTechnique');
   if(btnExportEvalTechnique) btnExportEvalTechnique.addEventListener('click', ()=>exportEvalTechniqueExcel(activite));
+  panel.querySelectorAll('[data-sort-classement]').forEach(th=>{
+    th.addEventListener('click', ()=>toggleClassementPouleSort(th.dataset.sortClassement, activite));
+  });
   const btnExportFeuilles = q('#btnExportFeuilles');
   if(btnExportFeuilles) btnExportFeuilles.addEventListener('click', ()=>exportFeuillesMatchsPDF(activite));
   const btnExportClassement = q('#btnExportClassement');
@@ -3488,6 +3498,20 @@ function getEvalTechNoteCourte(seance, studentId){
 // case reste en noir. Un élève absent/dispensé cette séance-là affiche son
 // statut plutôt qu'un 0 trompeur. Une colonne Éval. technique est ajoutée si
 // la dernière séance en comportait une.
+// Tri du tableau "Classement total" : alphabétique par défaut, mais
+// cliquable sur "Nom Prénom" ou "Total" pour basculer (et re-cliquer inverse
+// le sens). État mémorisé le temps de la session (pas sauvegardé).
+let classementPouleSortField = 'nom';
+let classementPouleSortDir = 'asc';
+function toggleClassementPouleSort(field, activite){
+  if(classementPouleSortField === field){
+    classementPouleSortDir = classementPouleSortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    classementPouleSortField = field;
+    classementPouleSortDir = field === 'nom' ? 'asc' : 'desc';
+  }
+  renderActivityTab(activite);
+}
 function renderClassementParSeancePoule(cd, students, activite){
   const seancesPoule = cd.seances.filter(s=>s.poules && s.poules.length);
   if(!seancesPoule.length) return '';
@@ -3495,19 +3519,33 @@ function renderClassementParSeancePoule(cd, students, activite){
   // Poule (et donc coloration homogène) de chaque élève, séance par séance :
   // ça peut changer d'une séance à l'autre (composition différente, montée-
   // descente...), donc c'est calculé pour chaque colonne indépendamment.
+  // Comme pour les points, seance.poules.members sont des ids d'ÉQUIPE en
+  // sport collectif (pas des ids d'élève) : il faut passer par seance.teams
+  // pour retrouver l'index de poule de chaque élève.
   const pouleIndexParSeance = seancesPoule.map(s=>{
-    const idx = {};
-    (s.poules||[]).forEach((p, pi)=>{ p.members.forEach(id=>{ idx[id] = pi; }); });
-    return idx;
+    const idxParEquipeOuEleve = {};
+    (s.poules||[]).forEach((p, pi)=>{ p.members.forEach(id=>{ idxParEquipeOuEleve[id] = pi; }); });
+    if(ACTIVITIES[activite].type !== 'equipe') return idxParEquipeOuEleve;
+    const idxParEleve = {};
+    (s.teams||[]).forEach(t=>{
+      const pi = idxParEquipeOuEleve[t.id];
+      if(pi === undefined) return;
+      t.memberIds.forEach(mid=>{ idxParEleve[mid] = pi; });
+    });
+    return idxParEleve;
   });
   const headerCols = seancesPoule.map(s=>{
     const compLabel = activite === 'Ultimate' ? {homogene:'Homogène', heterogene:'Hétérogène'}[s.compositionEquipes] : null;
     const dateLabel = formatDateSeance(s.dateCreation);
     return `<th style="background:${PALETTE[3 + (s.numero % (PALETTE.length-3))]}">Séance ${s.numero}${dateLabel ? `<br><span class="th-sub">${dateLabel}</span>` : ''}${compLabel ? `<br><span class="th-sub">${compLabel}</span>` : ''}</th>`;
   }).join('');
-  const derniere = seancesPoule[seancesPoule.length-1];
-  const showEvalTech = activite === 'Ultimate' && derniere.evalTechActif && (derniere.binomes||[]).length;
-  const sorted = students.slice().sort((a,b)=>(cd.poulePoints[b.id]||0)-(cd.poulePoints[a.id]||0));
+  const sorted = students.slice().sort((a,b)=>{
+    const cmp = classementPouleSortField === 'nom'
+      ? a.nomPrenom.localeCompare(b.nomPrenom, 'fr')
+      : (cd.poulePoints[a.id]||0) - (cd.poulePoints[b.id]||0);
+    return classementPouleSortDir === 'asc' ? cmp : -cmp;
+  });
+  const fleche = (field)=> classementPouleSortField === field ? (classementPouleSortDir === 'asc' ? ' ▲' : ' ▼') : '';
   const rows = sorted.map((s,i)=>{
     const cells = seancesPoule.map((se,si)=>{
       if(se.absents.includes(s.id)){
@@ -3517,7 +3555,10 @@ function renderClassementParSeancePoule(cd, students, activite){
       const val = perSeance[si][s.id] || 0;
       const pIdx = pouleIndexParSeance[si][s.id];
       const cls = se.compositionEquipes === 'homogene' ? (pIdx === 0 ? 'poule-forte' : pIdx === 1 ? 'poule-faible' : '') : '';
-      return `<td class="${cls}">${val}</td>`;
+      // L'éventuelle note d'évaluation technique de CETTE séance-là rejoint la
+      // même case que ses points de poule, au lieu d'une colonne à part.
+      const evalTech = (activite === 'Ultimate' && se.evalTechActif && (se.binomes||[]).length) ? getEvalTechNoteCourte(se, s.id) : null;
+      return `<td class="${cls}">${val}${evalTech ? `<br><span class="th-sub-cell">${evalTech}</span>` : ''}</td>`;
     }).join('');
     return `
       <tr>
@@ -3525,7 +3566,6 @@ function renderClassementParSeancePoule(cd, students, activite){
         <td>${s.nomPrenom}</td>
         ${cells}
         <td><b>${cd.poulePoints[s.id]||0}</b></td>
-        ${showEvalTech ? `<td>${getEvalTechNoteCourte(derniere, s.id)}</td>` : ''}
       </tr>`;
   }).join('');
   return `
@@ -3533,10 +3573,9 @@ function renderClassementParSeancePoule(cd, students, activite){
       <table class="classement-table">
         <thead><tr>
           <th style="background:${PALETTE[0]}">Rang</th>
-          <th style="background:${PALETTE[1]}">Nom Prénom</th>
+          <th style="background:${PALETTE[1]}" data-sort-classement="nom">Nom Prénom${fleche('nom')}</th>
           ${headerCols}
-          <th style="background:${PALETTE[2]}">Total</th>
-          ${showEvalTech ? `<th style="background:${PALETTE[4]}">Éval. technique</th>` : ''}
+          <th style="background:${PALETTE[2]}" data-sort-classement="total">Total${fleche('total')}</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>

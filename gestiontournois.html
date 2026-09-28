@@ -111,15 +111,28 @@
 
   /* Classes et séances (sous-onglets) */
   .seance-tabs{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
-  .seance-tabs button{
-    border:none;background:#f1f5f9;color:var(--muted);padding:9px 18px;border-radius:999px;cursor:pointer;
+  /* Le "pill" est maintenant le conteneur (pas le bouton) : à l'intérieur, le
+     nom de la séance (bouton, change de séance) et sa date (input calendrier
+     natif, cliquer ouvre un vrai calendrier) sont deux éléments distincts qui
+     partagent juste le même style transparent pour ressembler à un seul
+     pill, comme avant. */
+  .seance-tab-item{
+    border:none;background:#f1f5f9;color:var(--muted);padding:8px 18px;border-radius:999px;
     font-weight:700;font-size:.92rem;transition:.15s;
     display:flex;flex-direction:column;align-items:center;gap:1px;line-height:1.15;
   }
-  .seance-tabs button:hover{color:var(--ink);}
-  .seance-tabs button.active{background:var(--c7);color:#fff;box-shadow:0 3px 10px rgba(37,99,235,.3);}
-  .seance-tab-date{font-size:.68rem;font-weight:600;opacity:.8;border-bottom:1px dotted currentColor;cursor:pointer;}
-  .seance-tab-date:hover{opacity:1;}
+  .seance-tab-item:hover{color:var(--ink);}
+  .seance-tab-item.active{background:var(--c7);color:#fff;box-shadow:0 3px 10px rgba(37,99,235,.3);}
+  .seance-tab-item button{
+    border:none;background:transparent;color:inherit;padding:0;cursor:pointer;
+    font-weight:700;font-size:.92rem;
+  }
+  .seance-tab-date-input{
+    border:none;background:transparent;color:inherit;font-size:.68rem;font-weight:600;
+    opacity:.85;cursor:pointer;padding:0;width:64px;text-align:center;font-family:inherit;
+  }
+  .seance-tab-date-input:hover{opacity:1;}
+  .seance-tab-item.active .seance-tab-date-input::-webkit-calendar-picker-indicator{filter:invert(1);}
   /* Chaque classe importée est sa propre vignette (même gabarit que les
      cartes de l'appli : coins arrondis, ombre), plutôt qu'une pastille dans
      un conteneur partagé. La classe active se distingue par sa pleine
@@ -873,20 +886,22 @@ function formatDateSeance(iso){
   if(!iso) return '';
   return new Date(iso).toLocaleDateString('fr-FR', {day:'2-digit', month:'2-digit'});
 }
-// Modifie la date d'une séance (affichée sous son onglet) : utile pour les
-// séances créées avant l'ajout de ce champ, ou pour corriger une date.
-function editerDateSeance(activite, seanceIndex){
+// Valeur au format aaaa-mm-jj attendue par <input type="date"> — vide si la
+// séance a été créée avant l'ajout de ce champ (dateCreation inconnue).
+function formatDateSeanceValeur(iso){
+  if(!iso) return '';
+  const d = new Date(iso);
+  const pad = (n)=>String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+}
+// Modifie la date d'une séance choisie via le calendrier natif de l'input.
+function definirDateSeance(activite, seanceIndex, valeur){
   const cd = currentClasseData(activite);
   const seance = cd.seances[seanceIndex];
-  if(!seance) return;
-  const defaut = seance.dateCreation ? new Date(seance.dateCreation).toLocaleDateString('fr-FR') : '';
-  const saisie = prompt('Date de la séance (jj/mm/aaaa) :', defaut);
-  if(saisie === null) return;
-  const m = saisie.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if(!m){ alert('Format invalide. Utilisez jj/mm/aaaa (ex : 05/10/2026).'); return; }
-  const jour = parseInt(m[1], 10), mois = parseInt(m[2], 10), annee = parseInt(m[3], 10);
+  if(!seance || !valeur) return;
+  const [annee, mois, jour] = valeur.split('-').map(Number);
   const d = new Date(annee, mois - 1, jour, 12); // midi pour éviter tout décalage de fuseau horaire
-  if(isNaN(d.getTime()) || d.getMonth() !== mois - 1){ alert('Date invalide.'); return; }
+  if(isNaN(d.getTime())) return;
   seance.dateCreation = d.toISOString();
   saveState();
   renderActivityTab(activite);
@@ -2933,7 +2948,11 @@ function renderActivityTab(activite){
         <div class="toolbar" style="margin-bottom:0;">
           <div class="seance-tabs">
             ${cd.seances.length
-              ? cd.seances.map((s,i)=>`<button class="${i===cd.currentSeanceIndex?'active':''}" data-seance-index="${i}">Séance ${s.numero}<span class="seance-tab-date" data-edit-date="${i}">${formatDateSeance(s.dateCreation) || '+ date'}</span></button>`).join('')
+              ? cd.seances.map((s,i)=>`
+                <div class="seance-tab-item ${i===cd.currentSeanceIndex?'active':''}">
+                  <button data-seance-index="${i}">Séance ${s.numero}</button>
+                  <input type="date" class="seance-tab-date-input" data-seance-date-input="${i}" value="${formatDateSeanceValeur(s.dateCreation)}">
+                </div>`).join('')
               : '<span class="muted">Aucune séance pour l\'instant</span>'}
           </div>
           <div style="display:flex;gap:6px;">
@@ -3049,10 +3068,10 @@ function renderActivityTab(activite){
   panel.querySelectorAll('[data-seance-index]').forEach(btn=>{
     btn.addEventListener('click', ()=>switchSeance(activite, parseInt(btn.dataset.seanceIndex, 10)));
   });
-  panel.querySelectorAll('[data-edit-date]').forEach(span=>{
-    span.addEventListener('click', (e)=>{
-      e.stopPropagation(); // ne pas aussi déclencher le changement de séance
-      editerDateSeance(activite, parseInt(span.dataset.editDate, 10));
+  panel.querySelectorAll('[data-seance-date-input]').forEach(input=>{
+    input.addEventListener('click', (e)=>e.stopPropagation()); // ne pas aussi déclencher le changement de séance
+    input.addEventListener('change', ()=>{
+      definirDateSeance(activite, parseInt(input.dataset.seanceDateInput, 10), input.value);
     });
   });
   panel.querySelectorAll('[data-open-presence]').forEach(btn=>{

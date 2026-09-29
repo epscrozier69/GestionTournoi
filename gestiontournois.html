@@ -498,6 +498,7 @@
     </div>
     <p class="hint" id="scoreModalBareme"></p>
     <div class="modal-actions">
+      <button class="btn danger" id="btnEffacerResultatMatch">🗑️ Effacer le résultat</button>
       <button class="btn ghost" id="btnAnnulerScore">Annuler</button>
       <button class="btn" id="btnValiderScore">✅ Valider</button>
     </div>
@@ -2115,6 +2116,28 @@ function appliquerDeltaPoulePoints(activite, match, newPointsA, newPointsB){
   cd.poulePoints[match.a] = Math.max(0, (cd.poulePoints[match.a]||0) - oldA + newPointsA);
   cd.poulePoints[match.b] = Math.max(0, (cd.poulePoints[match.b]||0) - oldB + newPointsB);
 }
+// Efface le résultat d'UN SEUL match (celui actuellement ouvert dans la
+// modale) — le match redevient "non joué", sans toucher aux autres matchs de
+// la séance. Utilisé à la fois par le bouton "Effacer le résultat" et quand
+// les deux scores sont décochés puis validés.
+function effacerResultatMatch(activite, match){
+  match.scoreA = null; match.scoreB = null;
+  match.pointsA = null; match.pointsB = null;
+  match.winner = null;
+  match.abandon = null;
+  recomputeCumulativeTotals(currentClasseData(activite), activite);
+  saveState();
+  closeScoreModal();
+  renderActivityTab(activite);
+}
+function btnEffacerResultatMatchClick(){
+  if(!scoreModalContext) return;
+  const { activite, matchIndex } = scoreModalContext;
+  const seance = currentSeance(activite);
+  const match = seance.matches[matchIndex];
+  if(!match) return;
+  effacerResultatMatch(activite, match);
+}
 function validerScoreModal(){
   if(!scoreModalContext) return;
   const { activite, matchIndex } = scoreModalContext;
@@ -2126,14 +2149,7 @@ function validerScoreModal(){
   if(scoreA === null && scoreB === null){
     // Les deux scores décochés : on efface le résultat existant (le match
     // redevient "non joué") au lieu d'obliger à ressaisir un résultat.
-    match.scoreA = null; match.scoreB = null;
-    match.pointsA = null; match.pointsB = null;
-    match.winner = null;
-    match.abandon = null;
-    recomputeCumulativeTotals(currentClasseData(activite), activite);
-    saveState();
-    closeScoreModal();
-    renderActivityTab(activite);
+    effacerResultatMatch(activite, match);
     return;
   }
   if(scoreA === null || scoreB === null){ alert('Cochez les deux scores (ou décochez les deux pour effacer ce résultat).'); return; }
@@ -4092,6 +4108,7 @@ document.addEventListener('DOMContentLoaded', async ()=>{
   renderAll();
   document.getElementById('btnValiderScore').addEventListener('click', validerScoreModal);
   document.getElementById('btnAnnulerScore').addEventListener('click', closeScoreModal);
+  document.getElementById('btnEffacerResultatMatch').addEventListener('click', btnEffacerResultatMatchClick);
   document.getElementById('btnAbandonA').addEventListener('click', ()=>abandonScoreModal('a'));
   document.getElementById('btnAbandonB').addEventListener('click', ()=>abandonScoreModal('b'));
   document.getElementById('scoreModal').addEventListener('click', (e)=>{

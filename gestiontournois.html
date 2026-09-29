@@ -251,6 +251,12 @@
      qu'un fond fixe, sinon les 2 colonnes figées ne suivent plus le zébrage. */
   /* Colonnes resserrées (moins de marge, largeurs réduites) pour une lecture
      plus facile quand il y a beaucoup de colonnes (une par séance). */
+  /* width:100% (règle générique "table") ferait s'étirer TOUTES les colonnes
+     proportionnellement pour remplir la carte, même avec table-layout:fixed —
+     donc même la colonne Nom Prénom redevenait large malgré sa largeur
+     calculée. En largeur naturelle, chaque colonne garde exactement la
+     largeur demandée (ou celle de son contenu), sans être étirée. */
+  .classement-table{width:auto;}
   .classement-table th, .classement-table td{padding:4px 6px;}
   .classement-table th:nth-child(1), .classement-table td:nth-child(1){width:44px;position:sticky;left:0;z-index:2;}
   .classement-table th:nth-child(2), .classement-table td:nth-child(2){
@@ -266,6 +272,13 @@
   /* Toutes les colonnes de chiffres (Séance 1, Séance 2..., Total) gardent la
      même largeur resserrée, quel que soit le nombre de séances affichées. */
   .classement-table th:nth-child(n+3), .classement-table td:nth-child(n+3){width:40px;text-align:center;}
+  /* Largeur ajustée au contenu réel plutôt qu'une largeur unique pour toutes
+     les colonnes de chiffres : les notes d'éval. technique ("13/20") ont
+     besoin d'un peu plus de place que les points de match ("2", "DISP",
+     "—"). L'en-tête passe à la ligne au lieu d'être tronqué en "...". */
+  .classement-table th.col-match, .classement-table td.col-match{width:34px;}
+  .classement-table th.col-eval, .classement-table td.col-eval{width:52px;}
+  .classement-table th.col-match, .classement-table th.col-eval{white-space:normal;}
   /* Composition homogène (Ultimate) : seule la note (pas toute la case) est
      coloriée — vert pour la poule 1 (vivier fort), rouge pour la poule 2
      (vivier faible) — pour rester lisible sans surcharger le tableau. */
@@ -3069,7 +3082,12 @@ function renderActivityTab(activite){
     btn.addEventListener('click', ()=>switchSeance(activite, parseInt(btn.dataset.seanceIndex, 10)));
   });
   panel.querySelectorAll('[data-seance-date-input]').forEach(input=>{
-    input.addEventListener('click', (e)=>e.stopPropagation()); // ne pas aussi déclencher le changement de séance
+    input.addEventListener('click', (e)=>{
+      e.stopPropagation(); // ne pas aussi déclencher le changement de séance
+      // showPicker() force l'ouverture du calendrier natif au clic, plutôt
+      // que de dépendre du clic précis sur la petite icône du navigateur.
+      if(input.showPicker){ try{ input.showPicker(); }catch(err){} }
+    });
     input.addEventListener('change', ()=>{
       definirDateSeance(activite, parseInt(input.dataset.seanceDateInput, 10), input.value);
     });
@@ -3607,10 +3625,11 @@ function renderClassementParSeancePoule(cd, students, activite){
     const dateLabel = formatDateSeance(s.dateCreation);
     const label = `Séance ${s.numero}${dateLabel ? `<br><span class="th-sub">${dateLabel}</span>` : ''}${compLabel ? `<br><span class="th-sub">${compLabel}</span>` : ''}`;
     const span = hasEvalTech[si] ? 'colspan="2"' : 'rowspan="2"';
-    return `<th ${span} style="background:${PALETTE[3 + (s.numero % (PALETTE.length-3))]}">${label}</th>`;
+    const cls = hasEvalTech[si] ? '' : 'class="col-match"';
+    return `<th ${span} ${cls} style="background:${PALETTE[3 + (s.numero % (PALETTE.length-3))]}">${label}</th>`;
   }).join('');
   const headerRow2 = seancesPoule.map((s,si)=> hasEvalTech[si]
-    ? `<th style="background:${PALETTE[3 + (s.numero % (PALETTE.length-3))]}">Match</th><th style="background:${PALETTE[4]}">Éval. technique</th>`
+    ? `<th class="col-match" style="background:${PALETTE[3 + (s.numero % (PALETTE.length-3))]}">Match</th><th class="col-eval" style="background:${PALETTE[4]}">Éval.<br>technique</th>`
     : '').join('');
   const sorted = students.slice().sort((a,b)=>{
     const cmp = classementPouleSortField === 'nom'
@@ -3628,16 +3647,16 @@ function renderClassementParSeancePoule(cd, students, activite){
     const cells = seancesPoule.map((se,si)=>{
       if(se.absents.includes(s.id)){
         const statut = se.absentReasons && se.absentReasons[s.id] && PRESENCE_STATUTS[se.absentReasons[s.id]];
-        const abs = `<td class="muted">${statut ? statut.label : '—'}</td>`;
-        return hasEvalTech[si] ? abs + `<td class="muted">—</td>` : abs;
+        const abs = `<td class="col-match muted">${statut ? statut.label : '—'}</td>`;
+        return hasEvalTech[si] ? abs + `<td class="col-eval muted">—</td>` : abs;
       }
       const val = perSeance[si][s.id] || 0;
       const pIdx = pouleIndexParSeance[si][s.id];
       const cls = se.compositionEquipes === 'homogene' ? (pIdx === 0 ? 'poule-forte' : pIdx === 1 ? 'poule-faible' : '') : '';
-      const matchCell = `<td><span class="${cls}">${val}</span></td>`;
+      const matchCell = `<td class="col-match"><span class="${cls}">${val}</span></td>`;
       if(!hasEvalTech[si]) return matchCell;
       const evalTech = getEvalTechNoteCourte(se, s.id);
-      return matchCell + `<td>${evalTech}</td>`;
+      return matchCell + `<td class="col-eval">${evalTech}</td>`;
     }).join('');
     return `
       <tr>

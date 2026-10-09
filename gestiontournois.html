@@ -650,7 +650,7 @@ function defaultSeance(numero, activite){
     evalTechActif: act.evaluationTechniqueAllowed ? false : undefined,
     // Tennis de table : évaluation technique "record d'échanges" — choix de
     // type de tournoi exclusif (comme poule/défis), pas un double mode.
-    binomesRecord:[], // [{id, memberIds:[a,b], score: null|nombre d'échanges}]
+    binomesRecord:[], // [{id, memberIds:[a,b] ou [a] si évalué seul(e), score: null|nombre d'échanges}]
     dureeRecord:30, // secondes : 30, 45 ou 60 (1 min)
   };
 }
@@ -3184,6 +3184,8 @@ function renderActivityTab(activite){
   panel.querySelectorAll('[data-binome-record-candidat]').forEach(input=>{
     input.addEventListener('change', ()=>toggleBinomeRecordCandidat(activite, input.dataset.binomeRecordCandidat));
   });
+  const btnBinomeRecordSolo = q('#btnBinomeRecordSolo');
+  if(btnBinomeRecordSolo) btnBinomeRecordSolo.addEventListener('click', ()=>creerBinomeRecordSolo(activite));
   panel.querySelectorAll('[data-supprimer-binome-record]').forEach(btn=>{
     btn.addEventListener('click', ()=>supprimerBinomeRecord(activite, btn.dataset.supprimerBinomeRecord));
   });
@@ -3953,6 +3955,22 @@ function creerBinomeRecord(activite){
   saveState();
   renderActivityTab(activite);
 }
+// Évaluation "solo" (1 seul élève) : utile quand le nombre d'élèves est
+// impair — l'élève restant seul peut quand même être évalué, sans attendre
+// un binôme complet.
+function creerBinomeRecordSolo(activite){
+  if(binomeRecordSelectionEnCours.length !== 1) return;
+  const seance = currentSeance(activite);
+  if(!seance.binomesRecord) seance.binomesRecord = [];
+  seance.binomesRecord.push({
+    id: 'binomerecord' + Date.now() + Math.floor(Math.random()*1000),
+    memberIds: binomeRecordSelectionEnCours.slice(),
+    score: null,
+  });
+  binomeRecordSelectionEnCours = [];
+  saveState();
+  renderActivityTab(activite);
+}
 function supprimerBinomeRecord(activite, binomeId){
   const seance = currentSeance(activite);
   seance.binomesRecord = (seance.binomesRecord||[]).filter(b=>b.id!==binomeId);
@@ -3971,6 +3989,28 @@ function definirDureeRecord(activite, duree){
 // son id, qui redevient le nouvel élément après un nouveau rendu.
 let chronoRecordRestant = null; // secondes restantes, null = pas démarré
 let chronoRecordInterval = null;
+// Bip sonore (Web Audio, aucun fichier externe nécessaire) pour signaler
+// le début et la fin du chrono d'évaluation.
+function jouerBipChrono(frequence, dureeMs){
+  try{
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if(!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = frequence;
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.35, ctx.currentTime + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + dureeMs/1000);
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + dureeMs/1000 + 0.02);
+    osc.onended = ()=>ctx.close();
+  }catch(e){}
+}
+function jouerBipDebutChrono(){ jouerBipChrono(880, 200); }
+function jouerBipFinChrono(){ jouerBipChrono(523, 250); setTimeout(()=>jouerBipChrono(523, 350), 280); }
 function majAffichageChronoRecord(){
   const el = document.getElementById('chronoDisplay');
   if(!el) return;
@@ -3985,10 +4025,14 @@ function demarrerChronoRecord(activite){
   clearInterval(chronoRecordInterval);
   chronoRecordRestant = duree;
   majAffichageChronoRecord();
+  jouerBipDebutChrono();
   chronoRecordInterval = setInterval(()=>{
     chronoRecordRestant--;
     majAffichageChronoRecord();
-    if(chronoRecordRestant <= 0) clearInterval(chronoRecordInterval);
+    if(chronoRecordRestant <= 0){
+      clearInterval(chronoRecordInterval);
+      jouerBipFinChrono();
+    }
   }, 1000);
 }
 function reinitialiserChronoRecord(){
@@ -4119,7 +4163,7 @@ function renderEvaluationTechniqueRecordSection(activite){
   return `
     <div class="card">
       <h3>📊 Évaluation technique — Record d'échanges</h3>
-      <p class="hint">Choisissez la durée de l'épreuve, sélectionnez 2 élèves pour créer un binôme, puis saisissez le nombre d'échanges réussis avec le pavé numérique (comme une calculatrice). "🗑️ Effacer" remet le score à zéro pour recommencer l'épreuve.</p>
+      <p class="hint">Choisissez la durée de l'épreuve, sélectionnez 2 élèves pour créer un binôme, puis saisissez le nombre d'échanges réussis avec le pavé numérique (comme une calculatrice). "🗑️ Effacer" remet le score à zéro pour recommencer l'épreuve. Si le nombre d'élèves est impair, sélectionnez l'élève restant puis cliquez sur "Évaluer seul(e)" pour qu'il soit quand même évalué.</p>
       <p class="hint" style="margin:0 0 4px;"><b>Durée de l'épreuve :</b></p>
       <div class="config-grid" style="max-width:420px;margin-bottom:14px;">${dureeHtml}</div>
       <div class="chrono-bar">
@@ -4129,6 +4173,7 @@ function renderEvaluationTechniqueRecordSection(activite){
       </div>
       <p class="hint" style="margin:0 0 4px;"><b>Sélectionnez 2 élèves pour créer un binôme :</b></p>
       <div class="cb-group" style="margin-bottom:10px;">${selectionHtml || '<span class="muted">Aucun élève présent.</span>'}</div>
+      ${binomeRecordSelectionEnCours.length === 1 ? `<button class="btn secondary small" id="btnBinomeRecordSolo" style="margin-bottom:10px;">➕ Évaluer ${participantLabel(activite, binomeRecordSelectionEnCours[0])} seul(e) (nombre impair)</button>` : ''}
       <div class="binomes-grid" style="margin-top:14px;">${binomesHtml || `<span class="muted">Aucun binôme créé pour l'instant.</span>`}</div>
       <div class="toolbar" style="margin-top:18px;">
         <h4 style="margin:0;">📋 Scores par ordre alphabétique</h4>

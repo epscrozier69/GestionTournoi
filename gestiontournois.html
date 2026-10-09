@@ -3977,6 +3977,16 @@ function supprimerBinomeRecord(activite, binomeId){
   saveState();
   renderActivityTab(activite);
 }
+// Barème noté de l'épreuve "record d'échanges" en 20 sec (Fonctionnalites.md
+// ligne 43) : au-delà de 17 échanges = TB, de 12 à 16 = S, de 7 à 11 = F,
+// 6 ou moins = I. Non défini pour les autres durées (30/45/60 sec).
+function baremeRecord20(score){
+  if(score === null || score === undefined) return '—';
+  if(score > 17) return 'TB';
+  if(score >= 12) return 'S';
+  if(score >= 7) return 'F';
+  return 'I';
+}
 function definirDureeRecord(activite, duree){
   currentSeance(activite).dureeRecord = duree;
   saveState();
@@ -4054,12 +4064,16 @@ function exportRecordExcel(activite){
     if(b.score === null || b.score === undefined) return;
     b.memberIds.forEach(id=>{ scoreParEleve[id] = b.score; });
   });
+  const avecBareme = seance.dureeRecord === 20;
   const rows = students.slice().sort((a,b)=>a.nomPrenom.localeCompare(b.nomPrenom, 'fr')).map(s=>{
     const statut = reasons[s.id] && PRESENCE_STATUTS[reasons[s.id]];
-    return {
+    const score = scoreParEleve[s.id];
+    const row = {
       'Nom Prénom': s.nomPrenom,
-      'Échanges': scoreParEleve[s.id] !== undefined ? scoreParEleve[s.id] : (statut ? statut.label : ''),
+      'Échanges': score !== undefined ? score : (statut ? statut.label : ''),
     };
+    if(avecBareme) row['Note'] = score !== undefined ? baremeRecord20(score) : (statut ? statut.label : '');
+    return row;
   });
   exportRowsToExcel(rows, `record_echanges_${slug(activite)}_${slug(cd.classe)}_seance${seance.numero}.xlsx`, 'Record échanges');
 }
@@ -4101,7 +4115,7 @@ function renderEvaluationTechniqueRecordSection(activite){
   const students = STATE.allStudents.filter(s=>s.classe===cd.classe && !seance.absents.includes(s.id));
   const dejaAssignes = new Set(seance.binomesRecord.flatMap(b=>b.memberIds));
 
-  const dureeHtml = [30, 45, 60].map(d=>{
+  const dureeHtml = [20, 30, 45, 60].map(d=>{
     const label = d === 60 ? '1 min' : `${d} sec`;
     return `<button class="btn ${seance.dureeRecord===d?'':'ghost'}" data-duree-record="${d}">${label}</button>`;
   }).join('');
@@ -4137,6 +4151,9 @@ function renderEvaluationTechniqueRecordSection(activite){
   }).join('');
 
   const dureeLabel = seance.dureeRecord === 60 ? '1 min' : `${seance.dureeRecord} sec`;
+  // Barème uniquement défini pour l'épreuve de 20 sec (Fonctionnalites.md
+  // ligne 43) : TB > 17, S entre 12 et 16, F entre 7 et 11, I <= 6.
+  const avecBareme = seance.dureeRecord === 20;
 
   // Liste alphabétique de tous les élèves de la classe (même absents/
   // dispensés, comme pour l'évaluation technique Ultimate) avec le score
@@ -4151,12 +4168,15 @@ function renderEvaluationTechniqueRecordSection(activite){
   });
   const notesRows = alphabetique.map((s,i)=>{
     const statut = reasons[s.id] && PRESENCE_STATUTS[reasons[s.id]];
-    const label = scoreParEleve[s.id] !== undefined ? scoreParEleve[s.id] : (statut ? statut.label : '—');
+    const score = scoreParEleve[s.id];
+    const label = score !== undefined ? score : (statut ? statut.label : '—');
+    const note = score !== undefined ? baremeRecord20(score) : (statut ? statut.label : '—');
     return `
     <tr>
       <td><b>${i+1}</b></td>
       <td>${s.nomPrenom}</td>
       <td><b>${label}</b></td>
+      ${avecBareme ? `<td><b>${note}</b></td>` : ''}
     </tr>`;
   }).join('');
 
@@ -4185,6 +4205,7 @@ function renderEvaluationTechniqueRecordSection(activite){
             <th style="background:${PALETTE[0]}">N°</th>
             <th style="background:${PALETTE[1]}">Nom Prénom</th>
             <th style="background:${PALETTE[2]}">Échanges</th>
+            ${avecBareme ? `<th style="background:${PALETTE[3]}">Note</th>` : ''}
           </tr></thead>
           <tbody>${notesRows}</tbody>
         </table>

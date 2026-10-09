@@ -429,6 +429,15 @@
   .numpad-btn:hover{border-color:var(--c1);}
   .numpad-btn.numpad-arriere{background:#fef3c7;border-color:#d97706;color:#92400e;}
   .numpad-btn.numpad-reset{grid-column:span 3;background:#fee2e2;border-color:var(--bad);color:var(--bad);font-size:.85rem;}
+  /* Chrono de l'épreuve : reste visible en haut de la carte (collé en haut de
+     l'écran au défilement) quel que soit le binôme en cours de saisie. */
+  .chrono-bar{
+    display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+    background:#eef2ff;border:2px solid var(--c1);border-radius:12px;padding:10px 16px;margin-bottom:14px;
+    position:sticky;top:118px;z-index:30;
+  }
+  .chrono-time{font-size:1.8rem;font-weight:800;color:var(--c1);min-width:64px;text-align:center;font-variant-numeric:tabular-nums;}
+  .chrono-time.chrono-fini{color:var(--bad);}
   @media (max-width:700px){
     .modal-box.modal-box-wide{max-width:calc(100vw - 32px);}
     .score-opt{width:24px;height:24px;font-size:.68rem;}
@@ -3187,6 +3196,13 @@ function renderActivityTab(activite){
   panel.querySelectorAll('[data-numpad-reset]').forEach(btn=>{
     btn.addEventListener('click', ()=>effacerResultatRecord(activite, btn.dataset.numpadReset));
   });
+  const btnChronoStart = q('#btnChronoStart');
+  if(btnChronoStart) btnChronoStart.addEventListener('click', ()=>demarrerChronoRecord(activite));
+  const btnChronoReset = q('#btnChronoReset');
+  if(btnChronoReset) btnChronoReset.addEventListener('click', reinitialiserChronoRecord);
+  const btnExportRecord = q('#btnExportRecord');
+  if(btnExportRecord) btnExportRecord.addEventListener('click', ()=>exportRecordExcel(activite));
+  majAffichageChronoRecord(); // resynchronise l'affichage du chrono après ce nouveau rendu du panneau
 
   panel.querySelectorAll('[data-tournament-type]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
@@ -3945,6 +3961,61 @@ function definirDureeRecord(activite, duree){
   saveState();
   renderActivityTab(activite);
 }
+// Chrono de l'épreuve : état gardé dans de simples variables (pas dans
+// STATE, un chrono n'a pas de sens à être sauvegardé/synchronisé) pour qu'il
+// continue de tourner même quand le panneau est entièrement redessiné (ex.
+// en tapant un score sur un binôme) — chaque tic recherche l'affichage par
+// son id, qui redevient le nouvel élément après un nouveau rendu.
+let chronoRecordRestant = null; // secondes restantes, null = pas démarré
+let chronoRecordInterval = null;
+function majAffichageChronoRecord(){
+  const el = document.getElementById('chronoDisplay');
+  if(!el) return;
+  if(chronoRecordRestant === null){ el.textContent = '--'; el.classList.remove('chrono-fini'); return; }
+  const restant = Math.max(0, chronoRecordRestant);
+  const m = Math.floor(restant / 60), s = restant % 60;
+  el.textContent = m > 0 ? `${m}:${String(s).padStart(2,'0')}` : String(s);
+  el.classList.toggle('chrono-fini', restant <= 0);
+}
+function demarrerChronoRecord(activite){
+  const duree = currentSeance(activite).dureeRecord || 30;
+  clearInterval(chronoRecordInterval);
+  chronoRecordRestant = duree;
+  majAffichageChronoRecord();
+  chronoRecordInterval = setInterval(()=>{
+    chronoRecordRestant--;
+    majAffichageChronoRecord();
+    if(chronoRecordRestant <= 0) clearInterval(chronoRecordInterval);
+  }, 1000);
+}
+function reinitialiserChronoRecord(){
+  clearInterval(chronoRecordInterval);
+  chronoRecordInterval = null;
+  chronoRecordRestant = null;
+  majAffichageChronoRecord();
+}
+// Export Excel des scores de record d'échanges, par ordre alphabétique —
+// mêmes données que le tableau affiché à l'écran.
+function exportRecordExcel(activite){
+  const cd = currentClasseData(activite);
+  const seance = currentSeance(activite);
+  if(!cd || !seance) return;
+  const students = STATE.allStudents.filter(s=>s.classe===cd.classe);
+  const reasons = seance.absentReasons || {};
+  const scoreParEleve = {};
+  (seance.binomesRecord||[]).forEach(b=>{
+    if(b.score === null || b.score === undefined) return;
+    b.memberIds.forEach(id=>{ scoreParEleve[id] = b.score; });
+  });
+  const rows = students.slice().sort((a,b)=>a.nomPrenom.localeCompare(b.nomPrenom, 'fr')).map(s=>{
+    const statut = reasons[s.id] && PRESENCE_STATUTS[reasons[s.id]];
+    return {
+      'Nom Prénom': s.nomPrenom,
+      'Échanges': scoreParEleve[s.id] !== undefined ? scoreParEleve[s.id] : (statut ? statut.label : ''),
+    };
+  });
+  exportRowsToExcel(rows, `record_echanges_${slug(activite)}_${slug(cd.classe)}_seance${seance.numero}.xlsx`, 'Record échanges');
+}
 // Pavé numérique : chaque chiffre cliqué s'ajoute à la fin du nombre actuel
 // (comme une calculatrice), pour saisir un score à plusieurs chiffres.
 function ajouterChiffreRecord(activite, binomeId, chiffre){
@@ -4018,15 +4089,58 @@ function renderEvaluationTechniqueRecordSection(activite){
       </div>`;
   }).join('');
 
+  const dureeLabel = seance.dureeRecord === 60 ? '1 min' : `${seance.dureeRecord} sec`;
+
+  // Liste alphabétique de tous les élèves de la classe (même absents/
+  // dispensés, comme pour l'évaluation technique Ultimate) avec le score
+  // obtenu — reste visible une fois tous les binômes évalués.
+  const tousLesEleves = STATE.allStudents.filter(s=>s.classe===cd.classe);
+  const alphabetique = tousLesEleves.slice().sort((a,b)=>a.nomPrenom.localeCompare(b.nomPrenom, 'fr'));
+  const reasons = seance.absentReasons || {};
+  const scoreParEleve = {};
+  seance.binomesRecord.forEach(b=>{
+    if(b.score === null || b.score === undefined) return;
+    b.memberIds.forEach(id=>{ scoreParEleve[id] = b.score; });
+  });
+  const notesRows = alphabetique.map((s,i)=>{
+    const statut = reasons[s.id] && PRESENCE_STATUTS[reasons[s.id]];
+    const label = scoreParEleve[s.id] !== undefined ? scoreParEleve[s.id] : (statut ? statut.label : '—');
+    return `
+    <tr>
+      <td><b>${i+1}</b></td>
+      <td>${s.nomPrenom}</td>
+      <td><b>${label}</b></td>
+    </tr>`;
+  }).join('');
+
   return `
     <div class="card">
       <h3>📊 Évaluation technique — Record d'échanges</h3>
       <p class="hint">Choisissez la durée de l'épreuve, sélectionnez 2 élèves pour créer un binôme, puis saisissez le nombre d'échanges réussis avec le pavé numérique (comme une calculatrice). "🗑️ Effacer" remet le score à zéro pour recommencer l'épreuve.</p>
       <p class="hint" style="margin:0 0 4px;"><b>Durée de l'épreuve :</b></p>
       <div class="config-grid" style="max-width:420px;margin-bottom:14px;">${dureeHtml}</div>
+      <div class="chrono-bar">
+        <div class="chrono-time" id="chronoDisplay">--</div>
+        <button class="btn" id="btnChronoStart">▶️ Démarrer le chrono (${dureeLabel})</button>
+        <button class="btn ghost small" id="btnChronoReset">🔄 Réinitialiser</button>
+      </div>
       <p class="hint" style="margin:0 0 4px;"><b>Sélectionnez 2 élèves pour créer un binôme :</b></p>
       <div class="cb-group" style="margin-bottom:10px;">${selectionHtml || '<span class="muted">Aucun élève présent.</span>'}</div>
       <div class="binomes-grid" style="margin-top:14px;">${binomesHtml || `<span class="muted">Aucun binôme créé pour l'instant.</span>`}</div>
+      <div class="toolbar" style="margin-top:18px;">
+        <h4 style="margin:0;">📋 Scores par ordre alphabétique</h4>
+        <button class="btn secondary small" id="btnExportRecord">📊 Exporter Excel</button>
+      </div>
+      <div class="table-wrap" style="max-width:420px;">
+        <table class="classement-table" style="width:auto;">
+          <thead><tr>
+            <th style="background:${PALETTE[0]}">N°</th>
+            <th style="background:${PALETTE[1]}">Nom Prénom</th>
+            <th style="background:${PALETTE[2]}">Échanges</th>
+          </tr></thead>
+          <tbody>${notesRows}</tbody>
+        </table>
+      </div>
     </div>`;
 }
 

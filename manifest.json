@@ -1,0 +1,10 @@
+{
+  "name": "EPS Gestion des tournois",
+  "short_name": "Gestion tournois",
+  "start_url": "./gestiontournois.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#2563eb",
+  "lang": "fr"
+}

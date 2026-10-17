@@ -4883,6 +4883,28 @@ function renderDefisClassementSection(activite){
     ? `<p class="rotation-progress">Rotation en cours : <b>${rotationTerminees}/${rotationMatches.length}</b> matchs terminés.</p>`
     : '';
 
+  // Historique complet des matchs déjà joués cette séance (du plus récent au
+  // plus ancien) : l'appariement (peutAffronter, voir remplirTablesClassement)
+  // se base déjà sur TOUT l'historique de seance.defisMatches pour ne jamais
+  // refaire se rencontrer deux mêmes adversaires avant le délai (4 matchs
+  // chacun) — ce tableau rend simplement cet historique visible à l'écran, en
+  // plus de l'export Excel qui existait déjà.
+  const historiqueHtml = seance.defisMatches.map((m,idx)=>{
+    const nomA = participantLabel(activite, m.a);
+    const nomB = participantLabel(activite, m.b);
+    const vainqueur = m.winner ? `<b>${participantLabel(activite, m.winner)}</b>` : '<span class="muted">En cours…</span>';
+    const arbitre = m.referee ? participantLabel(activite, m.referee) : 'Auto-arbitrage';
+    return `
+      <tr>
+        <td>${idx+1}</td>
+        <td>${act.terrainLabel.replace(/s$/,'')} ${m.table}</td>
+        <td>${nomA}</td>
+        <td>${nomB}</td>
+        <td>${vainqueur}</td>
+        <td>${arbitre}</td>
+      </tr>`;
+  }).reverse().join('');
+
   return `
     ${estEquipe ? renderEquipesDefisSection(activite) : ''}
     <div class="card">
@@ -4908,6 +4930,23 @@ function renderDefisClassementSection(activite){
           <h4>🏅 Classement — victoires séance par séance</h4>
           <p class="hint">Se met à jour à chaque résultat enregistré. La séance la plus récente est la colonne juste après le nom.</p>
           ${renderClassementParSeance(cd, students, true, activite)}
+        </div>
+      </div>
+      <div class="card" style="margin-top:14px;">
+        <h4 style="margin:0 0 8px;">📜 Historique des matchs de cette séance</h4>
+        <p class="hint">Du plus récent au plus ancien — sert à vérifier qui a déjà rencontré qui (l'appariement automatique en tient déjà compte).</p>
+        <div class="table-wrap">
+          <table class="classement-table">
+            <thead><tr>
+              <th style="background:${PALETTE[0]}">N°</th>
+              <th style="background:${PALETTE[1]}">${act.terrainLabel.replace(/s$/,'')}</th>
+              <th style="background:${PALETTE[3]}">${estEquipe?'Équipe A':'Joueur A'}</th>
+              <th style="background:${PALETTE[4]}">${estEquipe?'Équipe B':'Joueur B'}</th>
+              <th style="background:${PALETTE[2]}">Vainqueur</th>
+              <th style="background:${PALETTE[6]}">Arbitre</th>
+            </tr></thead>
+            <tbody>${historiqueHtml}</tbody>
+          </table>
         </div>
       </div>` : `<div class="empty-state">Choisissez le nombre de ${act.terrainLabel.toLowerCase()} puis cliquez sur « Démarrer les matchs ».</div>`}
     </div>`;

@@ -184,6 +184,7 @@
   .defis-tables-grid .poule-card .hint{font-size:.82rem;margin:2px 0;}
   .defis-tables-grid .poule-card .btn{font-size:1.05rem;padding:6px 10px;}
   .match-ordinal{font-size:.78rem;font-weight:600;opacity:.75;}
+  .team-members-inline{display:block;font-size:.72rem;font-weight:600;opacity:.8;white-space:normal;}
   .defis-tables-grid .poule-card .arbitre-label{font-size:.92rem;padding:4px 7px;margin-top:4px;}
   .team-card, .poule-card{
     border:2px solid var(--line);border-radius:12px;padding:10px;background:#f8fafc;
@@ -221,6 +222,10 @@
   }
   .team-card li select, .poule-card li select{
     font-size:.68rem;padding:2px 4px;border:1px solid var(--line);border-radius:5px;max-width:110px;
+  }
+  .team-add-select{
+    width:100%;margin-top:8px;font-size:.78rem;padding:5px 7px;border:1px dashed var(--line);border-radius:7px;
+    background:#fff;color:var(--muted);
   }
 
   /* Match schedule */
@@ -290,6 +295,7 @@
   .th-sub{display:block;font-size:.65rem;font-weight:600;opacity:.85;}
   .th-sub-cell{display:block;font-size:.62rem;font-weight:600;opacity:.85;}
   .classement-table thead th[data-sort-classement]{cursor:pointer;}
+  .classement-table thead th[data-sort-defis]{cursor:pointer;}
   .win-edit-input{
     width:100%;box-sizing:border-box;text-align:center;padding:3px 2px;
     border:1px solid var(--line);border-radius:6px;font-size:.8rem;font-family:inherit;
@@ -1927,6 +1933,20 @@ function participantLabel(activite, id){
   }
   const s = STATE.allStudents.find(s=>s.id===id);
   return s ? s.nomPrenom : id;
+}
+// Liste des noms des élèves d'une équipe (défis ou poule), pour affichage en
+// plus du nom de l'équipe — '' si l'id ne correspond à aucune équipe (élève
+// individuel, ou id introuvable).
+function participantMembresLabel(activite, id){
+  const act = ACTIVITIES[activite];
+  const seance = currentSeance(activite);
+  if(act.type !== 'equipe' || !seance) return '';
+  const t = seance.teams.find(t=>t.id===id) || (seance.teamsDefis||[]).find(t=>t.id===id);
+  if(!t) return '';
+  return t.memberIds.map(mid=>{
+    const s = STATE.allStudents.find(s=>s.id===mid);
+    return s ? s.nomPrenom : mid;
+  }).join(', ');
 }
 // Résumé "poule" pour un élève dans une séance de tournoi par poule (partagé
 // par le mode normal et par le mode combiné d'Ultimate ci-dessous).
@@ -3570,6 +3590,9 @@ function renderActivityTab(activite){
   panel.querySelectorAll('[data-sort-classement]').forEach(th=>{
     th.addEventListener('click', ()=>toggleClassementPouleSort(th.dataset.sortClassement, activite));
   });
+  panel.querySelectorAll('[data-sort-defis]').forEach(th=>{
+    th.addEventListener('click', ()=>toggleClassementDefisSort(th.dataset.sortDefis, activite));
+  });
   const btnExportFeuilles = q('#btnExportFeuilles');
   if(btnExportFeuilles) btnExportFeuilles.addEventListener('click', ()=>exportFeuillesMatchsPDF(activite));
   const btnExportClassement = q('#btnExportClassement');
@@ -3592,6 +3615,11 @@ function renderActivityTab(activite){
   });
   panel.querySelectorAll('[data-move-student-defis]').forEach(sel=>{
     sel.addEventListener('change', ()=>moveStudentTeamDefis(activite, sel.dataset.moveStudentDefis, sel.value));
+  });
+  panel.querySelectorAll('[data-add-eleve-equipe-defis]').forEach(sel=>{
+    sel.addEventListener('change', ()=>{
+      if(sel.value) moveStudentTeamDefis(activite, sel.value, sel.dataset.addEleveEquipeDefis);
+    });
   });
   panel.querySelectorAll('[data-team-name-defis]').forEach(input=>{
     input.addEventListener('change', ()=>renameTeamDefis(activite, input.dataset.teamNameDefis, input.value.trim()));
@@ -4126,6 +4154,22 @@ function setWinsOverride(activite, seanceNumero, studentId, value){
 // pour comprendre pourquoi deux élèves n'ont pas le même nombre de
 // victoires total (et donc pourquoi ils ne s'affrontent pas forcément) en
 // voyant d'où viennent leurs victoires séance par séance.
+// Tri du tableau "Classement — victoires séance par séance" (défis hasard et
+// défis classement progressif) : par nom ou par total de victoires, cliquable
+// sur l'en-tête (et re-cliquable pour inverser le sens) — état séparé du tri
+// de la carte "Classement total" (renderClassementParSeancePoule), ce sont
+// deux tableaux différents.
+let classementDefisSortField = 'total';
+let classementDefisSortDir = 'desc';
+function toggleClassementDefisSort(field, activite){
+  if(classementDefisSortField === field){
+    classementDefisSortDir = classementDefisSortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    classementDefisSortField = field;
+    classementDefisSortDir = field === 'nom' ? 'asc' : 'desc';
+  }
+  renderActivityTab(activite);
+}
 function renderClassementParSeance(cd, students, recentFirst, activite){
   let seancesDefis = cd.seances.filter(s=> s.tournamentType==='defisHasard' || s.tournamentType==='defisClassement');
   if(!seancesDefis.length) return '';
@@ -4142,7 +4186,13 @@ function renderClassementParSeance(cd, students, recentFirst, activite){
     const dateLabel = formatDateSeance(s.dateCreation);
     return `<th style="background:${PALETTE[3 + (s.numero % (PALETTE.length-3))]}">Séance ${s.numero}${dateLabel ? `<br><span class="th-sub">${dateLabel}</span>` : ''}</th>`;
   }).join('');
-  const sorted = students.slice().sort((a,b)=> (cd.wins[b.id]||0) - (cd.wins[a.id]||0));
+  const fleche = (field)=> classementDefisSortField === field ? (classementDefisSortDir === 'asc' ? ' ▲' : ' ▼') : '';
+  const sorted = students.slice().sort((a,b)=>{
+    const cmp = classementDefisSortField === 'nom'
+      ? a.nomPrenom.localeCompare(b.nomPrenom, 'fr')
+      : (cd.wins[a.id]||0) - (cd.wins[b.id]||0);
+    return classementDefisSortDir === 'asc' ? cmp : -cmp;
+  });
   // Cases éditables (si activite fourni, hors défis par équipes) pour
   // corriger une victoire mal saisie sans avoir à rejouer/ré-arbitrer le
   // match concerné.
@@ -4166,9 +4216,9 @@ function renderClassementParSeance(cd, students, recentFirst, activite){
       <table class="classement-table">
         <thead><tr>
           <th style="background:${PALETTE[0]}">Rang</th>
-          <th style="background:${PALETTE[1]}">Nom Prénom</th>
+          <th style="background:${PALETTE[1]}" data-sort-defis="nom">Nom Prénom${fleche('nom')}</th>
           ${headerCols}
-          <th style="background:${PALETTE[2]}">Total</th>
+          <th style="background:${PALETTE[2]}" data-sort-defis="total">Total${fleche('total')}</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
@@ -4691,6 +4741,11 @@ function renderEquipesDefisSection(activite){
                   </li>`;
                 }).join('')}
               </ul>
+              ${candidats.length ? `
+              <select class="team-add-select" data-add-eleve-equipe-defis="${t.id}">
+                <option value="">➕ Ajouter un élève…</option>
+                ${candidats.map(c=>`<option value="${c.id}">${c.nomPrenom}</option>`).join('')}
+              </select>` : ''}
             </div>`).join('')}
         </div>
       </div>`;
@@ -4713,8 +4768,11 @@ function renderDefisHasardSection(activite){
   // (cd.wins, pertinent seulement par élève — voir le tableau "Classement —
   // victoires séance par séance" juste en dessous, lui déjà par élève).
   const participants = estEquipe
-    ? seance.teamsDefis.map(t=>({ id:t.id, label:t.nom }))
-    : students.map(s=>({ id:s.id, label:s.nomPrenom }));
+    ? seance.teamsDefis.map(t=>({ id:t.id, label:t.nom, membres:t.memberIds.map(mid=>{
+        const s = STATE.allStudents.find(s=>s.id===mid);
+        return s ? s.nomPrenom : mid;
+      }).join(', ') }))
+    : students.map(s=>({ id:s.id, label:s.nomPrenom, membres:'' }));
   const winsSource = estEquipe ? (seance.hasardWins||{}) : (cd.wins||{});
   const maxWins = Math.max(20, ...participants.map(p=>winsSource[p.id]||0));
   const cols = Array.from({length:maxWins}, (_,i)=>i+1);
@@ -4724,7 +4782,7 @@ function renderDefisHasardSection(activite){
     const cells = cols.map(c=>`<td class="defis-cell">${c<=w?'✕':''}</td>`).join('');
     return `
       <tr class="defis-row" data-defis-student="${p.id}">
-        <td class="defis-name">${p.label}
+        <td class="defis-name">${p.label}${p.membres?`<span class="team-members-inline">${p.membres}</span>`:''}
           <button class="btn small ghost defis-undo" data-defis-undo="${p.id}" title="Annuler la dernière victoire">↩</button>
         </td>
         ${cells}
@@ -4787,20 +4845,26 @@ function renderDefisClassementSection(activite){
     const m = seance.defisMatches[i];
     const nomA = participantLabel(activite, m.a);
     const nomB = participantLabel(activite, m.b);
+    const membresA = participantMembresLabel(activite, m.a);
+    const membresB = participantMembresLabel(activite, m.b);
     const refereeLabel = m.referee ? participantLabel(activite, m.referee) : 'Auto-arbitrage';
+    const membresReferee = m.referee ? participantMembresLabel(activite, m.referee) : '';
     tableCards.push(`
       <div class="poule-card">
         <h4>${act.terrainLabel.replace(/s$/,'')} ${t}</h4>
-        <button class="btn ${m.winner===m.a?'':'ghost'}" data-set-winner="${i}::${m.a}">${nomA} <span class="match-ordinal">(${ordinalMatch(m.numA)})</span></button>
+        <button class="btn ${m.winner===m.a?'':'ghost'}" data-set-winner="${i}::${m.a}">${nomA} <span class="match-ordinal">(${ordinalMatch(m.numA)})</span>${membresA?`<span class="team-members-inline">${membresA}</span>`:''}</button>
         <div class="hint" style="text-align:center;margin:4px 0;">contre</div>
-        <button class="btn ${m.winner===m.b?'':'ghost'}" data-set-winner="${i}::${m.b}">${nomB} <span class="match-ordinal">(${ordinalMatch(m.numB)})</span></button>
-        <div class="arbitre-label">🧑‍⚖️ Arbitre : <b>${refereeLabel}</b></div>
+        <button class="btn ${m.winner===m.b?'':'ghost'}" data-set-winner="${i}::${m.b}">${nomB} <span class="match-ordinal">(${ordinalMatch(m.numB)})</span>${membresB?`<span class="team-members-inline">${membresB}</span>`:''}</button>
+        <div class="arbitre-label">🧑‍⚖️ Arbitre : <b>${refereeLabel}</b>${membresReferee?` <span class="muted">(${membresReferee})</span>`:''}</div>
       </div>`);
   }
 
   const byeList = Array.isArray(seance.defisBye) ? seance.defisBye : (seance.defisBye ? [seance.defisBye] : []);
   const byeHtml = byeList.length
-    ? `<p class="hint">Exempté(e)(s) pour l'instant, en attente d'un adversaire au même nombre de victoires : ${byeList.map(id=>participantLabel(activite, id)).join(', ')}</p>`
+    ? `<p class="hint">Exempté(e)(s) pour l'instant, en attente d'un adversaire au même nombre de victoires : ${byeList.map(id=>{
+        const membres = participantMembresLabel(activite, id);
+        return participantLabel(activite, id) + (membres ? ` (${membres})` : '');
+      }).join(', ')}</p>`
     : '';
 
   const demiTerrainToggle = isBadminton ? `

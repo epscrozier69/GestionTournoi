@@ -3682,8 +3682,16 @@ function renderActivityTab(activite){
   });
   const btnReessayerDefis = q('#btnReessayerDefis');
   if(btnReessayerDefis) btnReessayerDefis.addEventListener('click', ()=>{
+    const avant = currentSeance(activite).defisMatches.length;
     remplirTablesClassement(activite, true);
+    const apres = currentSeance(activite).defisMatches.length;
     renderActivityTab(activite);
+    // Rien de créé : pas assez d'élèves/équipes disponibles pour un match
+    // valide en ce moment (même en libérant les arbitres) — le dire
+    // explicitement, plutôt que de laisser croire que le bouton ne fait rien.
+    if(apres === avant){
+      alert("Aucun terrain n'a pu être rempli pour l'instant : il n'y a pas assez d'élèves/équipes disponibles pour former un match valide (même nombre de victoires à ±2 près, et pas de revanche trop rapprochée avant 4 matchs). Réessayez une fois qu'un match en cours sera terminé.");
+    }
   });
   const btnAnnulerDernierResultat = q('#btnAnnulerDernierResultat');
   if(btnAnnulerDernierResultat) btnAnnulerDernierResultat.addEventListener('click', ()=>undoLastDefisAction(activite));

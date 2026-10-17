@@ -2657,7 +2657,13 @@ function reparerDefisMatches(seance){
     if(m.winner===null && m.referee && joueursActuels.has(m.referee)) m.referee = null;
   });
 }
-function remplirTablesClassement(activite){
+// libererArbitres (bouton "Réessayer" uniquement) : une équipe/un élève
+// actuellement arbitre d'un match en cours peut être retiré(e) de ce rôle
+// pour jouer sur un terrain libre plutôt que de rester à l'arrêt — son match
+// arbitré repasse alors en auto-arbitrage. Comportement normal (rotation
+// automatique, "Démarrer les matchs", changement du nombre de terrains) :
+// jamais activé, un arbitre en cours reste indisponible comme avant.
+function remplirTablesClassement(activite, libererArbitres){
   const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
   const estEquipe = ACTIVITIES[activite].type === 'equipe';
@@ -2686,12 +2692,19 @@ function remplirTablesClassement(activite){
 
   const unresolved = seance.defisMatches.filter(m=>m.winner===null);
   const occupiedTables = new Set(unresolved.map(m=>m.table));
+  // Arbitres actuels (avant toute modification ci-dessous) : sert à la fois à
+  // les retirer de leur match (libererArbitres) et à ne jamais désigner un
+  // arbitre déjà occupé ailleurs sur un 2e match en même temps.
+  const matchArbitrePar = {};
+  unresolved.forEach(m=>{ if(m.referee) matchArbitrePar[m.referee] = m; });
+  const arbitresActuels = new Set(Object.keys(matchArbitrePar));
   // Un élève déjà joueur OU déjà arbitre d'un match en cours n'est disponible
-  // ni pour jouer ni pour arbitrer ailleurs tant que ce match n'est pas résolu.
+  // ni pour jouer ni pour arbitrer ailleurs tant que ce match n'est pas résolu
+  // — sauf libererArbitres, qui autorise un arbitre à redevenir joueur.
   const busy = new Set();
   unresolved.forEach(m=>{
     busy.add(m.a); busy.add(m.b);
-    if(m.referee) busy.add(m.referee);
+    if(m.referee && !libererArbitres) busy.add(m.referee);
   });
 
   const freeTables = [];
@@ -2800,6 +2813,15 @@ function remplirTablesClassement(activite){
   const matchesACreer = Math.min(freeTables.length, pairs.length);
   const chosenPairs = pairs.slice(0, matchesACreer);
 
+  // libererArbitres : une équipe/un élève choisi(e) pour jouer sur le terrain
+  // libre qui était par ailleurs arbitre d'un autre match en cours quitte ce
+  // rôle — ce match-là repasse en auto-arbitrage.
+  if(libererArbitres){
+    chosenPairs.forEach(([a,b])=>{
+      [a,b].forEach(id=>{ if(matchArbitrePar[id]) matchArbitrePar[id].referee = null; });
+    });
+  }
+
   // Dernier rôle tenu par chaque élève (joueur ou arbitre), pour ne jamais
   // désigner deux fois de suite arbitre : il doit d'abord rejouer au moins
   // un match avant de pouvoir arbitrer à nouveau.
@@ -2822,7 +2844,10 @@ function remplirTablesClassement(activite){
   // qu'il n'a pas rejoué au moins un match. S'il ne reste vraiment personne
   // d'éligible, le match se joue en auto-arbitrage plutôt que d'imposer un
   // 2e (ou 3e) tour d'arbitrage d'affilée à la même personne.
-  const nonJoueurs = available.filter(id=>!usedInPairs.has(id));
+  // Un arbitre actuel non récupéré pour jouer (libererArbitres n'a pas pu ou
+  // pas choisi de le sortir de ce rôle) reste indisponible pour arbitrer un
+  // 2e match en même temps.
+  const nonJoueurs = available.filter(id=>!usedInPairs.has(id) && !arbitresActuels.has(id));
   const byeSet = new Set(stillByes);
   const refPool = [
     ...shuffleArray(nonJoueurs.filter(id=>!byeSet.has(id) && dernierRole[id] !== 'arbitre')),
@@ -3657,7 +3682,7 @@ function renderActivityTab(activite){
   });
   const btnReessayerDefis = q('#btnReessayerDefis');
   if(btnReessayerDefis) btnReessayerDefis.addEventListener('click', ()=>{
-    remplirTablesClassement(activite);
+    remplirTablesClassement(activite, true);
     renderActivityTab(activite);
   });
   const btnAnnulerDernierResultat = q('#btnAnnulerDernierResultat');
@@ -4930,7 +4955,7 @@ function renderDefisClassementSection(activite){
         <h3>📈 Défis classement progressif</h3>
         <div style="display:flex;gap:6px;">
           ${!started ? `<button class="btn" id="btnDemarrerDefis">▶️ Démarrer les matchs</button>` : ''}
-          ${started ? `<button class="btn secondary small" id="btnReessayerDefis" title="Un terrain libre n'a pas pu être rempli (pas d'adversaire éligible pour l'instant) ? Réessaie maintenant.">🔄 Réessayer de remplir les terrains libres</button>` : ''}
+          ${started ? `<button class="btn secondary small" id="btnReessayerDefis" title="Un terrain libre n'a pas pu être rempli ? Réessaie maintenant, quitte à retirer une équipe de l'arbitrage pour la faire jouer.">🔄 Réessayer de remplir les terrains libres</button>` : ''}
           ${seance.lastAction ? `<button class="btn danger small" id="btnAnnulerDernierResultat">↩️ Annuler le dernier résultat</button>` : ''}
           ${started ? `<button class="btn secondary small" id="btnExportDefisMatchs">📊 Exporter Excel</button>` : ''}
         </div>

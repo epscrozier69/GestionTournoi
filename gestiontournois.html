@@ -4171,10 +4171,14 @@ function renderEvaluationTechniqueRecordSection(activite){
   const tousLesEleves = STATE.allStudents.filter(s=>s.classe===cd.classe);
   const alphabetique = tousLesEleves.slice().sort((a,b)=>a.nomPrenom.localeCompare(b.nomPrenom, 'fr'));
   const reasons = seance.absentReasons || {};
+  // Un(e) élève peut être évalué(e) dans plusieurs binômes (refait avec un
+  // autre partenaire) : on retient le meilleur des résultats obtenus.
   const scoreParEleve = {};
   seance.binomesRecord.forEach(b=>{
     if(b.score === null || b.score === undefined) return;
-    b.memberIds.forEach(id=>{ scoreParEleve[id] = b.score; });
+    b.memberIds.forEach(id=>{
+      if(scoreParEleve[id] === undefined || b.score > scoreParEleve[id]) scoreParEleve[id] = b.score;
+    });
   });
   const notesRows = alphabetique.map((s,i)=>{
     const statut = reasons[s.id] && PRESENCE_STATUTS[reasons[s.id]];

@@ -2146,6 +2146,51 @@ function renameTeamDefis(activite, teamId, newName){
   const t = seance.teamsDefis.find(t=>t.id===teamId);
   if(t){ t.nom = newName || t.nom; saveState(); renderGeneral(); }
 }
+// Volley : constitution manuelle des équipes de défis en cliquant sur les
+// élèves un par un (état transitoire, non sauvegardé — remis à zéro une fois
+// l'équipe créée), plutôt que la génération au hasard. Dès que le nombre
+// choisi (seance.joueursParEquipeDefis) est atteint, l'équipe est créée
+// directement, sans clic supplémentaire — même principe que la formation de
+// binômes ailleurs dans l'appli.
+let equipeDefisSelectionEnCours = [];
+function toggleEquipeDefisCandidat(activite, studentId){
+  const seance = currentSeance(activite);
+  const idx = equipeDefisSelectionEnCours.indexOf(studentId);
+  if(idx !== -1){ equipeDefisSelectionEnCours.splice(idx, 1); renderActivityTab(activite); return; }
+  const taille = clamp(seance.joueursParEquipeDefis || 4, 2, 15);
+  equipeDefisSelectionEnCours.push(studentId);
+  if(equipeDefisSelectionEnCours.length >= taille){ creerEquipeDefisManuelle(activite); return; }
+  renderActivityTab(activite);
+}
+// N'efface pas les résultats de défis déjà enregistrés (contrairement à la
+// génération au hasard) : ajouter une équipe à partir d'élèves pas encore
+// assignés ne modifie aucune équipe déjà existante/déjà en jeu.
+function creerEquipeDefisManuelle(activite){
+  if(!equipeDefisSelectionEnCours.length) return;
+  const seance = currentSeance(activite);
+  const numero = seance.teamsDefis.length + 1;
+  seance.teamsDefis.push({ id:'equipeDefis'+Date.now()+Math.floor(Math.random()*1000), nom:'Équipe '+numero, memberIds: equipeDefisSelectionEnCours.slice() });
+  equipeDefisSelectionEnCours = [];
+  saveState();
+  renderActivityTab(activite);
+  renderGeneral();
+}
+function viderEquipesDefis(activite){
+  const cd = currentClasseData(activite);
+  const seance = currentSeance(activite);
+  if(!seance.teamsDefis.length) return;
+  if(!confirm("Vider toutes les équipes de défis et effacer les résultats de défis déjà enregistrés pour cette séance ?")) return;
+  seance.teamsDefis = [];
+  equipeDefisSelectionEnCours = [];
+  seance.hasardWins = {};
+  seance.defisMatches = [];
+  seance.defisBye = [];
+  seance.lastAction = null;
+  recomputeCumulativeTotals(cd, activite);
+  saveState();
+  renderActivityTab(activite);
+  renderGeneral();
+}
 
 // Barème de points selon l'écart de score (sports de raquette — Tennis de
 // table, Badminton — voir carte Règlement des feuilles PDF) : victoire ou
@@ -3505,6 +3550,13 @@ function renderActivityTab(activite){
   if(btnPoules) btnPoules.addEventListener('click', ()=>onGenererPoules(activite));
   const btnGenererEquipesDefis = q('#btnGenererEquipesDefis');
   if(btnGenererEquipesDefis) btnGenererEquipesDefis.addEventListener('click', ()=>onGenererEquipesDefis(activite));
+  const btnViderEquipesDefis = q('#btnViderEquipesDefis');
+  if(btnViderEquipesDefis) btnViderEquipesDefis.addEventListener('click', ()=>viderEquipesDefis(activite));
+  const btnCreerEquipeDefisPartielle = q('#btnCreerEquipeDefisPartielle');
+  if(btnCreerEquipeDefisPartielle) btnCreerEquipeDefisPartielle.addEventListener('click', ()=>creerEquipeDefisManuelle(activite));
+  panel.querySelectorAll('[data-equipe-defis-candidat]').forEach(input=>{
+    input.addEventListener('change', ()=>toggleEquipeDefisCandidat(activite, input.dataset.equipeDefisCandidat));
+  });
   const btnMatchs = q('#btnGenererMatchs');
   if(btnMatchs) btnMatchs.addEventListener('click', ()=>onGenererMatchs(activite));
   const btnExportMatchs = q('#btnExportMatchs');
@@ -4585,15 +4637,37 @@ function renderEvaluationTechniqueSection(activite){
 // du tournoi par poule (seance.teams/joueursParEquipe), partagée par défis
 // hasard et défis classement progressif (toutes deux par équipes).
 function renderEquipesDefisSection(activite){
+  const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
+  const taille = clamp(seance.joueursParEquipeDefis || 4, 2, 15);
+  // Élèves pas encore dans une équipe de défis : seuls eux peuvent être
+  // cliqués pour constituer une nouvelle équipe (réaffecter un élève déjà
+  // assigné se fait via le menu déroulant de sa carte équipe, plus bas).
+  const dejaAssignes = new Set(seance.teamsDefis.flatMap(t=>t.memberIds));
+  const candidats = STATE.allStudents.filter(s=>s.classe===cd.classe && !seance.absents.includes(s.id) && !dejaAssignes.has(s.id));
+  const selectionHtml = candidats.map(s=>{
+    const checked = equipeDefisSelectionEnCours.includes(s.id);
+    return `
+      <label class="cb-opt ${checked?'checked':''}" style="min-width:auto;">
+        <input type="checkbox" data-equipe-defis-candidat="${s.id}" ${checked?'checked':''}>
+        <span class="code">${s.nomPrenom}</span>
+      </label>`;
+  }).join('');
+  const nbSelection = equipeDefisSelectionEnCours.length;
   let html = `
     <div class="card">
       <h3>👥 Équipes de défis</h3>
       <p class="hint">Taille d'équipe propre aux défis, réglable indépendamment de celle du tournoi par poule.</p>
       ${checkboxRangeHtml('cfgJoueursEquipeDefisCbGroup', 'Joueurs par équipe', 2, 15, seance.joueursParEquipeDefis || 4)}
       ${nombreEquipesFixeHtml('cfgNombreEquipesFixeDefisCbGroup', seance.nombreEquipesFixeDefis || 0)}
-      <button class="btn" id="btnGenererEquipesDefis">${seance.teamsDefis.length ? '🔄 Régénérer les équipes de défis' : '⚙️ Générer les équipes de défis'}</button>
-      ${seance.teamsDefis.length ? '<p class="hint" style="margin-top:6px;">Régénérer efface les résultats de défis déjà enregistrés pour cette séance.</p>' : ''}
+      <div class="config-grid" style="margin-top:10px;">
+        <button class="btn" id="btnGenererEquipesDefis">🎲 Générer les équipes au hasard</button>
+        ${seance.teamsDefis.length ? '<button class="btn danger" id="btnViderEquipesDefis">🗑️ Vider les équipes</button>' : ''}
+      </div>
+      ${seance.teamsDefis.length ? '<p class="hint" style="margin-top:6px;">Générer au hasard ou vider efface les résultats de défis déjà enregistrés pour cette séance.</p>' : ''}
+      <p class="hint" style="margin:14px 0 4px;"><b>Ou constituez les équipes en cliquant sur les élèves (${nbSelection}/${taille} sélectionné${nbSelection>1?'s':''}) :</b></p>
+      <div class="cb-group" style="margin-bottom:10px;">${selectionHtml || '<span class="muted">Tous les élèves présents sont déjà dans une équipe.</span>'}</div>
+      ${nbSelection >= 1 && nbSelection < taille ? `<button class="btn secondary small" id="btnCreerEquipeDefisPartielle">➕ Créer l'équipe avec ${nbSelection} élève${nbSelection>1?'s':''} (effectif incomplet)</button>` : ''}
     </div>`;
   if(seance.teamsDefis.length){
     html += `

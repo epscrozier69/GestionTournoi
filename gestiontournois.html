@@ -66,6 +66,7 @@
   .btn.secondary{background:var(--c6);}
   .btn.danger{background:var(--c5);}
   .btn.ghost{background:#fff;color:var(--ink);border:1px solid var(--line);box-shadow:none;}
+  .btn.masque{background:#94a3b8;box-shadow:none;}
   .btn.small{padding:5px 10px;font-size:.75rem;}
 
   .empty-state{padding:30px;text-align:center;color:var(--muted);font-size:.9rem;}
@@ -650,6 +651,7 @@ function defaultSeance(numero, activite){
   return {
     numero, dateCreation: new Date().toISOString(), // affichée sous "Séance N" dans les tableaux de classement
     tournamentType:'', config:{}, defisTerrains:defaultT, pouleTerrains:defaultT,
+    contenuMasque:false, // clic sur le type de tournoi déjà sélectionné : masque/affiche son contenu
     joueursParEquipe:4, taillePoule:act.pouleMin, // choix par cases à cocher (sports collectifs)
     nombrePoules:2, // sports collectifs : nombre de poules souhaité (répartition équilibrée des équipes)
     demiTerrain:false, // Badminton uniquement : double la capacité de terrains simultanés
@@ -733,6 +735,7 @@ function ensureActivityData(){
         if(!s.binomesRecord) s.binomesRecord = [];
         if(!s.dureeRecord) s.dureeRecord = 30;
         if(!s.teamsDefis) s.teamsDefis = [];
+        if(s.contenuMasque === undefined) s.contenuMasque = false;
         if(!s.joueursParEquipeDefis) s.joueursParEquipeDefis = 4;
         if(s.nombreEquipesFixeDefis === undefined) s.nombreEquipesFixeDefis = 0;
         if(ACTIVITIES[a].evaluationTechniqueAllowed){
@@ -3334,6 +3337,26 @@ function renderActivityTab(activite){
       }
 
       if(act.defisAllowed){
+        // Recliquer sur le type déjà sélectionné masque/affiche son contenu
+        // (voir câblage de [data-tournament-type]) — icône et style distincts
+        // pour que ce soit visible sur le bouton, comme pour l'onglet de
+        // séance déjà affichée. Un ✅ distingue en plus, sur CHAQUE bouton
+        // (pas seulement celui actuellement affiché), un type de tournoi déjà
+        // commencé cette séance — pour voir d'un coup d'œil ce qui a déjà été
+        // fait sans avoir à cliquer sur chacun.
+        const typeTournoiDemarre = (type) => {
+          if(type === 'poule') return (seance.poules||[]).length > 0;
+          if(type === 'defisClassement') return (seance.defisMatches||[]).length > 0;
+          if(type === 'defisHasard') return Object.keys(seance.hasardWins||{}).length > 0;
+          if(type === 'evaluationTechniqueRecord') return (seance.binomesRecord||[]).length > 0;
+          return false;
+        };
+        const typeTournoiBtn = (type, label) => {
+          const actif = seance.tournamentType === type;
+          const masque = actif && seance.contenuMasque;
+          const prefixe = (typeTournoiDemarre(type) ? '✅ ' : '') + (masque ? '👁️‍🗨️ ' : '');
+          return `<button class="btn ${actif ? (masque?'masque':'') : 'ghost'}" data-tournament-type="${type}">${prefixe}${label}</button>`;
+        };
         html += `
           <div class="card">
             <div class="toolbar">
@@ -3341,10 +3364,10 @@ function renderActivityTab(activite){
               ${cd.seances.length ? '<button class="btn small ghost" id="btnEffacerResultats">🧹 Effacer les résultats</button>' : ''}
             </div>
             <div class="config-grid">
-              <button class="btn ${seance.tournamentType==='poule'?'':'ghost'}" data-tournament-type="poule">🏆 Par poule</button>
-              <button class="btn ${seance.tournamentType==='defisClassement'?'':'ghost'}" data-tournament-type="defisClassement">📈 Défis classement progressif</button>
-              <button class="btn ${seance.tournamentType==='defisHasard'?'':'ghost'}" data-tournament-type="defisHasard">🎲 Défis hasard</button>
-              ${act.evaluationTechniqueRecordAllowed ? `<button class="btn ${seance.tournamentType==='evaluationTechniqueRecord'?'':'ghost'}" data-tournament-type="evaluationTechniqueRecord">📊 Évaluation technique (record d'échanges)</button>` : ''}
+              ${typeTournoiBtn('poule', '🏆 Par poule')}
+              ${typeTournoiBtn('defisClassement', '📈 Défis classement progressif')}
+              ${typeTournoiBtn('defisHasard', '🎲 Défis hasard')}
+              ${act.evaluationTechniqueRecordAllowed ? typeTournoiBtn('evaluationTechniqueRecord', "📊 Évaluation technique (record d'échanges)") : ''}
             </div>
           </div>`;
       } else if(act.evaluationTechniqueAllowed){
@@ -3386,6 +3409,11 @@ function renderActivityTab(activite){
         if(seance.evalTechActif){
           html += act.evaluationTechniqueRecordAllowed ? renderEvaluationTechniqueRecordSection(activite) : renderEvaluationTechniqueSection(activite);
         }
+      } else if(seance.contenuMasque && seance.tournamentType){
+        // Reclic sur le type de tournoi déjà sélectionné (voir câblage de
+        // [data-tournament-type]) : masque son contenu, même principe que le
+        // clic sur l'onglet de la séance déjà affichée.
+        html += `<div class="card"><p class="hint" style="margin:0;">👁️‍🗨️ Contenu masqué — recliquez sur le type sélectionné ci-dessus pour l'afficher.</p></div>`;
       } else if(seance.tournamentType === 'poule'){
         html += renderPouleConfigCard(activite);
         html += renderTeamsSection(activite);
@@ -3508,7 +3536,16 @@ function renderActivityTab(activite){
 
   panel.querySelectorAll('[data-tournament-type]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
-      currentSeance(activite).tournamentType = btn.dataset.tournamentType;
+      const s = currentSeance(activite);
+      // Recliquer sur le type déjà sélectionné masque/affiche son contenu
+      // (même principe que le clic sur l'onglet de la séance déjà affichée) ;
+      // cliquer sur un autre type l'affiche normalement.
+      if(s.tournamentType === btn.dataset.tournamentType){
+        s.contenuMasque = !s.contenuMasque;
+      } else {
+        s.tournamentType = btn.dataset.tournamentType;
+        s.contenuMasque = false;
+      }
       saveState();
       renderActivityTab(activite);
     });
@@ -4463,7 +4500,10 @@ function exportRecordExcel(activite){
       if(scoreParEleve[id] === undefined || b.score > scoreParEleve[id]) scoreParEleve[id] = b.score;
     });
   });
-  const avecBareme = seance.dureeRecord === 20;
+  // Barème lié à la durée uniquement pour le Tennis de table (Fonctionnalites.md
+  // ligne 43 : "Si 20 sec : ..."). Le Volley n'a pas cette restriction — son
+  // barème (ligne 70) s'applique quelle que soit la durée choisie.
+  const avecBareme = activite !== 'Tennis de table' || seance.dureeRecord === 20;
   const rows = students.slice().sort((a,b)=>a.nomPrenom.localeCompare(b.nomPrenom, 'fr')).map(s=>{
     const statut = reasons[s.id] && PRESENCE_STATUTS[reasons[s.id]];
     const score = scoreParEleve[s.id];
@@ -4550,9 +4590,11 @@ function renderEvaluationTechniqueRecordSection(activite){
   }).join('');
 
   const dureeLabel = seance.dureeRecord === 60 ? '1 min' : `${seance.dureeRecord} sec`;
-  // Barème uniquement défini pour l'épreuve de 20 sec (Fonctionnalites.md
-  // ligne 43) : TB > 17, S entre 12 et 16, F entre 7 et 11, I <= 6.
-  const avecBareme = seance.dureeRecord === 20;
+  // Barème lié à la durée uniquement pour le Tennis de table (Fonctionnalites.md
+  // ligne 43 : "Si 20 sec : > ou égal à 17 = TB..."). Le Volley n'a pas cette
+  // restriction — son barème (ligne 70, mêmes seuils) s'applique quelle que
+  // soit la durée choisie.
+  const avecBareme = activite !== 'Tennis de table' || seance.dureeRecord === 20;
 
   // Liste alphabétique de tous les élèves de la classe (même absents/
   // dispensés, comme pour l'évaluation technique Ultimate) avec le score

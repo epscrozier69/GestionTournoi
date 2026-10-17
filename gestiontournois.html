@@ -1638,12 +1638,14 @@ function computeClassementPouleGeneral(cd, activite){
     return rangs;
   });
   const sommeRangParEleve = {};
+  const nbAbsencesParEleve = {};
   students.forEach(s=>{
     let somme = 0;
     rangParSeance.forEach(rangs=>{ if(rangs[s.id] !== undefined) somme += rangs[s.id]; });
     sommeRangParEleve[s.id] = somme;
+    nbAbsencesParEleve[s.id] = seancesPoule.filter(se=>se.absents.includes(s.id)).length;
   });
-  return { seancesPoule, perSeance, pouleIndexParSeance, rangParSeance, sommeRangParEleve };
+  return { seancesPoule, perSeance, pouleIndexParSeance, rangParSeance, sommeRangParEleve, nbAbsencesParEleve };
 }
 function exportClassementExcel(activite){
   const cd = currentClasseData(activite);
@@ -1674,18 +1676,16 @@ function exportClassementExcel(activite){
   }
 
   // Tournoi par poule : classement général = somme des classements obtenus
-  // chaque séance (la plus petite somme devant) — même logique que le tri
-  // "Total" de la carte à l'écran. Les élèves dispensés à la dernière séance
-  // sont relégués en bas (voir renderClassementParSeancePoule).
-  const { seancesPoule, rangParSeance, sommeRangParEleve } = computeClassementPouleGeneral(cd, activite);
-  const comparateur = (a,b)=> sommeRangParEleve[a.id] - sommeRangParEleve[b.id];
-  const derniereSeancePoule = seancesPoule[seancesPoule.length-1];
-  const estDispenseActuellement = (studentId)=>{
-    const reasons = derniereSeancePoule && derniereSeancePoule.absentReasons;
-    return !!reasons && reasons[studentId] === 'dispense';
+  // chaque séance (la plus petite somme devant), les élèves présents à TOUTES
+  // les séances étant classés en priorité devant ceux ayant manqué au moins
+  // une séance — même logique que le tri "Total" de la carte à l'écran.
+  const { seancesPoule, rangParSeance, sommeRangParEleve, nbAbsencesParEleve } = computeClassementPouleGeneral(cd, activite);
+  const comparateur = (a,b)=>{
+    const absA = nbAbsencesParEleve[a.id]||0, absB = nbAbsencesParEleve[b.id]||0;
+    if(absA !== absB) return absA - absB;
+    return sommeRangParEleve[a.id] - sommeRangParEleve[b.id];
   };
-  const sorted = students.filter(s=>!estDispenseActuellement(s.id)).sort(comparateur)
-    .concat(students.filter(s=>estDispenseActuellement(s.id)).sort(comparateur));
+  const sorted = students.slice().sort(comparateur);
   const rows = sorted.map((s,i)=>{
     const row = { 'Rang':i+1, 'Nom Prénom':s.nomPrenom };
     seancesPoule.forEach((sc,si)=>{ row['Séance '+sc.numero] = sc.absents.includes(s.id) ? '' : (rangParSeance[si][s.id]||''); });
@@ -3738,7 +3738,7 @@ function renderClassementTotalCard(activite){
         </div>
       </div>
       ${showTotal ? `
-      <p class="hint">Une colonne par séance de tournoi par poule : le chiffre affiché est le classement dans la classe ce jour-là (table/terrain joué en priorité, les victoires ne départageant qu'à table égale). Le "Total" additionne ces classements : le plus PETIT total est le mieux classé (comme au golf). Cliquez sur l'en-tête d'une séance pour trier sur son classement, ou sur "Total" pour le classement général — recliquez pour inverser le sens.</p>
+      <p class="hint">Une colonne par séance de tournoi par poule : le chiffre affiché est le classement dans la classe ce jour-là (table/terrain joué en priorité, les victoires ne départageant qu'à table égale). Le "Total" additionne ces classements : les élèves présents à TOUTES les séances sont classés en priorité, puis le plus PETIT total départage (comme au golf). Cliquez sur l'en-tête d'une séance pour trier sur son classement, ou sur "Total" pour le classement général — recliquez pour inverser le sens.</p>
       ${renderClassementParSeancePoule(cd, students, activite)}` : ''}
     </div>`;
 }
@@ -3780,7 +3780,7 @@ function toggleClassementPouleSort(field, activite){
   renderActivityTab(activite);
 }
 function renderClassementParSeancePoule(cd, students, activite){
-  const { seancesPoule, perSeance, pouleIndexParSeance, rangParSeance, sommeRangParEleve } = computeClassementPouleGeneral(cd, activite);
+  const { seancesPoule, perSeance, pouleIndexParSeance, rangParSeance, sommeRangParEleve, nbAbsencesParEleve } = computeClassementPouleGeneral(cd, activite);
   if(!seancesPoule.length) return '';
   // Une séance avec évaluation technique en plus du tournoi par poule reçoit
   // 2 colonnes (Match / Éval. technique) sous un même en-tête "Séance N" ;
@@ -3819,23 +3819,18 @@ function renderClassementParSeancePoule(cd, students, activite){
       const rangB = si === -1 ? undefined : rangParSeance[si][b.id];
       cmp = (rangB === undefined ? Infinity : rangB) - (rangA === undefined ? Infinity : rangA);
     } else {
-      // 'total' : somme des classements de chaque séance, la plus petite devant.
-      cmp = sommeRangParEleve[b.id] - sommeRangParEleve[a.id];
+      // 'total' : les élèves présents à TOUTES les séances sont classés en
+      // priorité (0 absence, quelle qu'en soit la raison), avant les élèves
+      // ayant manqué au moins une séance — puis, à nombre d'absences égal, la
+      // plus petite somme des classements de chaque séance gagne.
+      const absA = nbAbsencesParEleve[a.id]||0, absB = nbAbsencesParEleve[b.id]||0;
+      cmp = absA !== absB
+        ? absB - absA // moins d'absences = cmp positif = "a" avantagé, comme pour la somme
+        : sommeRangParEleve[b.id] - sommeRangParEleve[a.id];
     }
     return classementPouleSortDir === 'asc' ? cmp : -cmp;
   };
-  // Un(e) élève dispensé(e) à la dernière séance est relégué(e) en bas du
-  // tableau, quel que soit le sens de tri choisi : sa table d'une séance plus
-  // ancienne (avant d'être dispensé) ne doit pas fausser le classement des
-  // élèves actuellement actifs.
-  const derniereSeancePoule = seancesPoule[seancesPoule.length-1];
-  const estDispenseActuellement = (studentId)=>{
-    const reasons = derniereSeancePoule && derniereSeancePoule.absentReasons;
-    return !!reasons && reasons[studentId] === 'dispense';
-  };
-  const actifs = students.filter(s=>!estDispenseActuellement(s.id)).sort(comparateurClassement);
-  const dispenses = students.filter(s=>estDispenseActuellement(s.id)).sort(comparateurClassement);
-  const sorted = actifs.concat(dispenses);
+  const sorted = students.slice().sort(comparateurClassement);
   // Largeur de la colonne Nom Prénom ajustée au nom le plus long affiché
   // (au lieu d'une largeur fixe qui laissait un grand vide pour les noms
   // courts), plutôt qu'une largeur fixe.

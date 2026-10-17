@@ -3655,6 +3655,11 @@ function renderActivityTab(activite){
     remplirTablesClassement(activite);
     renderActivityTab(activite);
   });
+  const btnReessayerDefis = q('#btnReessayerDefis');
+  if(btnReessayerDefis) btnReessayerDefis.addEventListener('click', ()=>{
+    remplirTablesClassement(activite);
+    renderActivityTab(activite);
+  });
   const btnAnnulerDernierResultat = q('#btnAnnulerDernierResultat');
   if(btnAnnulerDernierResultat) btnAnnulerDernierResultat.addEventListener('click', ()=>undoLastDefisAction(activite));
   const btnExportDefisMatchs = q('#btnExportDefisMatchs');
@@ -4925,6 +4930,7 @@ function renderDefisClassementSection(activite){
         <h3>📈 Défis classement progressif</h3>
         <div style="display:flex;gap:6px;">
           ${!started ? `<button class="btn" id="btnDemarrerDefis">▶️ Démarrer les matchs</button>` : ''}
+          ${started ? `<button class="btn secondary small" id="btnReessayerDefis" title="Un terrain libre n'a pas pu être rempli (pas d'adversaire éligible pour l'instant) ? Réessaie maintenant.">🔄 Réessayer de remplir les terrains libres</button>` : ''}
           ${seance.lastAction ? `<button class="btn danger small" id="btnAnnulerDernierResultat">↩️ Annuler le dernier résultat</button>` : ''}
           ${started ? `<button class="btn secondary small" id="btnExportDefisMatchs">📊 Exporter Excel</button>` : ''}
         </div>

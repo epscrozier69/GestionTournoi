@@ -1598,12 +1598,45 @@ function exportDefisMatchesExcel(activite){
   }));
   exportRowsToExcel(rows, `defis_classement_${slug(activite)}_${slug(cd.classe)}_seance${seance.numero}.xlsx`, 'Matchs');
 }
+// Table/terrain actuel de chaque élève d'une classe pour une activité donnée :
+// celui de la séance de poule la plus récente où il a été classé (on remonte
+// dans l'historique s'il était absent la dernière fois) — index 0 = table/
+// terrain 1, le meilleur. Élève jamais classé : Infinity (le plus bas).
+function computeTableActuelleParEleve(cd, activite){
+  const seancesPoule = cd.seances.filter(s=>s.poules && s.poules.length);
+  const pouleIndexParSeance = seancesPoule.map(s=>{
+    const idxParEquipeOuEleve = {};
+    (s.poules||[]).forEach((p, pi)=>{ p.members.forEach(id=>{ idxParEquipeOuEleve[id] = pi; }); });
+    if(ACTIVITIES[activite].type !== 'equipe') return idxParEquipeOuEleve;
+    const idxParEleve = {};
+    (s.teams||[]).forEach(t=>{
+      const pi = idxParEquipeOuEleve[t.id];
+      if(pi === undefined) return;
+      t.memberIds.forEach(mid=>{ idxParEleve[mid] = pi; });
+    });
+    return idxParEleve;
+  });
+  const result = {};
+  STATE.allStudents.filter(s=>s.classe===cd.classe).forEach(s=>{
+    let table = Infinity;
+    for(let i=pouleIndexParSeance.length-1; i>=0; i--){
+      const idx = pouleIndexParSeance[i][s.id];
+      if(idx !== undefined){ table = idx; break; }
+    }
+    result[s.id] = table;
+  });
+  return result;
+}
 function exportClassementExcel(activite){
   const cd = currentClasseData(activite);
   if(!cd) return;
+  const act = ACTIVITIES[activite];
   const seance = currentSeance(activite);
-  const typeCourant = seance ? seance.tournamentType : '';
-  const modePoints = typeCourant === 'poule';
+  // Même détection de mode que la carte "Classement total" à l'écran (voir
+  // renderClassementTotalCard) : pour Ultimate/Volley, poule et évaluation
+  // technique sont deux cases indépendantes (seance.pouleActif), pas un
+  // tournamentType exclusif comme pour les autres activités.
+  const modePoints = act.evaluationTechniqueAllowed ? !!(seance && seance.pouleActif) : (seance && seance.tournamentType === 'poule');
   const students = STATE.allStudents.filter(s=>s.classe===cd.classe);
 
   if(!modePoints){
@@ -1622,11 +1655,21 @@ function exportClassementExcel(activite){
     return;
   }
 
-  // Tournoi par poule : son propre système de points (cd.poulePoints), qui
-  // ne compte pas les résultats de la même façon (barème selon l'écart de
-  // score) et n'a pas de détail séance par séance.
-  const sorted = students.slice().sort((a,b)=>(cd.poulePoints[b.id]||0)-(cd.poulePoints[a.id]||0));
-  const rows = sorted.map((s,i)=>({ 'Rang':i+1, 'Nom Prénom':s.nomPrenom, 'Points cumulés':cd.poulePoints[s.id]||0 }));
+  // Tournoi par poule : classement par table/terrain actuel en priorité
+  // (reflet de la montée-descente), les points cumulés (cd.poulePoints, son
+  // propre barème selon l'écart de score) ne départageant qu'à table égale —
+  // même logique que le tri "Total" de la carte à l'écran.
+  const tableParEleve = computeTableActuelleParEleve(cd, activite);
+  const sorted = students.slice().sort((a,b)=>{
+    const tableA = tableParEleve[a.id], tableB = tableParEleve[b.id];
+    if(tableA !== tableB) return tableA - tableB;
+    return (cd.poulePoints[b.id]||0) - (cd.poulePoints[a.id]||0);
+  });
+  const rows = sorted.map((s,i)=>({
+    'Rang':i+1, 'Nom Prénom':s.nomPrenom,
+    'Table/Terrain actuel': tableParEleve[s.id]===Infinity ? '' : tableParEleve[s.id]+1,
+    'Points cumulés':cd.poulePoints[s.id]||0,
+  }));
   exportRowsToExcel(rows, `classement_cumule_${slug(activite)}_${slug(cd.classe)}.xlsx`, 'Classement');
 }
 
@@ -3673,7 +3716,7 @@ function renderClassementTotalCard(activite){
         </div>
       </div>
       ${showTotal ? `
-      <p class="hint">Une colonne par séance de tournoi par poule, et le total cumulé à droite.</p>
+      <p class="hint">Une colonne par séance de tournoi par poule, et le total cumulé à droite. Cliquez sur "Total" pour classer : le rang tient compte en priorité de la table/terrain actuel (montée-descente), les points ne départageant qu'à table égale.</p>
       ${renderClassementParSeancePoule(cd, students, activite)}` : ''}
     </div>`;
 }
@@ -3751,10 +3794,33 @@ function renderClassementParSeancePoule(cd, students, activite){
   const headerRow2 = seancesPoule.map((s,si)=> hasEvalTech[si]
     ? `<th class="col-match" style="background:${PALETTE[3 + (s.numero % (PALETTE.length-3))]}">Match</th><th class="col-eval" style="background:${PALETTE[4]}">Éval.<br>technique</th>`
     : '').join('');
+  // Table/terrain actuel d'un élève : celui de la séance de poule la plus
+  // récente où il a été classé (on remonte dans l'historique s'il était
+  // absent la dernière fois) — index 0 = table/terrain 1 = le meilleur.
+  // Un élève jamais classé (aucune séance jouée) est considéré au plus bas.
+  const tableActuelleParEleve = {};
+  students.forEach(s=>{
+    let table = Infinity;
+    for(let i=pouleIndexParSeance.length-1; i>=0; i--){
+      const idx = pouleIndexParSeance[i][s.id];
+      if(idx !== undefined){ table = idx; break; }
+    }
+    tableActuelleParEleve[s.id] = table;
+  });
+  // Le classement ne se fait plus uniquement au total de points cumulés :
+  // la table/terrain actuel (reflet de la montée-descente) prime, les points
+  // ne départagent qu'en cas de table identique — un élève monté à la table 1
+  // passe donc devant un élève resté plus bas même avec moins de points.
   const sorted = students.slice().sort((a,b)=>{
-    const cmp = classementPouleSortField === 'nom'
-      ? a.nomPrenom.localeCompare(b.nomPrenom, 'fr')
-      : (cd.poulePoints[a.id]||0) - (cd.poulePoints[b.id]||0);
+    let cmp;
+    if(classementPouleSortField === 'nom'){
+      cmp = a.nomPrenom.localeCompare(b.nomPrenom, 'fr');
+    } else {
+      const tableA = tableActuelleParEleve[a.id], tableB = tableActuelleParEleve[b.id];
+      cmp = tableA !== tableB
+        ? tableB - tableA // table plus petite (meilleure) = cmp positif = "a" avantagé, comme pour les points
+        : (cd.poulePoints[a.id]||0) - (cd.poulePoints[b.id]||0);
+    }
     return classementPouleSortDir === 'asc' ? cmp : -cmp;
   });
   const fleche = (field)=> classementPouleSortField === field ? (classementPouleSortDir === 'asc' ? ' ▲' : ' ▼') : '';

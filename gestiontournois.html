@@ -125,6 +125,7 @@
   }
   .seance-tab-item:hover{color:var(--ink);}
   .seance-tab-item.active{background:var(--c7);color:#fff;box-shadow:0 3px 10px rgba(37,99,235,.3);}
+  .seance-tab-item.active.masquee{background:#94a3b8;box-shadow:none;}
   .seance-tab-item button{
     border:none;background:transparent;color:inherit;padding:0;cursor:pointer;
     font-weight:700;font-size:.92rem;
@@ -621,6 +622,8 @@ const ACTIVITIES = {
   'Volley': {
     icon:'🏐', type:'equipe', terrainLabel:'Terrains', defisAllowed:false,
     pouleMin:3, pouleMax:12, pouleTerrainMin:3, pouleTerrainMax:9, defaultTerrains:3,
+    evaluationTechniqueAllowed:true,
+    evaluationTechniqueRecordAllowed:true, // évaluation technique "record d'échanges" (binômes, pavé numérique) — même principe qu'en Tennis de table
   },
 };
 const PALETTE = ['#2563eb','#7c3aed','#db2777','#ea580c','#dc2626','#0891b2','#4f46e5','#b45309','#e11d48','#0ea5e9'];
@@ -645,21 +648,22 @@ function defaultSeance(numero, activite){
     hasardWins:{}, // défis hasard : victoires de cette séance uniquement
     winsOverride:{}, // studentId -> correction manuelle du nb de victoires de cette séance (erreur de saisie)
     defisMatches:[], defisBye:[], lastAction:null, // défis classement progressif uniquement (flux continu)
-    niveaux:{}, // studentId -> 1 (meilleur) à 4 (moins bon) — Ultimate : composition d'équipes
-    compositionEquipes:'aleatoire', // 'aleatoire' | 'homogene' | 'heterogene' (Ultimate)
-    binomes:[], // Ultimate, évaluation technique : [{id, memberIds:[a,b], essais:[10], bonus:[2]}]
-    nombreEquipesFixe:0, // Ultimate : 0 = auto (déduit de joueursParEquipe), sinon nombre choisi manuellement
+    niveaux:{}, // studentId -> 1 (meilleur) à 4 (moins bon) — Ultimate/Volley : composition d'équipes
+    compositionEquipes:'aleatoire', // 'aleatoire' | 'homogene' | 'heterogene' (Ultimate/Volley)
+    binomes:[], // Ultimate, évaluation technique passe/réception : [{id, memberIds:[a,b], essais:[10], bonus:[2]}]
+    nombreEquipesFixe:0, // Ultimate/Volley : 0 = auto (déduit de joueursParEquipe), sinon nombre choisi manuellement
     nombreRencontresPoule3:0, // tournoi par poule, poules de 3 : 0 = auto (aller-retour), sinon nb de rencontres par paire
     nombreRencontresPoule4:0, // tournoi par poule, poules de 4 : 0 = auto (aller seul), sinon nb de rencontres par paire
-    // Ultimate uniquement : tournoi par poule et évaluation technique peuvent
-    // être actifs en même temps dans une même séance (contrairement aux
-    // autres activités où tournamentType est exclusif) — voir act.evaluationTechniqueAllowed.
+    // Ultimate/Volley uniquement : tournoi par poule et évaluation technique
+    // peuvent être actifs en même temps dans une même séance (contrairement
+    // aux autres activités où tournamentType est exclusif) — voir act.evaluationTechniqueAllowed.
     // Ni l'un ni l'autre par défaut : rien ne s'affiche tant qu'elle n'a pas
     // explicitement cliqué sur l'un des deux boutons.
     pouleActif: act.evaluationTechniqueAllowed ? false : undefined,
     evalTechActif: act.evaluationTechniqueAllowed ? false : undefined,
-    // Tennis de table : évaluation technique "record d'échanges" — choix de
-    // type de tournoi exclusif (comme poule/défis), pas un double mode.
+    // Tennis de table : choix de type de tournoi exclusif (comme poule/défis).
+    // Volley : même évaluation "record d'échanges", mais en double mode avec
+    // le tournoi par poule (voir pouleActif/evalTechActif ci-dessus).
     binomesRecord:[], // [{id, memberIds:[a,b] ou [a] si évalué seul(e), score: null|nombre d'échanges}]
     dureeRecord:30, // secondes : 30, 45 ou 60 (1 min)
   };
@@ -673,6 +677,7 @@ function defaultClasseData(classe, activite){
     // à voir avec un simple décompte de victoires.
     classe, wins:{}, poulePoints:{},
     seances:[defaultSeance(1, activite)], currentSeanceIndex:0, showClassementTotal:false,
+    seanceMasquee:false, // clic sur l'onglet de la séance déjà sélectionnée : masque/affiche son contenu
   };
 }
 function defaultActivityData(){
@@ -702,6 +707,7 @@ function ensureActivityData(){
         delete cd.classementWins;
       }
       if(!cd.poulePoints) cd.poulePoints = {};
+      if(cd.seanceMasquee === undefined) cd.seanceMasquee = false;
       cd.seances.forEach(s=>{
         if(!s.hasardWins) s.hasardWins = {};
         if(!s.winsOverride) s.winsOverride = {};
@@ -770,12 +776,21 @@ function addSeance(activite){
   if(derniere && derniere.niveaux) nouvelleSeance.niveaux = Object.assign({}, derniere.niveaux);
   cd.seances.push(nouvelleSeance);
   cd.currentSeanceIndex = cd.seances.length - 1;
+  cd.seanceMasquee = false;
   saveState();
   renderActivityTab(activite);
   renderGeneral();
 }
 function switchSeance(activite, index){
-  currentClasseData(activite).currentSeanceIndex = index;
+  const cd = currentClasseData(activite);
+  // Cliquer sur l'onglet de la séance déjà affichée masque son contenu
+  // (nouveau clic pour le réafficher) ; cliquer sur une autre séance l'affiche.
+  if(index === cd.currentSeanceIndex){
+    cd.seanceMasquee = !cd.seanceMasquee;
+  } else {
+    cd.currentSeanceIndex = index;
+    cd.seanceMasquee = false;
+  }
   saveState();
   renderActivityTab(activite);
 }
@@ -1833,6 +1848,12 @@ function getEvalTechFragment(seance, student){
   const note = Math.min(20, totalEssais + totalBonus);
   return `Évaluation technique — ${note}/20`;
 }
+// Résumé "record d'échanges" (Tennis de table et Volley) pour un élève.
+function getEvalTechRecordFragment(seance, student){
+  const b = (seance.binomesRecord||[]).find(b=>b.memberIds.includes(student.id));
+  if(!b || b.score === null || b.score === undefined) return 'Record d\'échanges — pas encore évalué';
+  return `Record d'échanges — ${b.score}`;
+}
 function getPouleLabelForClasse(activite, cd, student){
   const act = ACTIVITIES[activite];
   const seance = cd.seances[cd.currentSeanceIndex] || cd.seances[cd.seances.length-1];
@@ -1846,7 +1867,7 @@ function getPouleLabelForClasse(activite, cd, student){
       const frag = getPouleFragment(act, seance, student);
       if(frag) parts.push(frag);
     }
-    if(seance.evalTechActif) parts.push(getEvalTechFragment(seance, student));
+    if(seance.evalTechActif) parts.push(act.evaluationTechniqueRecordAllowed ? getEvalTechRecordFragment(seance, student) : getEvalTechFragment(seance, student));
     return parts.join(' • ');
   }
   if(seance.tournamentType === 'poule') return getPouleFragment(act, seance, student);
@@ -1913,9 +1934,9 @@ function onGenererPoules(activite){
     // Nombre d'équipes fixé manuellement (0 = automatique, déduit du nombre
     // de joueurs par équipe ci-dessus) : permet de reprendre la main quand la
     // répartition automatique ne convenait pas.
-    const nombreEquipesFixe = activite === 'Ultimate' ? (seance.nombreEquipesFixe || 0) : 0;
+    const nombreEquipesFixe = (activite === 'Ultimate' || activite === 'Volley') ? (seance.nombreEquipesFixe || 0) : 0;
     seance.config = { terrains, nombrePoules, joueursParEquipe, nombreEquipesFixe };
-    const composition = activite === 'Ultimate' ? (seance.compositionEquipes || 'aleatoire') : 'aleatoire';
+    const composition = (activite === 'Ultimate' || activite === 'Volley') ? (seance.compositionEquipes || 'aleatoire') : 'aleatoire';
     if(composition === 'homogene') seance.teams = generateTeamsHomogenes(studentIds, joueursParEquipe, seance.niveaux || {}, nombreEquipesFixe);
     else if(composition === 'heterogene') seance.teams = generateTeamsHeterogenes(studentIds, joueursParEquipe, seance.niveaux || {}, nombreEquipesFixe);
     else seance.teams = generateTeams(studentIds, joueursParEquipe, nombreEquipesFixe);
@@ -3024,8 +3045,8 @@ function renderActivityTab(activite){
           <div class="seance-tabs">
             ${cd.seances.length
               ? cd.seances.map((s,i)=>`
-                <div class="seance-tab-item ${i===cd.currentSeanceIndex?'active':''}">
-                  <button data-seance-index="${i}">Séance ${s.numero}</button>
+                <div class="seance-tab-item ${i===cd.currentSeanceIndex?'active':''} ${i===cd.currentSeanceIndex&&cd.seanceMasquee?'masquee':''}">
+                  <button data-seance-index="${i}">${i===cd.currentSeanceIndex&&cd.seanceMasquee?'👁️‍🗨️ ':''}Séance ${s.numero}</button>
                   <input type="date" class="seance-tab-date-input" data-seance-date-input="${i}" value="${formatDateSeanceValeur(s.dateCreation)}">
                 </div>`).join('')
               : '<span class="muted">Aucune séance pour l\'instant</span>'}
@@ -3038,7 +3059,10 @@ function renderActivityTab(activite){
       </div>`;
 
     const seance = currentSeance(activite);
-    if(seance){
+    if(seance && cd.seanceMasquee){
+      html += `<div class="card"><p class="hint" style="margin:0;">👁️‍🗨️ Contenu de la Séance ${seance.numero} masqué — cliquez de nouveau sur son onglet ci-dessus pour l'afficher.</p></div>`;
+    }
+    if(seance && !cd.seanceMasquee){
       html += renderPresenceCard(activite, students, seance);
 
       if(!act.defisAllowed && !act.evaluationTechniqueAllowed && !seance.tournamentType){
@@ -3074,7 +3098,7 @@ function renderActivityTab(activite){
             <p class="hint">Vous pouvez activer les deux si vous faites les deux dans la même séance.</p>
             <div class="config-grid">
               <button class="btn ${seance.pouleActif?'':'ghost'}" data-toggle-poule-actif="1">🏆 Tournoi par poule</button>
-              <button class="btn ${seance.evalTechActif?'':'ghost'}" data-toggle-evaltech-actif="1">🎯 Évaluation technique (passe/réception)</button>
+              <button class="btn ${seance.evalTechActif?'':'ghost'}" data-toggle-evaltech-actif="1">${act.evaluationTechniqueRecordAllowed ? '📊 Évaluation technique (record d\'échanges)' : '🎯 Évaluation technique (passe/réception)'}</button>
             </div>
           </div>`;
       } else if(cd.seances.length){
@@ -3097,7 +3121,7 @@ function renderActivityTab(activite){
           html += renderMatchesSection(activite);
         }
         if(seance.evalTechActif){
-          html += renderEvaluationTechniqueSection(activite);
+          html += act.evaluationTechniqueRecordAllowed ? renderEvaluationTechniqueRecordSection(activite) : renderEvaluationTechniqueSection(activite);
         }
       } else if(seance.tournamentType === 'poule'){
         html += renderPouleConfigCard(activite);
@@ -3382,10 +3406,10 @@ function renderPresenceCard(activite, students, seance){
   const presents = students.filter(s=>!seance.absents.includes(s.id)).length;
   const reasons = seance.absentReasons || {};
 
-  // Ultimate : liste verticale avec, en plus du statut, un niveau (1 = meilleur
-  // à 4 = moins bon) à cocher pour chaque élève, utilisé ensuite pour composer
-  // des équipes homogènes ou hétérogènes (voir Fonctionnalites.md).
-  if(activite === 'Ultimate'){
+  // Ultimate et Volley : liste verticale avec, en plus du statut, un niveau
+  // (1 = meilleur à 4 = moins bon) à cocher pour chaque élève, utilisé ensuite
+  // pour composer des équipes homogènes ou hétérogènes (voir Fonctionnalites.md).
+  if(activite === 'Ultimate' || activite === 'Volley'){
     if(!seance.niveaux) seance.niveaux = {};
     const rows = students.map(s=>{
       const statut = reasons[s.id] && PRESENCE_STATUTS[reasons[s.id]];
@@ -3433,12 +3457,12 @@ function renderPouleConfigCard(activite){
   let fields = checkboxRangeHtml('pouleTerrainCbGroup', act.terrainLabel+' disponibles', act.pouleTerrainMin, act.pouleTerrainMax, seance.pouleTerrains || act.pouleTerrainMin);
   if(act.type === 'equipe'){
     fields += checkboxRangeHtml('cfgJoueursEquipeCbGroup', 'Joueurs par équipe', 2, 15, seance.joueursParEquipe || 4);
-    if(activite === 'Ultimate'){
+    if(activite === 'Ultimate' || activite === 'Volley'){
       fields += nombreEquipesFixeHtml('cfgNombreEquipesFixeCbGroup', seance.nombreEquipesFixe || 0);
     }
     fields += checkboxRangeHtml('cfgNombrePoulesCbGroup', 'Nombre de poules', 1, 10, seance.nombrePoules || 2);
     fields += '<p class="hint">Les équipes sont réparties le plus équitablement possible entre les poules, pour équilibrer le nombre de matchs à jouer dans chacune.</p>';
-    if(activite === 'Ultimate'){
+    if(activite === 'Ultimate' || activite === 'Volley'){
       const comp = seance.compositionEquipes || 'aleatoire';
       fields += `
         <div class="config-grid">
@@ -3717,7 +3741,7 @@ function renderClassementParSeancePoule(cd, students, activite){
   // avoir été désactivé après coup sans effacer les résultats déjà obtenus.
   const hasEvalTech = seancesPoule.map(s=>activite === 'Ultimate' && (s.binomes||[]).length > 0);
   const headerRow1 = seancesPoule.map((s,si)=>{
-    const compLabel = activite === 'Ultimate' ? {homogene:'Homogène', heterogene:'Hétérogène'}[s.compositionEquipes] : null;
+    const compLabel = (activite === 'Ultimate' || activite === 'Volley') ? {homogene:'Homogène', heterogene:'Hétérogène'}[s.compositionEquipes] : null;
     const dateLabel = formatDateSeance(s.dateCreation);
     const label = `Séance ${s.numero}${dateLabel ? `<br><span class="th-sub">${dateLabel}</span>` : ''}${compLabel ? `<br><span class="th-sub">${compLabel}</span>` : ''}`;
     const span = hasEvalTech[si] ? 'colspan="2"' : 'rowspan="2"';
@@ -4072,7 +4096,9 @@ function exportRecordExcel(activite){
   const scoreParEleve = {};
   (seance.binomesRecord||[]).forEach(b=>{
     if(b.score === null || b.score === undefined) return;
-    b.memberIds.forEach(id=>{ scoreParEleve[id] = b.score; });
+    b.memberIds.forEach(id=>{
+      if(scoreParEleve[id] === undefined || b.score > scoreParEleve[id]) scoreParEleve[id] = b.score;
+    });
   });
   const avecBareme = seance.dureeRecord === 20;
   const rows = students.slice().sort((a,b)=>a.nomPrenom.localeCompare(b.nomPrenom, 'fr')).map(s=>{

@@ -3545,7 +3545,13 @@ function renderActivityTab(activite){
   wireCheckboxRange(panel, 'defisTerrainCbGroup', (v)=>{
     const s = currentSeance(activite);
     s.defisTerrains = v;
-    if(s.tournamentType === 'defisClassement' && s.defisMatches && s.defisMatches.length && rotationClassementTerminee(s)){
+    // Changer le nombre de terrains en cours de rotation (pas seulement une
+    // fois tous les matchs terminés) réorganise aussitôt : les terrains en
+    // plus reçoivent immédiatement un nouveau match (sans attendre la fin de
+    // la rotation en cours) ; en terrain en moins, les matchs déjà en cours
+    // ne sont pas annulés, ils restent visibles jusqu'à leur résultat (voir
+    // renderDefisClassementSection).
+    if(s.tournamentType === 'defisClassement' && s.defisMatches && s.defisMatches.length){
       remplirTablesClassement(activite);
       renderActivityTab(activite);
     } else {
@@ -4831,8 +4837,15 @@ function renderDefisClassementSection(activite){
   // dernier match connu de chaque table = le match actuellement affiché
   const parTable = {};
   seance.defisMatches.forEach((m,i)=>{ parTable[m.table] = i; });
+  // Si le nombre de terrains a été réduit en cours de rotation, un match déjà
+  // en cours sur un terrain désormais au-delà de la capacité reste affiché
+  // jusqu'à son résultat (pas d'orphelin invisible) — la capacité choisie
+  // reprend le dessus dès que ce match est terminé (remplirTablesClassement
+  // ne réutilise plus ce terrain).
+  const terrainsEnCours = Object.keys(parTable).map(Number).filter(t=>seance.defisMatches[parTable[t]].winner===null);
+  const capaciteAffichee = Math.max(capacite, terrainsEnCours.length ? Math.max(...terrainsEnCours) : 0);
   const tableCards = [];
-  for(let t=1; t<=capacite; t++){
+  for(let t=1; t<=capaciteAffichee; t++){
     const i = parTable[t];
     if(i === undefined){
       tableCards.push(`

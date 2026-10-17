@@ -620,9 +620,14 @@ const ACTIVITIES = {
     evaluationTechniqueAllowed:true,
   },
   'Volley': {
-    icon:'🏐', type:'equipe', terrainLabel:'Terrains', defisAllowed:false,
+    icon:'🏐', type:'equipe', terrainLabel:'Terrains', defisAllowed:true,
     pouleMin:3, pouleMax:12, pouleTerrainMin:3, pouleTerrainMax:9, defaultTerrains:3,
-    evaluationTechniqueAllowed:true,
+    defisTerrainMin:3, defisTerrainMax:9, // défis par équipes : mêmes terrains que le tournoi par poule
+    // Comme au Tennis de table : poule / défis classement / défis hasard /
+    // évaluation technique record d'échanges forment un seul choix exclusif
+    // (seance.tournamentType) — un seul affiché à la fois, rien n'est perdu
+    // en changeant. Pas de evaluationTechniqueAllowed (double mode cumulé) :
+    // ce flag reste réservé à l'Ultimate.
     evaluationTechniqueRecordAllowed:true, // évaluation technique "record d'échanges" (binômes, pavé numérique) — même principe qu'en Tennis de table
   },
 };
@@ -645,25 +650,28 @@ function defaultSeance(numero, activite){
     absents:[], // ids d'élèves exclus des poules/défis pour cette séance (quelle qu'en soit la raison)
     absentReasons:{}, // studentId -> 'absent' | 'materiel' | 'dispense' (motif affiché sur la pastille)
     teams:[], poules:[], matches:[],
-    hasardWins:{}, // défis hasard : victoires de cette séance uniquement
-    winsOverride:{}, // studentId -> correction manuelle du nb de victoires de cette séance (erreur de saisie)
+    hasardWins:{}, // défis hasard : victoires de cette séance uniquement (id élève, ou id équipe en Volley)
+    winsOverride:{}, // id (élève ou équipe) -> correction manuelle du nb de victoires de cette séance (erreur de saisie)
     defisMatches:[], defisBye:[], lastAction:null, // défis classement progressif uniquement (flux continu)
+    // Volley uniquement : défis par équipes — composition indépendante de
+    // celle du tournoi par poule (seance.teams/joueursParEquipe), puisque la
+    // taille d'équipe pour les défis doit pouvoir être choisie séparément.
+    joueursParEquipeDefis:4, nombreEquipesFixeDefis:0, teamsDefis:[],
     niveaux:{}, // studentId -> 1 (meilleur) à 4 (moins bon) — Ultimate/Volley : composition d'équipes
     compositionEquipes:'aleatoire', // 'aleatoire' | 'homogene' | 'heterogene' (Ultimate/Volley)
     binomes:[], // Ultimate, évaluation technique passe/réception : [{id, memberIds:[a,b], essais:[10], bonus:[2]}]
     nombreEquipesFixe:0, // Ultimate/Volley : 0 = auto (déduit de joueursParEquipe), sinon nombre choisi manuellement
     nombreRencontresPoule3:0, // tournoi par poule, poules de 3 : 0 = auto (aller-retour), sinon nb de rencontres par paire
     nombreRencontresPoule4:0, // tournoi par poule, poules de 4 : 0 = auto (aller seul), sinon nb de rencontres par paire
-    // Ultimate/Volley uniquement : tournoi par poule et évaluation technique
-    // peuvent être actifs en même temps dans une même séance (contrairement
-    // aux autres activités où tournamentType est exclusif) — voir act.evaluationTechniqueAllowed.
+    // Ultimate uniquement : tournoi par poule et évaluation technique peuvent
+    // être actifs en même temps dans une même séance (contrairement aux
+    // autres activités où tournamentType est exclusif) — voir act.evaluationTechniqueAllowed.
     // Ni l'un ni l'autre par défaut : rien ne s'affiche tant qu'elle n'a pas
     // explicitement cliqué sur l'un des deux boutons.
     pouleActif: act.evaluationTechniqueAllowed ? false : undefined,
     evalTechActif: act.evaluationTechniqueAllowed ? false : undefined,
-    // Tennis de table : choix de type de tournoi exclusif (comme poule/défis).
-    // Volley : même évaluation "record d'échanges", mais en double mode avec
-    // le tournoi par poule (voir pouleActif/evalTechActif ci-dessus).
+    // Tennis de table ET Volley : choix de type de tournoi exclusif, comme
+    // poule/défis (seance.tournamentType peut valoir 'evaluationTechniqueRecord').
     binomesRecord:[], // [{id, memberIds:[a,b] ou [a] si évalué seul(e), score: null|nombre d'échanges}]
     dureeRecord:30, // secondes : 30, 45 ou 60 (1 min)
   };
@@ -718,6 +726,9 @@ function ensureActivityData(){
         if(!s.dateCreation) s.dateCreation = ''; // séances créées avant l'ajout de ce champ : date inconnue
         if(!s.binomesRecord) s.binomesRecord = [];
         if(!s.dureeRecord) s.dureeRecord = 30;
+        if(!s.teamsDefis) s.teamsDefis = [];
+        if(!s.joueursParEquipeDefis) s.joueursParEquipeDefis = 4;
+        if(s.nombreEquipesFixeDefis === undefined) s.nombreEquipesFixeDefis = 0;
         if(ACTIVITIES[a].evaluationTechniqueAllowed){
           // Rattrapage pour les séances créées avant l'ajout du double mode :
           // on retrouve le choix déjà fait via l'ancien tournamentType exclusif.
@@ -873,6 +884,7 @@ function clearSeanceResults(activite){
   const seance = currentSeance(activite);
   if(!confirm('Effacer tous les résultats de cette séance (matchs, tours, poules) ? Le total cumulé de la classe sera recalculé sans cette séance. Cette action est irréversible.')) return;
   seance.teams = [];
+  seance.teamsDefis = [];
   seance.poules = [];
   seance.matches = [];
   seance.hasardWins = {};
@@ -1647,23 +1659,29 @@ function computeClassementPouleGeneral(cd, activite){
   });
   return { seancesPoule, perSeance, pouleIndexParSeance, rangParSeance, sommeRangParEleve, nbAbsencesParEleve };
 }
+// Le tournoi par poule est-il actif pour cette séance ? Ultimate : case
+// indépendante (seance.pouleActif, cumulable avec l'évaluation technique).
+// Autres activités (dont Volley) : tournamentType exclusif, comme poule/défis.
+// Partagé par exportClassementExcel et renderClassementTotalCard pour ne pas
+// dupliquer (et désynchroniser) cette détection.
+function isPouleModeActif(act, seance){
+  if(!seance) return false;
+  if(act.evaluationTechniqueAllowed) return !!seance.pouleActif;
+  return seance.tournamentType === 'poule';
+}
 function exportClassementExcel(activite){
   const cd = currentClasseData(activite);
   if(!cd) return;
   const act = ACTIVITIES[activite];
   const seance = currentSeance(activite);
-  // Même détection de mode que la carte "Classement total" à l'écran (voir
-  // renderClassementTotalCard) : pour Ultimate/Volley, poule et évaluation
-  // technique sont deux cases indépendantes (seance.pouleActif), pas un
-  // tournamentType exclusif comme pour les autres activités.
-  const modePoints = act.evaluationTechniqueAllowed ? !!(seance && seance.pouleActif) : (seance && seance.tournamentType === 'poule');
+  const modePoints = isPouleModeActif(act, seance);
   const students = STATE.allStudents.filter(s=>s.classe===cd.classe);
 
   if(!modePoints){
     // Défis (hasard/classement progressif) : même détail que la carte à
     // l'écran, avec une colonne par séance de défis + le total.
     const seancesDefis = cd.seances.filter(s=> s.tournamentType==='defisHasard' || s.tournamentType==='defisClassement');
-    const perSeance = seancesDefis.map(s=>computeSeanceDefisWins(s));
+    const perSeance = seancesDefis.map(s=>computeSeanceDefisWinsParEleve(s, activite));
     const sorted = students.slice().sort((a,b)=>(cd.wins[b.id]||0)-(cd.wins[a.id]||0));
     const rows = sorted.map((s,i)=>{
       const row = { 'Rang':i+1, 'Nom Prénom':s.nomPrenom };
@@ -1716,6 +1734,21 @@ function generateTeams(studentIds, joueursParEquipe, nombreEquipesFixe){
   let idx = 0;
   tailles.forEach((taille, i)=>{
     teams.push({ id:'equipe'+(i+1), nom:'Équipe '+(i+1), memberIds: shuffled.slice(idx, idx+taille) });
+    idx += taille;
+  });
+  return teams;
+}
+// Volley : équipes de défis, composition indépendante de celle du tournoi par
+// poule (seance.teams) — préfixe d'id différent ('equipeDefis') pour ne
+// jamais entrer en collision avec les ids d'équipes de poule (voir
+// participantLabel, qui cherche dans les deux tableaux).
+function generateTeamsDefis(studentIds, joueursParEquipe, nombreEquipesFixe){
+  const shuffled = shuffleArray(studentIds);
+  const tailles = computeTeamSizes(shuffled.length, joueursParEquipe, nombreEquipesFixe);
+  const teams = [];
+  let idx = 0;
+  tailles.forEach((taille, i)=>{
+    teams.push({ id:'equipeDefis'+(i+1), nom:'Équipe '+(i+1), memberIds: shuffled.slice(idx, idx+taille) });
     idx += taille;
   });
   return teams;
@@ -1887,6 +1920,10 @@ function participantLabel(activite, id){
   if(act.type === 'equipe' && seance){
     const t = seance.teams.find(t=>t.id===id);
     if(t) return t.nom;
+    // Volley : équipes de défis, composition indépendante de seance.teams
+    // (voir seance.teamsDefis dans defaultSeance).
+    const td = (seance.teamsDefis||[]).find(t=>t.id===id);
+    if(td) return td.nom;
   }
   const s = STATE.allStudents.find(s=>s.id===id);
   return s ? s.nomPrenom : id;
@@ -2071,6 +2108,44 @@ function renameTeam(activite, teamId, newName){
   const t = seance.teams.find(t=>t.id===teamId);
   if(t){ t.nom = newName || t.nom; saveState(); renderGeneral(); }
 }
+// Volley : génère les équipes de défis (taille indépendante de celle du
+// tournoi par poule, voir seance.joueursParEquipeDefis). Régénérer efface les
+// résultats de défis déjà enregistrés pour cette séance — une composition
+// différente rend les victoires précédentes non comparables.
+function onGenererEquipesDefis(activite){
+  const cd = currentClasseData(activite);
+  const seance = currentSeance(activite);
+  if(!cd || !seance) return;
+  if(seance.teamsDefis.length){
+    if(!confirm("Cela régénère les équipes de défis et efface les résultats de défis déjà enregistrés pour cette séance. Continuer ?")) return;
+  }
+  const studentIds = STATE.allStudents.filter(s=>s.classe===cd.classe && !seance.absents.includes(s.id)).map(s=>s.id);
+  const joueursParEquipe = clamp(seance.joueursParEquipeDefis || 4, 2, 15);
+  const nombreEquipesFixe = seance.nombreEquipesFixeDefis || 0;
+  seance.teamsDefis = generateTeamsDefis(studentIds, joueursParEquipe, nombreEquipesFixe);
+  seance.hasardWins = {};
+  seance.defisMatches = [];
+  seance.defisBye = [];
+  seance.lastAction = null;
+  recomputeCumulativeTotals(cd, activite);
+  saveState();
+  renderActivityTab(activite);
+  renderGeneral();
+}
+function moveStudentTeamDefis(activite, studentId, targetTeamId){
+  const seance = currentSeance(activite);
+  seance.teamsDefis.forEach(t=>{ t.memberIds = t.memberIds.filter(id=>id!==studentId); });
+  const target = seance.teamsDefis.find(t=>t.id===targetTeamId);
+  if(target) target.memberIds.push(studentId);
+  saveState();
+  renderActivityTab(activite);
+  renderGeneral();
+}
+function renameTeamDefis(activite, teamId, newName){
+  const seance = currentSeance(activite);
+  const t = seance.teamsDefis.find(t=>t.id===teamId);
+  if(t){ t.nom = newName || t.nom; saveState(); renderGeneral(); }
+}
 
 // Barème de points selon l'écart de score (sports de raquette — Tennis de
 // table, Badminton — voir carte Règlement des feuilles PDF) : victoire ou
@@ -2149,7 +2224,7 @@ function recomputeCumulativeTotals(cd, activite){
   const wins = {};
   const poulePoints = {};
   cd.seances.forEach(s=>{
-    const w = computeSeanceDefisWins(s);
+    const w = computeSeanceDefisWinsParEleve(s, activite);
     Object.keys(w).forEach(id=>{ wins[id] = (wins[id]||0) + w[id]; });
     const p = computeSeancePoulePointsParEleve(s, activite);
     Object.keys(p).forEach(id=>{ poulePoints[id] = (poulePoints[id]||0) + p[id]; });
@@ -2421,22 +2496,36 @@ function onGenererMatchs(activite){
 }
 
 /* ------------------------------------------------------- DEFIS HASARD - */
-function addWin(activite, studentId){
+// Pour les défis par équipes (Volley), une victoire d'équipe profite à
+// chaque élève membre pour le total cumulé (cd.wins), comme pour les points
+// de poule (voir computeSeancePoulePointsParEleve) — l'identité d'une équipe
+// n'est pas stable d'une séance à l'autre (recomposée à chaque génération),
+// contrairement à un élève, donc le total cumulé doit rester par élève.
+function defisMembreIds(activite, seance, participantId){
+  if(ACTIVITIES[activite].type === 'equipe'){
+    const t = (seance.teamsDefis||[]).find(t=>t.id===participantId);
+    if(t) return t.memberIds;
+  }
+  return [participantId];
+}
+function addWin(activite, participantId){
   const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
-  cd.wins[studentId] = (cd.wins[studentId]||0) + 1;
-  seance.hasardWins[studentId] = (seance.hasardWins[studentId]||0) + 1;
+  seance.hasardWins[participantId] = (seance.hasardWins[participantId]||0) + 1;
+  defisMembreIds(activite, seance, participantId).forEach(id=>{ cd.wins[id] = (cd.wins[id]||0) + 1; });
   saveState();
   renderActivityTab(activite);
   renderGeneral();
 }
-function undoWin(activite, studentId){
+function undoWin(activite, participantId){
   const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
-  const cur = cd.wins[studentId]||0;
-  if(cur>0) cd.wins[studentId] = cur - 1;
-  const curSeance = seance.hasardWins[studentId]||0;
-  if(curSeance>0) seance.hasardWins[studentId] = curSeance - 1;
+  const curSeance = seance.hasardWins[participantId]||0;
+  if(curSeance>0) seance.hasardWins[participantId] = curSeance - 1;
+  defisMembreIds(activite, seance, participantId).forEach(id=>{
+    const cur = cd.wins[id]||0;
+    if(cur>0) cd.wins[id] = cur - 1;
+  });
   saveState();
   renderActivityTab(activite);
   renderGeneral();
@@ -2506,14 +2595,29 @@ function reparerDefisMatches(seance){
 function remplirTablesClassement(activite){
   const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
+  const estEquipe = ACTIVITIES[activite].type === 'equipe';
   reparerDefisMatches(seance);
   if(!seance.defisTerrains){ alert('Choisissez le nombre de tables/terrains disponibles.'); return; }
+  if(estEquipe && !(seance.teamsDefis||[]).length){ alert('Générez d\'abord les équipes de défis.'); return; }
   if(!seance.defisMatches) seance.defisMatches = [];
   const capacite = defisCapacite(seance);
+  // Volley : les participants sont les équipes de défis (taille indépendante
+  // du tournoi par poule, voir seance.teamsDefis), pas les élèves directement.
   // dédoublonnage défensif : si un même id apparaît deux fois (ne devrait
   // plus arriver, voir fetchCollegeList, mais évite qu'un élève ne se
   // retrouve tiré sur deux tables à la fois si jamais un doublon subsiste).
-  const students = [...new Set(STATE.allStudents.filter(s=>s.classe===cd.classe && !seance.absents.includes(s.id)).map(s=>s.id))];
+  const students = estEquipe
+    ? seance.teamsDefis.map(t=>t.id)
+    : [...new Set(STATE.allStudents.filter(s=>s.classe===cd.classe && !seance.absents.includes(s.id)).map(s=>s.id))];
+  // Équipes : la composition change à chaque séance, donc le nombre de
+  // victoires qui sert à l'appariement repart de zéro à chaque séance (les
+  // matchs de CETTE séance uniquement) — pas de cumul depuis le début du
+  // cycle comme pour les individuels (cd.wins, continuité assurée par élève).
+  const winsEquipeCetteSeance = {};
+  if(estEquipe){
+    seance.defisMatches.forEach(m=>{ if(m.winner) winsEquipeCetteSeance[m.winner] = (winsEquipeCetteSeance[m.winner]||0) + 1; });
+  }
+  const winsPourAppariement = (id)=> estEquipe ? (winsEquipeCetteSeance[id]||0) : (cd.wins[id]||0);
 
   const unresolved = seance.defisMatches.filter(m=>m.winner===null);
   const occupiedTables = new Set(unresolved.map(m=>m.table));
@@ -2532,7 +2636,7 @@ function remplirTablesClassement(activite){
   const available = students.filter(id=>!busy.has(id));
   const groups = {};
   available.forEach(id=>{
-    const w = cd.wins[id]||0;
+    const w = winsPourAppariement(id);
     (groups[w] = groups[w]||[]).push(id);
   });
   Object.keys(groups).forEach(k=>{
@@ -2602,7 +2706,7 @@ function remplirTablesClassement(activite){
     const a = byes.shift();
     let bestIdx = -1, bestGap = Infinity;
     byes.forEach((id,idx)=>{
-      const gap = Math.abs((cd.wins[id]||0) - (cd.wins[a]||0));
+      const gap = Math.abs(winsPourAppariement(id) - winsPourAppariement(a));
       if(gap <= 2 && peutAffronter(a, id) && gap < bestGap){ bestGap = gap; bestIdx = idx; }
     });
     if(bestIdx === -1){ stillByes.push(a); continue; }
@@ -2682,9 +2786,11 @@ function enregistrerVainqueur(activite, matchIndex, winnerId){
     return;
   }
   const previousWinner = match.winner;
-  if(previousWinner) cd.wins[previousWinner] = Math.max(0, (cd.wins[previousWinner]||0) - 1);
+  if(previousWinner){
+    defisMembreIds(activite, seance, previousWinner).forEach(id=>{ cd.wins[id] = Math.max(0, (cd.wins[id]||0) - 1); });
+  }
   match.winner = winnerId;
-  cd.wins[winnerId] = (cd.wins[winnerId]||0) + 1;
+  defisMembreIds(activite, seance, winnerId).forEach(id=>{ cd.wins[id] = (cd.wins[id]||0) + 1; });
   // On attend que TOUTE la rotation en cours soit terminée (plus aucun match
   // sans vainqueur) avant d'organiser la rotation suivante pour tout le
   // monde d'un coup — plus simple à suivre que des tables qui avancent
@@ -2717,8 +2823,10 @@ function undoLastDefisAction(activite){
   });
   const match = seance.defisMatches[action.matchIndex];
   if(match){
-    cd.wins[action.newWinner] = Math.max(0, (cd.wins[action.newWinner]||0) - 1);
-    if(action.previousWinner) cd.wins[action.previousWinner] = (cd.wins[action.previousWinner]||0) + 1;
+    defisMembreIds(activite, seance, action.newWinner).forEach(id=>{ cd.wins[id] = Math.max(0, (cd.wins[id]||0) - 1); });
+    if(action.previousWinner){
+      defisMembreIds(activite, seance, action.previousWinner).forEach(id=>{ cd.wins[id] = (cd.wins[id]||0) + 1; });
+    }
     match.winner = action.previousWinner || null;
   }
   seance.lastAction = null;
@@ -3349,6 +3457,14 @@ function renderActivityTab(activite){
     currentSeance(activite).nombreEquipesFixe = v;
     saveState();
   });
+  wireCheckboxRange(panel, 'cfgJoueursEquipeDefisCbGroup', (v)=>{
+    currentSeance(activite).joueursParEquipeDefis = v;
+    saveState();
+  });
+  wireCheckboxRange(panel, 'cfgNombreEquipesFixeDefisCbGroup', (v)=>{
+    currentSeance(activite).nombreEquipesFixeDefis = v;
+    saveState();
+  });
   wireCheckboxRange(panel, 'cfgNombreRencontresPoule3CbGroup', (v)=>{
     currentSeance(activite).nombreRencontresPoule3 = v;
     saveState();
@@ -3387,6 +3503,8 @@ function renderActivityTab(activite){
 
   const btnPoules = q('#btnGenererPoules');
   if(btnPoules) btnPoules.addEventListener('click', ()=>onGenererPoules(activite));
+  const btnGenererEquipesDefis = q('#btnGenererEquipesDefis');
+  if(btnGenererEquipesDefis) btnGenererEquipesDefis.addEventListener('click', ()=>onGenererEquipesDefis(activite));
   const btnMatchs = q('#btnGenererMatchs');
   if(btnMatchs) btnMatchs.addEventListener('click', ()=>onGenererMatchs(activite));
   const btnExportMatchs = q('#btnExportMatchs');
@@ -3419,6 +3537,12 @@ function renderActivityTab(activite){
   });
   panel.querySelectorAll('[data-team-name]').forEach(input=>{
     input.addEventListener('change', ()=>renameTeam(activite, input.dataset.teamName, input.value.trim()));
+  });
+  panel.querySelectorAll('[data-move-student-defis]').forEach(sel=>{
+    sel.addEventListener('change', ()=>moveStudentTeamDefis(activite, sel.dataset.moveStudentDefis, sel.value));
+  });
+  panel.querySelectorAll('[data-team-name-defis]').forEach(input=>{
+    input.addEventListener('change', ()=>renameTeamDefis(activite, input.dataset.teamNameDefis, input.value.trim()));
   });
 
   panel.querySelectorAll('.defis-row').forEach(tr=>{
@@ -3724,7 +3848,7 @@ function renderClassementTotalCard(activite){
   const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
   const act = ACTIVITIES[activite];
-  const pouleModeActif = act.evaluationTechniqueAllowed ? !!(seance && seance.pouleActif) : (seance && seance.tournamentType === 'poule');
+  const pouleModeActif = isPouleModeActif(act, seance);
   if(!cd || !seance || !pouleModeActif) return '';
   const students = STATE.allStudents.filter(s=>s.classe===cd.classe);
   const showTotal = !!cd.showClassementTotal;
@@ -3917,6 +4041,20 @@ function computeSeanceDefisWins(seance){
   }
   return tally;
 }
+// Comme computeSeancePoulePointsParEleve : pour les défis par équipes
+// (Volley), répartit la victoire d'une équipe sur chacun de ses membres afin
+// que le détail par séance reste par élève (identité stable), au lieu de
+// rester sous un id d'équipe dont la composition change d'une séance à l'autre.
+function computeSeanceDefisWinsParEleve(seance, activite){
+  const parEquipeOuEleve = computeSeanceDefisWins(seance);
+  if(ACTIVITIES[activite].type !== 'equipe') return parEquipeOuEleve;
+  const totals = {};
+  (seance.teamsDefis||[]).forEach(t=>{
+    const w = parEquipeOuEleve[t.id] || 0;
+    t.memberIds.forEach(mid=>{ totals[mid] = (totals[mid]||0) + w; });
+  });
+  return totals;
+}
 // Corrige manuellement le nombre de victoires d'un élève pour une séance
 // donnée (case éditée dans le tableau de classement détaillé), en cas
 // d'erreur de saisie. Recalcule aussitôt le total cumulé de la classe (utilisé
@@ -3943,18 +4081,23 @@ function renderClassementParSeance(cd, students, recentFirst, activite){
   // l'ordre chronologique habituel) — utilisé dans le tableau affiché à côté
   // des tables en cours, pour voir en priorité la séance en cours.
   if(recentFirst) seancesDefis = seancesDefis.slice().reverse();
-  const perSeance = seancesDefis.map(s=>computeSeanceDefisWins(s));
+  const perSeance = seancesDefis.map(s=>computeSeanceDefisWinsParEleve(s, activite));
+  // Volley (défis par équipes) : une victoire est partagée par toute une
+  // équipe, donc corriger le chiffre d'un seul élève n'aurait pas de sens —
+  // les cases restent en lecture seule pour ces activités.
+  const editable = activite && ACTIVITIES[activite].type !== 'equipe';
   const headerCols = seancesDefis.map(s=>{
     const dateLabel = formatDateSeance(s.dateCreation);
     return `<th style="background:${PALETTE[3 + (s.numero % (PALETTE.length-3))]}">Séance ${s.numero}${dateLabel ? `<br><span class="th-sub">${dateLabel}</span>` : ''}</th>`;
   }).join('');
   const sorted = students.slice().sort((a,b)=> (cd.wins[b.id]||0) - (cd.wins[a.id]||0));
-  // Cases éditables (si activite fourni) pour corriger une victoire mal
-  // saisie sans avoir à rejouer/ré-arbitrer le match concerné.
+  // Cases éditables (si activite fourni, hors défis par équipes) pour
+  // corriger une victoire mal saisie sans avoir à rejouer/ré-arbitrer le
+  // match concerné.
   const rows = sorted.map((stu,i)=>{
     const cells = seancesDefis.map((se,si)=>{
       const val = perSeance[si][stu.id]||0;
-      return activite
+      return editable
         ? `<td><input type="number" min="0" class="win-edit-input" value="${val}" data-edit-seance-win="${se.numero}::${stu.id}"></td>`
         : `<td>${val}</td>`;
     }).join('');
@@ -4438,37 +4581,93 @@ function renderEvaluationTechniqueSection(activite){
     </div>`;
 }
 
+// Volley : configuration des équipes de défis — taille indépendante de celle
+// du tournoi par poule (seance.teams/joueursParEquipe), partagée par défis
+// hasard et défis classement progressif (toutes deux par équipes).
+function renderEquipesDefisSection(activite){
+  const seance = currentSeance(activite);
+  let html = `
+    <div class="card">
+      <h3>👥 Équipes de défis</h3>
+      <p class="hint">Taille d'équipe propre aux défis, réglable indépendamment de celle du tournoi par poule.</p>
+      ${checkboxRangeHtml('cfgJoueursEquipeDefisCbGroup', 'Joueurs par équipe', 2, 15, seance.joueursParEquipeDefis || 4)}
+      ${nombreEquipesFixeHtml('cfgNombreEquipesFixeDefisCbGroup', seance.nombreEquipesFixeDefis || 0)}
+      <button class="btn" id="btnGenererEquipesDefis">${seance.teamsDefis.length ? '🔄 Régénérer les équipes de défis' : '⚙️ Générer les équipes de défis'}</button>
+      ${seance.teamsDefis.length ? '<p class="hint" style="margin-top:6px;">Régénérer efface les résultats de défis déjà enregistrés pour cette séance.</p>' : ''}
+    </div>`;
+  if(seance.teamsDefis.length){
+    html += `
+      <div class="card">
+        <h3>Équipes</h3>
+        <div class="teams-grid">
+          ${seance.teamsDefis.map(t=>`
+            <div class="team-card">
+              <div class="team-name-row">
+                <input class="team-name" data-team-name-defis="${t.id}" value="${t.nom}">
+                <span class="muted team-count">${t.memberIds.length} élève${t.memberIds.length>1?'s':''}</span>
+              </div>
+              <ul>
+                ${t.memberIds.map(mid=>{
+                  const student = STATE.allStudents.find(s=>s.id===mid);
+                  if(!student) return '';
+                  return `<li>${student.nomPrenom}
+                    <select data-move-student-defis="${mid}">
+                      ${seance.teamsDefis.map(t2=>`<option value="${t2.id}" ${t2.id===t.id?'selected':''}>${t2.nom}</option>`).join('')}
+                    </select>
+                  </li>`;
+                }).join('')}
+              </ul>
+            </div>`).join('')}
+        </div>
+      </div>`;
+  }
+  return html;
+}
 function renderDefisHasardSection(activite){
   const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
   const act = ACTIVITIES[activite];
+  const estEquipe = act.type === 'equipe';
+  if(estEquipe && !seance.teamsDefis.length){
+    return renderEquipesDefisSection(activite) + `
+      <div class="card"><p class="hint" style="margin:0;">Générez les équipes ci-dessus pour commencer les défis hasard.</p></div>`;
+  }
   const students = STATE.allStudents.filter(s=>s.classe===cd.classe && !seance.absents.includes(s.id));
-  const wins = cd.wins || {};
-  const maxWins = Math.max(20, ...students.map(s=>wins[s.id]||0));
+  // Volley : la composition d'équipe change à chaque séance, donc la grille
+  // affiche le nombre de victoires de CETTE séance pour l'équipe
+  // (seance.hasardWins) plutôt que le cumul depuis le début du cycle
+  // (cd.wins, pertinent seulement par élève — voir le tableau "Classement —
+  // victoires séance par séance" juste en dessous, lui déjà par élève).
+  const participants = estEquipe
+    ? seance.teamsDefis.map(t=>({ id:t.id, label:t.nom }))
+    : students.map(s=>({ id:s.id, label:s.nomPrenom }));
+  const winsSource = estEquipe ? (seance.hasardWins||{}) : (cd.wins||{});
+  const maxWins = Math.max(20, ...participants.map(p=>winsSource[p.id]||0));
   const cols = Array.from({length:maxWins}, (_,i)=>i+1);
 
-  const rows = students.map(s=>{
-    const w = wins[s.id]||0;
+  const rows = participants.map(p=>{
+    const w = winsSource[p.id]||0;
     const cells = cols.map(c=>`<td class="defis-cell">${c<=w?'✕':''}</td>`).join('');
     return `
-      <tr class="defis-row" data-defis-student="${s.id}">
-        <td class="defis-name">${s.nomPrenom}
-          <button class="btn small ghost defis-undo" data-defis-undo="${s.id}" title="Annuler la dernière victoire">↩</button>
+      <tr class="defis-row" data-defis-student="${p.id}">
+        <td class="defis-name">${p.label}
+          <button class="btn small ghost defis-undo" data-defis-undo="${p.id}" title="Annuler la dernière victoire">↩</button>
         </td>
         ${cells}
       </tr>`;
   }).join('');
 
   return `
+    ${estEquipe ? renderEquipesDefisSection(activite) : ''}
     <div class="card">
       <h3>🎲 Défis hasard — Nombre de victoires</h3>
       ${checkboxRangeHtml('defisTerrainCbGroup', act.terrainLabel+' disponibles', act.defisTerrainMin, act.defisTerrainMax, seance.defisTerrains || act.defisTerrainMin)}
-      <p class="hint">Cliquez sur la ligne d'un élève pour lui ajouter une victoire.</p>
+      <p class="hint">Cliquez sur la ligne ${estEquipe ? "d'une équipe" : "d'un élève"} pour lui ajouter une victoire.</p>
       <div class="defis-layout">
         <div class="table-wrap">
           <table class="defis-table">
             <thead><tr>
-              <th style="background:${PALETTE[0]}">Élève</th>
+              <th style="background:${PALETTE[0]}">${estEquipe ? 'Équipe' : 'Élève'}</th>
               ${cols.map(c=>`<th style="background:${PALETTE[c % PALETTE.length]}">${c}</th>`).join('')}
             </tr></thead>
             <tbody>${rows}</tbody>
@@ -4487,6 +4686,11 @@ function renderDefisClassementSection(activite){
   const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
   const act = ACTIVITIES[activite];
+  const estEquipe = act.type === 'equipe';
+  if(estEquipe && !seance.teamsDefis.length){
+    return renderEquipesDefisSection(activite) + `
+      <div class="card"><p class="hint" style="margin:0;">Générez les équipes ci-dessus pour commencer les défis classement progressif.</p></div>`;
+  }
   if(!seance.defisMatches) seance.defisMatches = [];
   const isBadminton = activite === 'Badminton';
   const capacite = defisCapacite(seance);
@@ -4542,6 +4746,7 @@ function renderDefisClassementSection(activite){
     : '';
 
   return `
+    ${estEquipe ? renderEquipesDefisSection(activite) : ''}
     <div class="card">
       <div class="toolbar">
         <h3>📈 Défis classement progressif</h3>
@@ -4553,7 +4758,9 @@ function renderDefisClassementSection(activite){
       </div>
       ${checkboxRangeHtml('defisTerrainCbGroup', act.terrainLabel+' disponibles', act.defisTerrainMin, act.defisTerrainMax, seance.defisTerrains || act.defisTerrainMin)}
       ${demiTerrainToggle}
-      <p class="hint">Les élèves ayant le même nombre de victoires s'affrontent (jusqu'à ±2 victoires d'écart si personne n'est exactement à égalité). Deux élèves qui se sont déjà rencontrés ne se réaffrontent que si chacun a rejoué au moins 4 matchs depuis. Cliquez sur le nom du vainqueur de chaque match. La rotation suivante s'organise automatiquement pour tout le monde une fois que <b>tous</b> les matchs de la rotation en cours sont terminés (pas de table qui avance plus vite qu'une autre). S'il y a plus d'élèves que de tables, les non-joueurs officient comme arbitres (jamais deux fois de suite : il faut d'abord rejouer un match).</p>
+      <p class="hint">${estEquipe
+        ? "Les équipes ayant le même nombre de victoires (cette séance) s'affrontent (jusqu'à ±2 victoires d'écart si personne n'est exactement à égalité). Deux équipes qui se sont déjà rencontrées ne se réaffrontent que si chacune a rejoué au moins 4 matchs depuis. Cliquez sur le nom de l'équipe vainqueur de chaque match. La rotation suivante s'organise automatiquement pour tout le monde une fois que tous les matchs de la rotation en cours sont terminés."
+        : "Les élèves ayant le même nombre de victoires s'affrontent (jusqu'à ±2 victoires d'écart si personne n'est exactement à égalité). Deux élèves qui se sont déjà rencontrés ne se réaffrontent que si chacun a rejoué au moins 4 matchs depuis. Cliquez sur le nom du vainqueur de chaque match. La rotation suivante s'organise automatiquement pour tout le monde une fois que <b>tous</b> les matchs de la rotation en cours sont terminés (pas de table qui avance plus vite qu'une autre). S'il y a plus d'élèves que de tables, les non-joueurs officient comme arbitres (jamais deux fois de suite : il faut d'abord rejouer un match)."}</p>
       ${rotationHtml}
       ${byeHtml}
       ${started ? `

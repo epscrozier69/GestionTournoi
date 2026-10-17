@@ -1658,13 +1658,23 @@ function exportClassementExcel(activite){
   // Tournoi par poule : classement par table/terrain actuel en priorité
   // (reflet de la montée-descente), les points cumulés (cd.poulePoints, son
   // propre barème selon l'écart de score) ne départageant qu'à table égale —
-  // même logique que le tri "Total" de la carte à l'écran.
+  // même logique que le tri "Total" de la carte à l'écran. Les élèves
+  // dispensés à la dernière séance sont relégués en bas, quelle que soit
+  // leur table d'une séance plus ancienne (voir renderClassementParSeancePoule).
   const tableParEleve = computeTableActuelleParEleve(cd, activite);
-  const sorted = students.slice().sort((a,b)=>{
+  const comparateur = (a,b)=>{
     const tableA = tableParEleve[a.id], tableB = tableParEleve[b.id];
     if(tableA !== tableB) return tableA - tableB;
     return (cd.poulePoints[b.id]||0) - (cd.poulePoints[a.id]||0);
-  });
+  };
+  const seancesPoule = cd.seances.filter(s=>s.poules && s.poules.length);
+  const derniereSeancePoule = seancesPoule[seancesPoule.length-1];
+  const estDispenseActuellement = (studentId)=>{
+    const reasons = derniereSeancePoule && derniereSeancePoule.absentReasons;
+    return !!reasons && reasons[studentId] === 'dispense';
+  };
+  const sorted = students.filter(s=>!estDispenseActuellement(s.id)).sort(comparateur)
+    .concat(students.filter(s=>estDispenseActuellement(s.id)).sort(comparateur));
   const rows = sorted.map((s,i)=>({
     'Rang':i+1, 'Nom Prénom':s.nomPrenom,
     'Table/Terrain actuel': tableParEleve[s.id]===Infinity ? '' : tableParEleve[s.id]+1,
@@ -3716,7 +3726,7 @@ function renderClassementTotalCard(activite){
         </div>
       </div>
       ${showTotal ? `
-      <p class="hint">Une colonne par séance de tournoi par poule, et le total cumulé à droite. Cliquez sur "Total" pour classer : le rang tient compte en priorité de la table/terrain actuel (montée-descente), les points ne départageant qu'à table égale.</p>
+      <p class="hint">Une colonne par séance de tournoi par poule : le chiffre affiché est le classement dans la classe ce jour-là (table/terrain joué en priorité, les victoires ne départageant qu'à table égale), et le total cumulé des points à droite. Cliquez sur "Total" pour classer : le rang tient compte en priorité de la table/terrain actuel (montée-descente), les points ne départageant qu'à table égale.</p>
       ${renderClassementParSeancePoule(cd, students, activite)}` : ''}
     </div>`;
 }
@@ -3779,6 +3789,24 @@ function renderClassementParSeancePoule(cd, students, activite){
     });
     return idxParEleve;
   });
+  // Classement au sein de la classe pour CHAQUE séance (et non le nombre de
+  // points bruts de ce jour-là) : classé par table/terrain de cette séance en
+  // priorité, les points marqués ce jour-là ne départageant qu'à table égale
+  // — même principe que le classement total, mais recalculé séance par
+  // séance pour cette colonne-ci.
+  const rangParSeance = seancesPoule.map((se, si)=>{
+    const participants = students.filter(s=>!se.absents.includes(s.id));
+    const classes = participants.slice().sort((a,b)=>{
+      const tableA = pouleIndexParSeance[si][a.id], tableB = pouleIndexParSeance[si][b.id];
+      const ta = tableA === undefined ? Infinity : tableA;
+      const tb = tableB === undefined ? Infinity : tableB;
+      if(ta !== tb) return ta - tb;
+      return (perSeance[si][b.id]||0) - (perSeance[si][a.id]||0);
+    });
+    const rangs = {};
+    classes.forEach((s,i)=>{ rangs[s.id] = i+1; });
+    return rangs;
+  });
   // Une séance avec évaluation technique en plus du tournoi par poule reçoit
   // 2 colonnes (Match / Éval. technique) sous un même en-tête "Séance N" ;
   // une séance "poule seule" reste sur 1 colonne comme avant.
@@ -3795,7 +3823,7 @@ function renderClassementParSeancePoule(cd, students, activite){
     return `<th ${span} ${cls} style="background:${PALETTE[3 + (s.numero % (PALETTE.length-3))]}">${label}</th>`;
   }).join('');
   const headerRow2 = seancesPoule.map((s,si)=> hasEvalTech[si]
-    ? `<th class="col-match" style="background:${PALETTE[3 + (s.numero % (PALETTE.length-3))]}">Match</th><th class="col-eval" style="background:${PALETTE[4]}">Éval.<br>technique</th>`
+    ? `<th class="col-match" style="background:${PALETTE[3 + (s.numero % (PALETTE.length-3))]}">Classement</th><th class="col-eval" style="background:${PALETTE[4]}">Éval.<br>technique</th>`
     : '').join('');
   // Table/terrain actuel d'un élève : celui de la séance de poule la plus
   // récente où il a été classé (on remonte dans l'historique s'il était
@@ -3814,7 +3842,7 @@ function renderClassementParSeancePoule(cd, students, activite){
   // la table/terrain actuel (reflet de la montée-descente) prime, les points
   // ne départagent qu'en cas de table identique — un élève monté à la table 1
   // passe donc devant un élève resté plus bas même avec moins de points.
-  const sorted = students.slice().sort((a,b)=>{
+  const comparateurClassement = (a,b)=>{
     let cmp;
     if(classementPouleSortField === 'nom'){
       cmp = a.nomPrenom.localeCompare(b.nomPrenom, 'fr');
@@ -3825,7 +3853,19 @@ function renderClassementParSeancePoule(cd, students, activite){
         : (cd.poulePoints[a.id]||0) - (cd.poulePoints[b.id]||0);
     }
     return classementPouleSortDir === 'asc' ? cmp : -cmp;
-  });
+  };
+  // Un(e) élève dispensé(e) à la dernière séance est relégué(e) en bas du
+  // tableau, quel que soit le sens de tri choisi : sa table d'une séance plus
+  // ancienne (avant d'être dispensé) ne doit pas fausser le classement des
+  // élèves actuellement actifs.
+  const derniereSeancePoule = seancesPoule[seancesPoule.length-1];
+  const estDispenseActuellement = (studentId)=>{
+    const reasons = derniereSeancePoule && derniereSeancePoule.absentReasons;
+    return !!reasons && reasons[studentId] === 'dispense';
+  };
+  const actifs = students.filter(s=>!estDispenseActuellement(s.id)).sort(comparateurClassement);
+  const dispenses = students.filter(s=>estDispenseActuellement(s.id)).sort(comparateurClassement);
+  const sorted = actifs.concat(dispenses);
   const fleche = (field)=> classementPouleSortField === field ? (classementPouleSortDir === 'asc' ? ' ▲' : ' ▼') : '';
   // Largeur de la colonne Nom Prénom ajustée au nom le plus long affiché
   // (au lieu d'une largeur fixe qui laissait un grand vide pour les noms
@@ -3839,10 +3879,11 @@ function renderClassementParSeancePoule(cd, students, activite){
         const abs = `<td class="col-match muted">${statut ? statut.label : '—'}</td>`;
         return hasEvalTech[si] ? abs + `<td class="col-eval muted">—</td>` : abs;
       }
-      const val = perSeance[si][s.id] || 0;
       const pIdx = pouleIndexParSeance[si][s.id];
       const cls = se.compositionEquipes === 'homogene' ? (pIdx === 0 ? 'poule-forte' : pIdx === 1 ? 'poule-faible' : '') : '';
-      const matchCell = `<td class="col-match"><span class="${cls}">${val}</span></td>`;
+      const rang = rangParSeance[si][s.id];
+      const affichage = rang !== undefined ? rang : (perSeance[si][s.id] || 0);
+      const matchCell = `<td class="col-match"><span class="${cls}">${affichage}</span></td>`;
       if(!hasEvalTech[si]) return matchCell;
       const evalTech = getEvalTechNoteCourte(se, s.id);
       return matchCell + `<td class="col-eval">${evalTech}</td>`;

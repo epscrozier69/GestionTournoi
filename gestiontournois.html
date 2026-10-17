@@ -3743,8 +3743,11 @@ function getEvalTechNoteCourte(seance, studentId){
 // Tri du tableau "Classement total" : alphabétique par défaut, mais
 // cliquable sur "Nom Prénom" ou "Total" pour basculer (et re-cliquer inverse
 // le sens). État mémorisé le temps de la session (pas sauvegardé).
-let classementPouleSortField = 'nom';
-let classementPouleSortDir = 'asc';
+// Par défaut trié par classement réel (table/terrain puis points), pas par
+// ordre alphabétique : la colonne "Rang" doit refléter un vrai classement dès
+// l'ouverture, sans avoir besoin de cliquer sur "Total".
+let classementPouleSortField = 'total';
+let classementPouleSortDir = 'desc';
 function toggleClassementPouleSort(field, activite){
   if(classementPouleSortField === field){
     classementPouleSortDir = classementPouleSortDir === 'asc' ? 'desc' : 'asc';

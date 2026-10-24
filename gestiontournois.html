@@ -147,17 +147,32 @@
      un conteneur partagé. La classe active se distingue par sa pleine
      opacité + un léger zoom. */
   .classe-card{
-    flex:0 1 200px;min-width:160px;font-size:1.1rem;font-weight:800;letter-spacing:.02em;
-    color:#fff;cursor:pointer;opacity:.45;transition:.15s;
-    display:flex;align-items:center;justify-content:center;text-align:center;
-    border:3px solid transparent;
+    flex:0 1 200px;min-width:160px;
+    color:#fff;opacity:.45;transition:.15s;
+    border:3px solid transparent;position:relative;padding:0;overflow:hidden;
   }
   .classe-card:hover{opacity:.75;}
   .classe-card.active{
     opacity:1;box-shadow:0 6px 18px rgba(0,0,0,.25);transform:scale(1.03);
     border-color:#0f172a;
   }
-  .classe-card.active::before{content:'✓ ';}
+  .classe-card.active .classe-card-select::before{content:'✓ ';}
+  /* Bouton principal (sélection de la classe) remplissant toute la vignette,
+     avec de la place à droite pour le petit bouton de suppression en coin —
+     deux boutons distincts plutôt qu'un bouton imbriqué dans un autre
+     (invalide en HTML et source de conflits de clic). */
+  .classe-card-select{
+    width:100%;min-height:52px;background:transparent;border:none;color:inherit;
+    font-size:1.1rem;font-weight:800;letter-spacing:.02em;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;text-align:center;
+    padding:14px 32px 14px 14px;
+  }
+  .classe-card-delete{
+    position:absolute;top:6px;right:6px;width:22px;height:22px;border-radius:6px;border:none;
+    background:rgba(0,0,0,.28);color:#fff;font-size:.75rem;cursor:pointer;line-height:1;
+    display:flex;align-items:center;justify-content:center;padding:0;
+  }
+  .classe-card-delete:hover{background:#dc2626;}
 
   /* Teams / Poules grids */
   .teams-grid, .poules-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-bottom:14px;}
@@ -1753,28 +1768,36 @@ function isPouleModeActif(act, seance){
   if(act.evaluationTechniqueAllowed) return !!seance.pouleActif;
   return seance.tournamentType === 'poule';
 }
-function exportClassementExcel(activite){
+// Construit les lignes du classement cumulé (défis/rotation OU tournoi par
+// poule, selon le mode actif) — partagé par exportClassementExcel (fichier à
+// part) et exportClasseCompleteExcel (feuille "Classement" dans l'export
+// complet de la classe), pour ne pas dupliquer cette logique.
+function buildClassementRows(activite){
   const cd = currentClasseData(activite);
-  if(!cd) return;
+  if(!cd) return [];
   const act = ACTIVITIES[activite];
   const seance = currentSeance(activite);
   const modePoints = isPouleModeActif(act, seance);
   const students = STATE.allStudents.filter(s=>s.classe===cd.classe);
 
   if(!modePoints){
-    // Défis (hasard/classement progressif) : même détail que la carte à
-    // l'écran, avec une colonne par séance de défis + le total.
+    // Défis (hasard/classement progressif/rotation) : même détail que la
+    // carte à l'écran, avec une colonne par séance de défis + le total.
     const seancesDefis = cd.seances.filter(s=> s.tournamentType==='defisHasard' || s.tournamentType==='defisClassement' || s.tournamentType==='rotation');
     const perSeance = seancesDefis.map(s=>computeSeanceDefisWinsParEleve(s, activite));
-    const sorted = students.slice().sort((a,b)=>(cd.wins[b.id]||0)-(cd.wins[a.id]||0));
-    const rows = sorted.map((s,i)=>{
+    // Total = somme des colonnes exportées (voir renderClassementParSeance,
+    // même logique) plutôt que cd.wins, qui peut se désynchroniser.
+    const totaux = {};
+    students.forEach(s=>{
+      totaux[s.id] = seancesDefis.reduce((somme, sc, idx)=> somme + (perSeance[idx][s.id]||0), 0);
+    });
+    const sorted = students.slice().sort((a,b)=>(totaux[b.id]||0)-(totaux[a.id]||0));
+    return sorted.map((s,i)=>{
       const row = { 'Rang':i+1, 'Nom Prénom':s.nomPrenom };
       seancesDefis.forEach((sc,idx)=>{ row['Séance '+sc.numero] = perSeance[idx][s.id]||0; });
-      row['Total'] = cd.wins[s.id]||0;
+      row['Total'] = totaux[s.id]||0;
       return row;
     });
-    exportRowsToExcel(rows, `classement_cumule_${slug(activite)}_${slug(cd.classe)}.xlsx`, 'Classement');
-    return;
   }
 
   // Tournoi par poule : classement général = somme des classements obtenus
@@ -1788,13 +1811,153 @@ function exportClassementExcel(activite){
     return sommeRangParEleve[a.id] - sommeRangParEleve[b.id];
   };
   const sorted = students.slice().sort(comparateur);
-  const rows = sorted.map((s,i)=>{
+  return sorted.map((s,i)=>{
     const row = { 'Rang':i+1, 'Nom Prénom':s.nomPrenom };
     seancesPoule.forEach((sc,si)=>{ row['Séance '+sc.numero] = sc.absents.includes(s.id) ? '' : (rangParSeance[si][s.id]||''); });
     row['Total (somme des classements)'] = sommeRangParEleve[s.id];
     return row;
   });
+}
+function exportClassementExcel(activite){
+  const cd = currentClasseData(activite);
+  if(!cd) return;
+  const rows = buildClassementRows(activite);
   exportRowsToExcel(rows, `classement_cumule_${slug(activite)}_${slug(cd.classe)}.xlsx`, 'Classement');
+}
+// Export complet de TOUTES les séances d'une classe en un seul classeur
+// Excel : une feuille "Classement" (cumul, voir buildClassementRows) puis une
+// feuille par séance avec le détail propre à son type de tournoi (matchs,
+// victoires, binômes...). Pratique pour archiver ou envoyer tout l'historique
+// d'une classe en un coup, plutôt que d'exporter séance par séance.
+function exportClasseCompleteExcel(activite){
+  const cd = currentClasseData(activite);
+  if(!cd || !cd.seances.length) return;
+  const act = ACTIVITIES[activite];
+  const students = STATE.allStudents.filter(s=>s.classe===cd.classe);
+  const wb = XLSX.utils.book_new();
+  let auMoinsUneFeuille = false;
+  const ajouterFeuille = (rows, nomFeuille) => {
+    if(!rows || !rows.length) return;
+    const ws = XLSX.utils.json_to_sheet(rows);
+    // Noms de feuille Excel : 31 caractères max, et certains caractères sont
+    // interdits (: \ / ? * [ ]).
+    const nom = nomFeuille.replace(/[:\\/?*[\]]/g, '').slice(0, 31);
+    XLSX.utils.book_append_sheet(wb, ws, nom);
+    auMoinsUneFeuille = true;
+  };
+
+  const classementRows = buildClassementRows(activite);
+  ajouterFeuille(classementRows, 'Classement');
+
+  cd.seances.slice().sort((a,b)=>a.numero-b.numero).forEach(seance=>{
+    const prefix = `S${seance.numero}`;
+    const reasons = seance.absentReasons || {};
+
+    const exporterPoule = () => {
+      if(!seance.matches || !seance.matches.length) return;
+      const sorted = seance.matches.slice().sort((a,b)=> a.tour-b.tour || a.vague-b.vague || a.table-b.table);
+      const rows = sorted.map(m=>({
+        'Tour':m.tour, 'Vague':m.vague, [act.terrainLabel]:m.table, 'Poule':m.poule,
+        'Participant A':participantLabel(activite, m.a), 'Participant B':participantLabel(activite, m.b),
+        'Score A': (m.scoreA !== undefined && m.scoreA !== null) ? m.scoreA : '',
+        'Score B': (m.scoreB !== undefined && m.scoreB !== null) ? m.scoreB : '',
+      }));
+      ajouterFeuille(rows, `${prefix} Poule`);
+    };
+    const exporterDefisHasard = () => {
+      const w = computeSeanceDefisWinsParEleve(seance, activite);
+      if(!Object.keys(w).length) return;
+      const rows = students.map(s=>({ 'Nom Prénom': s.nomPrenom, 'Victoires': w[s.id]||0 }));
+      ajouterFeuille(rows, `${prefix} Défis hasard`);
+    };
+    const exporterDefisClassement = () => {
+      if(!seance.defisMatches || !seance.defisMatches.length) return;
+      const rows = seance.defisMatches.map(m=>({
+        'Table': m.table,
+        'Joueur A': participantLabel(activite, m.a), 'Joueur B': participantLabel(activite, m.b),
+        'Vainqueur': m.winner ? participantLabel(activite, m.winner) : '',
+        'Arbitre': m.referee ? participantLabel(activite, m.referee) : 'Auto-arbitrage',
+      }));
+      ajouterFeuille(rows, `${prefix} Défis classement`);
+    };
+    const exporterRotation = () => {
+      if(!seance.rotationMatches || !seance.rotationMatches.length) return;
+      const phaseLabel = (m)=> m.phase==='croise' ? 'Croisé' : (m.groupe==='fixe' ? 'Interne (fixes)' : 'Interne (tournants)');
+      const rows = seance.rotationMatches.map(m=>({
+        'Tour': m.tour, 'Terrain': m.terrain, 'Phase': phaseLabel(m),
+        'Participant A': participantLabel(activite, m.a), 'Participant B': participantLabel(activite, m.b),
+        'Vainqueur': m.winner ? participantLabel(activite, m.winner) : '',
+        'Arbitre': m.referee ? participantLabel(activite, m.referee) : 'Auto-arbitrage',
+      }));
+      ajouterFeuille(rows, `${prefix} Rotation`);
+    };
+    const exporterRecord = () => {
+      if(!seance.binomesRecord || !seance.binomesRecord.length) return;
+      const scoreParEleve = {};
+      seance.binomesRecord.forEach(b=>{
+        if(b.score === null || b.score === undefined) return;
+        b.memberIds.forEach(id=>{ if(scoreParEleve[id] === undefined || b.score > scoreParEleve[id]) scoreParEleve[id] = b.score; });
+      });
+      const avecBareme = activite !== 'Tennis de table' || seance.dureeRecord === 20;
+      const rows = students.slice().sort((a,b)=>a.nomPrenom.localeCompare(b.nomPrenom,'fr')).map(s=>{
+        const statut = reasons[s.id] && PRESENCE_STATUTS[reasons[s.id]];
+        const score = scoreParEleve[s.id];
+        const row = { 'Nom Prénom': s.nomPrenom, 'Échanges': score !== undefined ? score : (statut ? statut.label : '') };
+        if(avecBareme) row['Note'] = score !== undefined ? baremeRecord20(score) : (statut ? statut.label : '');
+        return row;
+      });
+      ajouterFeuille(rows, `${prefix} Record échanges`);
+    };
+    const exporterEvalUltimate = () => {
+      if(!seance.binomes || !seance.binomes.length) return;
+      const notesParEleve = {};
+      seance.binomes.forEach(b=>{
+        const totalEssais = b.essais.reduce((a,v)=>a+(v||0), 0);
+        const totalBonus = b.bonus.reduce((a,v)=>a+(v||0), 0);
+        const note = Math.min(20, totalEssais + totalBonus);
+        b.memberIds.forEach(id=>{ notesParEleve[id] = note; });
+      });
+      const rows = students.slice().sort((a,b)=>a.nomPrenom.localeCompare(b.nomPrenom,'fr')).map(s=>{
+        const statut = reasons[s.id] && PRESENCE_STATUTS[reasons[s.id]];
+        return { 'Nom Prénom': s.nomPrenom, 'Note': notesParEleve[s.id] !== undefined ? notesParEleve[s.id] : (statut ? statut.label : '') };
+      });
+      ajouterFeuille(rows, `${prefix} Eval technique`);
+    };
+
+    // Ultimate : poule et évaluation technique peuvent être actifs en même
+    // temps (voir act.evaluationTechniqueAllowed) — toutes les autres
+    // activités ont un tournamentType exclusif.
+    if(act.evaluationTechniqueAllowed){
+      if(seance.pouleActif) exporterPoule();
+      if(seance.evalTechActif){
+        if(act.evaluationTechniqueRecordAllowed) exporterRecord(); else exporterEvalUltimate();
+      }
+    } else if(seance.tournamentType === 'poule') exporterPoule();
+    else if(seance.tournamentType === 'defisHasard') exporterDefisHasard();
+    else if(seance.tournamentType === 'defisClassement') exporterDefisClassement();
+    else if(seance.tournamentType === 'rotation') exporterRotation();
+    else if(seance.tournamentType === 'evaluationTechniqueRecord') exporterRecord();
+  });
+
+  if(!auMoinsUneFeuille){ alert("Aucune donnée à exporter pour cette classe (aucun résultat enregistré dans les séances)."); return; }
+  XLSX.writeFile(wb, `export_complet_${slug(activite)}_${slug(cd.classe)}.xlsx`);
+}
+// Supprime une classe importée dans une activité (toutes ses séances, défis,
+// classements...) — irréversible, d'où la confirmation. N'affecte que cette
+// activité : importer de nouveau la même classe repart de zéro (la liste des
+// élèves elle-même, chargée depuis le Google Sheet, n'est pas touchée).
+function supprimerClasseImportee(activite, classe){
+  const data = STATE.activityData[activite];
+  if(!data || !data.classes[classe]) return;
+  if(!confirm(`Supprimer la classe "${classe}" de l'activité ${activite} ? Toutes ses séances (matchs, classements, défis...) seront définitivement perdues. Cette action est irréversible.`)) return;
+  delete data.classes[classe];
+  if(data.currentClasse === classe){
+    const restantes = Object.keys(data.classes).sort((a,b)=>a.localeCompare(b,'fr'));
+    data.currentClasse = restantes[0] || '';
+  }
+  saveState();
+  renderActivityTab(activite);
+  renderGeneral();
 }
 
 /* ------------------------------------------------------- POULES / EQUIPES */
@@ -3162,12 +3325,19 @@ function attribuerArbitresRotation(matchsDuTour, idlePool, refereeDerniereFois, 
 // fixes[k] à tournants[(k+T) % nbTournants] — ce décalage circulaire garantit
 // que chaque fixe du groupe rencontre chaque tournant exactement une fois.
 function genererRotationMatches(activite){
+  const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
   const fixes = seance.rotationFixes.slice();
   const tournants = seance.rotationTournants.slice();
   const terrains = Math.max(1, seance.rotationTerrains || 1);
   seance.rotationMatches = [];
   seance.rotationTourActuel = 1;
+  // Resynchronise cd.wins avec les séances (les résultats déjà joués sur
+  // l'ancien tirage sont effacés par la ligne au-dessus mais cd.wins — total
+  // cumulé affiché ailleurs : onglet Général, grille défis hasard — ne
+  // décroissait pas tout seul) : sans ça, le total cumulé restait
+  // artificiellement gonflé après une régénération.
+  if(cd){ recomputeCumulativeTotals(cd, activite); }
   if(fixes.length < 1 || tournants.length < 1){ saveState(); renderActivityTab(activite); return; }
   const refereeDerniereFois = {};
   let tourCourant = 1;
@@ -3247,12 +3417,17 @@ function genererRoundRobinPaires(ids){
 // que la phase croisée si le nombre de terrains ne suffit pas à faire jouer
 // toute une ronde en même temps (voir attribuerArbitresRotation).
 function genererRotationMatchesInternes(activite){
+  const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
   if(!seance.rotationMatches.some(m=>m.phase==='croise')){
     alert("Générez d'abord le tournoi à rotation (matchs croisés fixe/tournant) avant de lancer les matchs internes.");
     return;
   }
   seance.rotationMatches = seance.rotationMatches.filter(m=>m.phase!=='interne');
+  // Resynchronise cd.wins avec les séances (voir même commentaire dans
+  // genererRotationMatches) : les résultats de la phase "interne" précédente
+  // viennent d'être effacés par la ligne au-dessus.
+  if(cd){ recomputeCumulativeTotals(cd, activite); }
   const terrains = Math.max(1, seance.rotationTerrains || 1);
   const tousParticipants = [...seance.rotationFixes, ...seance.rotationTournants];
   const roundsFixe = genererRoundRobinPaires(seance.rotationFixes);
@@ -3658,7 +3833,11 @@ function renderActivityTab(activite){
         <button class="btn" id="btnImporterClasse" ${!classesDisponibles.length?'disabled':''}>Charger cette classe</button>
         ${!classesDisponibles.length ? '<div class="hint">Chargez d\'abord la liste des élèves depuis l\'onglet Général.</div>' : ''}
       </div>
-      ${classesChargees.map((c,i)=>`<button class="card classe-card ${c===data.currentClasse?'active':''}" style="background:${PALETTE[i % PALETTE.length]}" data-classe-select="${c}">${c}</button>`).join('')}
+      ${classesChargees.map((c,i)=>`
+        <div class="card classe-card ${c===data.currentClasse?'active':''}" style="background:${PALETTE[i % PALETTE.length]}">
+          <button class="classe-card-select" data-classe-select="${c}">${c}</button>
+          <button class="classe-card-delete" data-classe-delete="${c}" title="Supprimer la classe ${c} de ${activite}">🗑️</button>
+        </div>`).join('')}
     </div>`;
 
   const cd = currentClasseData(activite);
@@ -3672,6 +3851,7 @@ function renderActivityTab(activite){
         <div class="chip" style="background:var(--c1)"><b>${students.length}</b>Élèves</div>
         <div class="chip" style="background:var(--c3)"><b>${filles}</b>Filles</div>
         <div class="chip" style="background:var(--c6)"><b>${garcons}</b>Garçons</div>
+        ${cd.seances.length ? `<button class="btn secondary small" id="btnExportClasseComplete" title="Exporte toutes les séances de ${cd.classe} (classement + détail de chaque séance) dans un seul fichier Excel.">📊 Exporter toutes les séances</button>` : ''}
       </div>`;
 
     // Le classement total cumule d'une séance à l'autre : les défis hasard
@@ -3765,11 +3945,11 @@ function renderActivityTab(activite){
               ${cd.seances.length ? '<button class="btn small ghost" id="btnEffacerResultats">🧹 Effacer les résultats</button>' : ''}
             </div>
             <div class="config-grid">
-              ${typeTournoiBtn('poule', '🏆 Par poule')}
+              ${act.rotationAllowed ? typeTournoiBtn('rotation', '🔁 Tournoi à rotation') : ''}
               ${typeTournoiBtn('defisClassement', '📈 Défis classement progressif')}
               ${typeTournoiBtn('defisHasard', '🎲 Défis hasard')}
+              ${typeTournoiBtn('poule', '🏆 Par poule')}
               ${act.evaluationTechniqueRecordAllowed ? typeTournoiBtn('evaluationTechniqueRecord', "📊 Évaluation technique (record d'échanges)") : ''}
-              ${act.rotationAllowed ? typeTournoiBtn('rotation', '🔁 Tournoi à rotation') : ''}
             </div>
           </div>`;
       } else if(act.evaluationTechniqueAllowed){
@@ -3855,6 +4035,14 @@ function renderActivityTab(activite){
   panel.querySelectorAll('[data-classe-select]').forEach(btn=>{
     btn.addEventListener('click', ()=>switchClasse(activite, btn.dataset.classeSelect));
   });
+  panel.querySelectorAll('[data-classe-delete]').forEach(btn=>{
+    btn.addEventListener('click', (e)=>{
+      e.stopPropagation(); // ne pas aussi déclencher la sélection de la classe
+      supprimerClasseImportee(activite, btn.dataset.classeDelete);
+    });
+  });
+  const btnExportClasseComplete = q('#btnExportClasseComplete');
+  if(btnExportClasseComplete) btnExportClasseComplete.addEventListener('click', ()=>exportClasseCompleteExcel(activite));
 
   const btnNouvelleSeance = q('#btnNouvelleSeance');
   if(btnNouvelleSeance) btnNouvelleSeance.addEventListener('click', ()=>addSeance(activite));
@@ -4739,6 +4927,14 @@ function renderClassementParSeance(cd, students, recentFirst, activite){
   // des tables en cours, pour voir en priorité la séance en cours.
   if(recentFirst) seancesDefis = seancesDefis.slice().reverse();
   const perSeance = seancesDefis.map(s=>computeSeanceDefisWinsParEleve(s, activite));
+  // Total = somme des colonnes affichées (plutôt que cd.wins, qui peut se
+  // désynchroniser — ex. régénérer un tournoi à rotation remet ses matchs à
+  // zéro sans redécrémenter cd.wins) : ainsi le Total correspond TOUJOURS
+  // exactement à ce qui est affiché colonne par colonne, quoi qu'il arrive.
+  const totaux = {};
+  students.forEach(stu=>{
+    totaux[stu.id] = seancesDefis.reduce((somme, se, si)=> somme + (perSeance[si][stu.id]||0), 0);
+  });
   // Volley (défis par équipes) : une victoire est partagée par toute une
   // équipe, donc corriger le chiffre d'un seul élève n'aurait pas de sens —
   // les cases restent en lecture seule pour ces activités.
@@ -4751,7 +4947,7 @@ function renderClassementParSeance(cd, students, recentFirst, activite){
   const sorted = students.slice().sort((a,b)=>{
     const cmp = classementDefisSortField === 'nom'
       ? a.nomPrenom.localeCompare(b.nomPrenom, 'fr')
-      : (cd.wins[a.id]||0) - (cd.wins[b.id]||0);
+      : (totaux[a.id]||0) - (totaux[b.id]||0);
     return classementDefisSortDir === 'asc' ? cmp : -cmp;
   });
   // Cases éditables (si activite fourni, hors défis par équipes) pour
@@ -4769,7 +4965,7 @@ function renderClassementParSeance(cd, students, recentFirst, activite){
         <td><b>${i+1}</b></td>
         <td>${stu.nomPrenom}</td>
         ${cells}
-        <td><b>${cd.wins[stu.id]||0}</b></td>
+        <td><b>${totaux[stu.id]||0}</b></td>
       </tr>`;
   }).join('');
   return `
@@ -5372,8 +5568,11 @@ function renderDefisHasardSection(activite){
           </table>
         </div>
         <div class="defis-classement-live">
-          <h4>🏅 Classement — victoires séance par séance</h4>
-          <p class="hint">Se met à jour à chaque victoire ajoutée. La séance la plus récente est la colonne juste après le nom.</p>
+          <div class="toolbar">
+            <h4 style="margin:0;">🏅 Classement — victoires séance par séance</h4>
+            <button class="btn secondary small" id="btnExportClassement">📊 Exporter Excel</button>
+          </div>
+          <p class="hint">Se met à jour à chaque victoire ajoutée. La séance la plus récente est la colonne juste après le nom. Cliquez sur "Nom Prénom" ou "Total" pour trier (recliquez pour inverser le sens).</p>
           ${renderClassementParSeance(cd, students, true, activite)}
         </div>
       </div>
@@ -5501,8 +5700,11 @@ function renderDefisClassementSection(activite){
       <div class="defis-layout">
         <div class="defis-tables-grid">${tableCards.join('')}</div>
         <div class="defis-classement-live">
-          <h4>🏅 Classement — victoires séance par séance</h4>
-          <p class="hint">Se met à jour à chaque résultat enregistré. La séance la plus récente est la colonne juste après le nom.</p>
+          <div class="toolbar">
+            <h4 style="margin:0;">🏅 Classement — victoires séance par séance</h4>
+            <button class="btn secondary small" id="btnExportClassement">📊 Exporter Excel</button>
+          </div>
+          <p class="hint">Se met à jour à chaque résultat enregistré. La séance la plus récente est la colonne juste après le nom. Cliquez sur "Nom Prénom" ou "Total" pour trier (recliquez pour inverser le sens).</p>
           ${renderClassementParSeance(cd, students, true, activite)}
         </div>
       </div>
@@ -5741,8 +5943,11 @@ function renderRotationSection(activite){
       <div class="defis-tables-grid">${matchCards}</div>
     </div>
     <div class="card" style="margin-top:14px;">
-      <h4 style="margin:0 0 8px;">🏅 Classement — victoires séance par séance</h4>
-      <p class="hint">Se met à jour à chaque résultat enregistré. La séance la plus récente est la colonne juste après le nom.</p>
+      <div class="toolbar">
+        <h4 style="margin:0;">🏅 Classement — victoires séance par séance</h4>
+        <button class="btn secondary small" id="btnExportClassement">📊 Exporter Excel</button>
+      </div>
+      <p class="hint">Se met à jour à chaque résultat enregistré. La séance la plus récente est la colonne juste après le nom. Cliquez sur "Nom Prénom" ou "Total" pour trier (recliquez pour inverser le sens).</p>
       ${renderClassementParSeance(cd, students, true, activite)}
     </div>
     <div class="card" style="margin-top:14px;">

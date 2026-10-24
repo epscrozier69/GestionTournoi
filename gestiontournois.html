@@ -1659,12 +1659,15 @@ function exportRotationMatchesExcel(activite){
   const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
   if(!cd || !seance || !seance.rotationMatches || !seance.rotationMatches.length) return;
+  const phaseLabel = (m)=> m.phase==='croise' ? 'Croisé (fixe/tournant)' : (m.groupe==='fixe' ? 'Interne (fixes)' : 'Interne (tournants)');
   const rows = seance.rotationMatches.map(m=>({
     'Tour': m.tour,
     'Terrain': m.terrain,
-    'Fixe': participantLabel(activite, m.fixeId),
-    'Tournant': participantLabel(activite, m.tournantId),
+    'Phase': phaseLabel(m),
+    'Participant A': participantLabel(activite, m.a),
+    'Participant B': participantLabel(activite, m.b),
     'Vainqueur': m.winner ? participantLabel(activite, m.winner) : '',
+    'Arbitre': m.referee ? participantLabel(activite, m.referee) : 'Auto-arbitrage',
   }));
   exportRowsToExcel(rows, `tournoi_rotation_${slug(activite)}_${slug(cd.classe)}_seance${seance.numero}.xlsx`, 'Matchs');
 }
@@ -3088,8 +3091,11 @@ function toggleRotationRole(activite, participantId, role){
   saveState();
   renderActivityTab(activite);
 }
-// Répartition rapide moitié/moitié (au hasard), modifiable ensuite au cas
-// par cas via toggleRotationRole.
+// Répartition rapide moitié/moitié : la première moitié de la liste (dans
+// l'ordre d'affichage — équipes dans leur ordre de création, élèves dans
+// l'ordre de la classe) devient fixe, la seconde moitié tournante — pas de
+// tirage au sort, pour un résultat prévisible et facile à ajuster ensuite au
+// cas par cas via toggleRotationRole.
 function repartirRotationAutomatique(activite){
   const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
@@ -3097,41 +3103,141 @@ function repartirRotationAutomatique(activite){
   const ids = act.type === 'equipe'
     ? seance.teamsRotation.map(t=>t.id)
     : STATE.allStudents.filter(s=>s.classe===cd.classe && !seance.absents.includes(s.id)).map(s=>s.id);
-  const shuffled = shuffleArray(ids);
-  const moitie = Math.ceil(shuffled.length / 2);
-  seance.rotationFixes = shuffled.slice(0, moitie);
-  seance.rotationTournants = shuffled.slice(moitie);
+  const moitie = Math.ceil(ids.length / 2);
+  seance.rotationFixes = ids.slice(0, moitie);
+  seance.rotationTournants = ids.slice(moitie);
   saveState();
   renderActivityTab(activite);
 }
-// Génère tous les tours du tournoi à rotation : au tour T (0-indexé), le
-// terrain k (0-indexé, parmi les terrains "actifs") accueille
-// fixes[k] contre tournants[(k+T) % nbTournants]. Avec ce décalage circulaire,
-// chaque fixe actif rencontre CHAQUE tournant exactement une fois au bout des
-// nbTournants tours, quels que soient les effectifs respectifs (voir
-// Fonctionnalites.md lignes 16 et 74-78 : la moitié reste fixe, l'autre
-// tourne d'un terrain à chaque match). Le nombre de terrains réellement
-// utilisés par tour est limité au plus petit des trois : terrains
-// disponibles, nombre de fixes, nombre de tournants (sinon un même
-// participant serait affecté à deux terrains le même tour).
+// Désigne un arbitre parmi les participants inactifs ce tour (ni fixe actif,
+// ni tournant actif pour aucun des matchs de ce tour) — utile dès que le
+// nombre de tables/terrains est insuffisant pour faire jouer tout le monde en
+// même temps (plus de fixes que de terrains, par exemple) : plutôt que
+// d'attendre sans rien faire, les participants pas encore programmés ce tour
+// arbitrent un match. refereeDerniereFois (id -> dernier tour arbitré) sert à
+// répartir équitablement l'arbitrage au fil des tours générés, en priorisant
+// ceux qui n'ont pas encore arbitré ou qui ont arbitré il y a le plus
+// longtemps — jamais deux fois d'affilée si une autre option existe.
+function attribuerArbitresRotation(matchsDuTour, idlePool, refereeDerniereFois, tourNum){
+  if(!idlePool.length) return;
+  const candidats = idlePool.slice().sort((a,b)=>(refereeDerniereFois[a]||0) - (refereeDerniereFois[b]||0));
+  matchsDuTour.forEach((m,i)=>{
+    if(i >= candidats.length) return; // plus assez d'arbitres disponibles que de matchs ce tour
+    m.referee = candidats[i];
+    refereeDerniereFois[candidats[i]] = tourNum;
+  });
+}
+// Génère tous les tours du tournoi à rotation (phase "croisée" : chaque fixe
+// contre chaque tournant). Si le nombre de fixes dépasse le nombre de
+// terrains disponibles, ils ne peuvent pas tous jouer en même temps : les
+// fixes sont alors traités par groupes d'au plus "terrains" participants,
+// chaque groupe jouant son cycle complet (un tour par tournant) avant de
+// passer au groupe suivant — les fixes des groupes pas encore joueurs
+// arbitrent en attendant leur tour (voir attribuerArbitresRotation), tout
+// comme les tournants pas actifs sur un terrain donné à un tour précis. Au
+// sein d'un groupe, le tour T (0-indexé) sur le terrain k (0-indexé) oppose
+// fixes[k] à tournants[(k+T) % nbTournants] — ce décalage circulaire garantit
+// que chaque fixe du groupe rencontre chaque tournant exactement une fois.
 function genererRotationMatches(activite){
   const seance = currentSeance(activite);
   const fixes = seance.rotationFixes.slice();
   const tournants = seance.rotationTournants.slice();
-  const actifs = Math.min(seance.rotationTerrains || 1, fixes.length, tournants.length);
+  const terrains = Math.max(1, seance.rotationTerrains || 1);
   seance.rotationMatches = [];
   seance.rotationTourActuel = 1;
-  if(actifs >= 1){
+  if(fixes.length < 1 || tournants.length < 1){ saveState(); renderActivityTab(activite); return; }
+  const refereeDerniereFois = {};
+  let tourCourant = 1;
+  for(let g=0; g*terrains < fixes.length; g++){
+    const groupeFixes = fixes.slice(g*terrains, g*terrains+terrains);
     for(let tour=0; tour<tournants.length; tour++){
-      for(let k=0; k<actifs; k++){
+      const matchsDuTour = [];
+      groupeFixes.forEach((fixeId, k)=>{
         const tournantIdx = (k + tour) % tournants.length;
-        seance.rotationMatches.push({
-          id:'rot'+tour+'-'+k, tour:tour+1, terrain:k+1,
-          fixeId:fixes[k], tournantId:tournants[tournantIdx], winner:null,
+        matchsDuTour.push({
+          id:'rot'+tourCourant+'-'+k, tour:tourCourant, terrain:k+1,
+          a:fixeId, b:tournants[tournantIdx], winner:null,
+          phase:'croise', groupe:null, referee:null,
         });
-      }
+      });
+      const joueursDuTour = new Set(matchsDuTour.flatMap(m=>[m.a,m.b]));
+      const idle = [...fixes, ...tournants].filter(id=>!joueursDuTour.has(id));
+      attribuerArbitresRotation(matchsDuTour, idle, refereeDerniereFois, tourCourant);
+      seance.rotationMatches.push(...matchsDuTour);
+      tourCourant++;
     }
   }
+  saveState();
+  renderActivityTab(activite);
+}
+// Répartit n participants en rondes façon "poule à l'américaine" (méthode du
+// cercle) : un participant fixé, les autres tournent d'un cran à chaque
+// ronde — garantit que chaque paire se rencontre exactement une fois en
+// n-1 rondes (n pair ; effectif impair : un participant exempté par ronde,
+// à tour de rôle). Utilisé pour la phase "matchs internes" du tournoi à
+// rotation (fixes entre eux / tournants entre eux).
+function genererRoundRobinPaires(ids){
+  let arr = ids.slice();
+  if(arr.length < 2) return [];
+  if(arr.length % 2 === 1) arr.push(null); // exempté tournant
+  const n = arr.length;
+  const rounds = [];
+  for(let r=0; r<n-1; r++){
+    const paires = [];
+    for(let i=0; i<n/2; i++){
+      const a = arr[i], b = arr[n-1-i];
+      if(a!==null && b!==null) paires.push([a,b]);
+    }
+    rounds.push(paires);
+    const premier = arr[0];
+    const reste = arr.slice(1);
+    reste.unshift(reste.pop());
+    arr = [premier, ...reste];
+  }
+  return rounds;
+}
+// 2e tournoi (sur demande) : fait s'affronter entre elles les équipes (ou
+// élèves) qui étaient "fixes" lors du tournoi croisé, et séparément celles
+// qui étaient "tournantes" — en combinant avec le tournoi croisé déjà joué
+// (chaque fixe contre chaque tournant), tout le monde aura alors affronté
+// tout le monde. Les matchs internes s'ajoutent à la suite des tours déjà
+// joués (ne remplace pas le tournoi croisé) ; recliquer régénère seulement
+// cette phase (le tournoi croisé reste intact). Même principe d'arbitrage
+// que la phase croisée si le nombre de terrains ne suffit pas à faire jouer
+// toute une ronde en même temps (voir attribuerArbitresRotation).
+function genererRotationMatchesInternes(activite){
+  const seance = currentSeance(activite);
+  if(!seance.rotationMatches.some(m=>m.phase==='croise')){
+    alert("Générez d'abord le tournoi à rotation (matchs croisés fixe/tournant) avant de lancer les matchs internes.");
+    return;
+  }
+  seance.rotationMatches = seance.rotationMatches.filter(m=>m.phase!=='interne');
+  const terrains = Math.max(1, seance.rotationTerrains || 1);
+  const tousParticipants = [...seance.rotationFixes, ...seance.rotationTournants];
+  const roundsFixe = genererRoundRobinPaires(seance.rotationFixes);
+  const roundsTournant = genererRoundRobinPaires(seance.rotationTournants);
+  const nbRondes = Math.max(roundsFixe.length, roundsTournant.length);
+  let tourSuivant = seance.rotationMatches.length ? Math.max(...seance.rotationMatches.map(m=>m.tour)) + 1 : 1;
+  const refereeDerniereFois = {};
+  for(let r=0; r<nbRondes; r++){
+    const paires = [
+      ...(roundsFixe[r]||[]).map(p=>({a:p[0], b:p[1], groupe:'fixe'})),
+      ...(roundsTournant[r]||[]).map(p=>({a:p[0], b:p[1], groupe:'tournant'})),
+    ];
+    for(let j=0; j<paires.length; j+=terrains){
+      const chunk = paires.slice(j, j+terrains);
+      const matchsDuTour = chunk.map((p,k)=>({
+        id:'rotint'+tourSuivant+'-'+k, tour:tourSuivant, terrain:k+1,
+        a:p.a, b:p.b, winner:null, phase:'interne', groupe:p.groupe, referee:null,
+      }));
+      const joueursDuTour = new Set(matchsDuTour.flatMap(m=>[m.a,m.b]));
+      const idle = tousParticipants.filter(id=>!joueursDuTour.has(id));
+      attribuerArbitresRotation(matchsDuTour, idle, refereeDerniereFois, tourSuivant);
+      seance.rotationMatches.push(...matchsDuTour);
+      tourSuivant++;
+    }
+  }
+  seance.rotationTourActuel = seance.rotationMatches.length ? Math.min(...seance.rotationMatches.filter(m=>m.phase==='interne').map(m=>m.tour)) : 1;
   saveState();
   renderActivityTab(activite);
 }
@@ -3141,26 +3247,42 @@ function genererRotationMatches(activite){
 // participant corrige une erreur de saisie sans perdre la victoire déjà
 // comptée pour l'autre. Contribue au total cumulé (cd.wins) comme les défis,
 // avec le même partage par membre d'équipe en Volley (voir defisMembreIds).
-function enregistrerVainqueurRotation(activite, matchId, winnerId){
+// Applique un nouveau vainqueur à un match de rotation (ou l'efface si
+// winnerId est null/vide), en réajustant cd.wins en conséquence (retire
+// l'ancien vainqueur du total le cas échéant, ajoute le nouveau) — partagé
+// par le clic sur un match en cours (enregistrerVainqueurRotation, avec
+// reclic = annulation) et la correction a posteriori depuis la carte
+// Historique (corrigerVainqueurRotationHistorique, avec une liste déroulante
+// pouvant aussi repasser à "non joué").
+function appliquerVainqueurRotation(activite, match, winnerId){
   const cd = currentClasseData(activite);
+  const seance = currentSeance(activite);
+  if(match.winner === winnerId) return;
+  if(match.winner){
+    defisMembreIds(activite, seance, match.winner).forEach(id=>{ cd.wins[id] = Math.max(0, (cd.wins[id]||0) - 1); });
+  }
+  match.winner = winnerId || null;
+  if(winnerId){
+    defisMembreIds(activite, seance, winnerId).forEach(id=>{ cd.wins[id] = (cd.wins[id]||0) + 1; });
+  }
+  saveState();
+}
+function enregistrerVainqueurRotation(activite, matchId, winnerId){
   const seance = currentSeance(activite);
   const match = (seance.rotationMatches||[]).find(m=>m.id===matchId);
   if(!match) return;
-  if(match.winner === winnerId){
-    match.winner = null;
-    defisMembreIds(activite, seance, winnerId).forEach(id=>{ cd.wins[id] = Math.max(0, (cd.wins[id]||0) - 1); });
-    saveState();
-    renderActivityTab(activite);
-    renderGeneral();
-    return;
-  }
-  const previousWinner = match.winner;
-  if(previousWinner){
-    defisMembreIds(activite, seance, previousWinner).forEach(id=>{ cd.wins[id] = Math.max(0, (cd.wins[id]||0) - 1); });
-  }
-  match.winner = winnerId;
-  defisMembreIds(activite, seance, winnerId).forEach(id=>{ cd.wins[id] = (cd.wins[id]||0) + 1; });
-  saveState();
+  appliquerVainqueurRotation(activite, match, match.winner === winnerId ? null : winnerId);
+  renderActivityTab(activite);
+  renderGeneral();
+}
+// Correction manuelle depuis la carte Historique (liste déroulante) : erreur
+// de saisie repérée après coup, sans avoir à retrouver le match dans le tour
+// concerné.
+function corrigerVainqueurRotationHistorique(activite, matchId, winnerId){
+  const seance = currentSeance(activite);
+  const match = (seance.rotationMatches||[]).find(m=>m.id===matchId);
+  if(!match) return;
+  appliquerVainqueurRotation(activite, match, winnerId || null);
   renderActivityTab(activite);
   renderGeneral();
 }
@@ -4041,6 +4163,17 @@ function renderActivityTab(activite){
     btn.addEventListener('click', ()=>{
       const [matchId, winnerId] = btn.dataset.setWinnerRotation.split('::');
       enregistrerVainqueurRotation(activite, matchId, winnerId);
+    });
+  });
+  const btnGenererRotationInternes = q('#btnGenererRotationInternes');
+  if(btnGenererRotationInternes) btnGenererRotationInternes.addEventListener('click', ()=>{
+    const s = currentSeance(activite);
+    if(s.rotationMatches.some(m=>m.phase==='interne') && !confirm("Régénérer les matchs internes effacera les résultats déjà enregistrés pour cette phase (le tournoi croisé fixe/tournant n'est pas touché). Continuer ?")) return;
+    genererRotationMatchesInternes(activite);
+  });
+  panel.querySelectorAll('[data-corriger-vainqueur-rotation]').forEach(sel=>{
+    sel.addEventListener('change', ()=>{
+      corrigerVainqueurRotationHistorique(activite, sel.dataset.corrigerVainqueurRotation, sel.value);
     });
   });
   const btnExportRotation = q('#btnExportRotation');
@@ -5475,31 +5608,56 @@ function renderRotationSection(activite){
 
   const matchesDuTour = seance.rotationMatches.filter(m=>m.tour===tourActuel);
   const matchCards = matchesDuTour.map(m=>{
-    const nomFixe = participantLabel(activite, m.fixeId);
-    const nomTournant = participantLabel(activite, m.tournantId);
-    const membresFixe = participantMembresLabel(activite, m.fixeId);
-    const membresTournant = participantMembresLabel(activite, m.tournantId);
+    const nomA = participantLabel(activite, m.a);
+    const nomB = participantLabel(activite, m.b);
+    const membresA = participantMembresLabel(activite, m.a);
+    const membresB = participantMembresLabel(activite, m.b);
+    // Phase "croisé" (tournoi 1) : a = fixe (📍), b = tournant (🔄). Phase
+    // "interne" (tournoi 2, voir genererRotationMatchesInternes) : les deux
+    // participants viennent du même groupe, l'icône reflète lequel.
+    const iconA = m.phase === 'croise' ? '📍' : (m.groupe === 'fixe' ? '📍' : '🔄');
+    const iconB = m.phase === 'croise' ? '🔄' : (m.groupe === 'fixe' ? '📍' : '🔄');
+    const badgePhase = m.phase === 'interne'
+      ? `<p class="hint" style="text-align:center;margin:0 0 6px;">⚔️ Entre ${m.groupe === 'fixe' ? 'équipes fixes' : 'équipes tournantes'}</p>`
+      : '';
+    // Arbitre : un participant pas encore programmé sur un terrain ce tour-ci
+    // (nombre de fixes/tournants supérieur au nombre de terrains) — voir
+    // attribuerArbitresRotation. Pas d'arbitre désigné = auto-arbitrage.
+    const refereeLabel = m.referee ? participantLabel(activite, m.referee) : 'Auto-arbitrage';
+    const membresReferee = m.referee ? participantMembresLabel(activite, m.referee) : '';
     return `
       <div class="poule-card">
         <h4>${act.terrainLabel.replace(/s$/,'')} ${m.terrain}</h4>
-        <button class="btn ${m.winner===m.fixeId?'':'ghost'}" data-set-winner-rotation="${m.id}::${m.fixeId}">📍 ${nomFixe}${membresFixe?`<span class="team-members-inline">${membresFixe}</span>`:''}</button>
+        ${badgePhase}
+        <button class="btn ${m.winner===m.a?'':'ghost'}" data-set-winner-rotation="${m.id}::${m.a}">${iconA} ${nomA}${membresA?`<span class="team-members-inline">${membresA}</span>`:''}</button>
         <div class="hint" style="text-align:center;margin:4px 0;">contre</div>
-        <button class="btn ${m.winner===m.tournantId?'':'ghost'}" data-set-winner-rotation="${m.id}::${m.tournantId}">🔄 ${nomTournant}${membresTournant?`<span class="team-members-inline">${membresTournant}</span>`:''}</button>
+        <button class="btn ${m.winner===m.b?'':'ghost'}" data-set-winner-rotation="${m.id}::${m.b}">${iconB} ${nomB}${membresB?`<span class="team-members-inline">${membresB}</span>`:''}</button>
+        <div class="arbitre-label">🧑‍⚖️ Arbitre : <b>${refereeLabel}</b>${membresReferee?` <span class="muted">(${membresReferee})</span>`:''}</div>
       </div>`;
   }).join('');
 
+  const aDesMatchsInternes = seance.rotationMatches.some(m=>m.phase==='interne');
   const historiqueHtml = seance.rotationMatches.slice().reverse().map((m,idx)=>{
-    const nomFixe = participantLabel(activite, m.fixeId);
-    const nomTournant = participantLabel(activite, m.tournantId);
-    const vainqueur = m.winner ? `<b>${participantLabel(activite, m.winner)}</b>` : '<span class="muted">En cours…</span>';
+    const nomA = participantLabel(activite, m.a);
+    const nomB = participantLabel(activite, m.b);
+    const phaseLabel = m.phase === 'interne' ? (m.groupe==='fixe' ? '⚔️ Interne (fixes)' : '⚔️ Interne (tournants)') : '📍🔄 Croisé';
+    const arbitre = m.referee ? participantLabel(activite, m.referee) : 'Auto-arbitrage';
     return `
       <tr>
         <td>${seance.rotationMatches.length-idx}</td>
         <td>Tour ${m.tour}</td>
         <td>${act.terrainLabel.replace(/s$/,'')} ${m.terrain}</td>
-        <td>${nomFixe}</td>
-        <td>${nomTournant}</td>
-        <td>${vainqueur}</td>
+        <td>${phaseLabel}</td>
+        <td>${nomA}</td>
+        <td>${nomB}</td>
+        <td>
+          <select data-corriger-vainqueur-rotation="${m.id}">
+            <option value="" ${!m.winner?'selected':''}>— Non joué —</option>
+            <option value="${m.a}" ${m.winner===m.a?'selected':''}>${nomA}</option>
+            <option value="${m.b}" ${m.winner===m.b?'selected':''}>${nomB}</option>
+          </select>
+        </td>
+        <td>${arbitre}</td>
       </tr>`;
   }).join('');
 
@@ -5509,32 +5667,38 @@ function renderRotationSection(activite){
     <div class="card">
       <div class="toolbar">
         <h3>🔁 Tournoi à rotation — Tour ${tourActuel}/${nbTours}</h3>
-        <button class="btn secondary small" id="btnExportRotation">📊 Exporter Excel</button>
+        <div style="display:flex;gap:6px;">
+          <button class="btn secondary small" id="btnGenererRotationInternes" title="Fait s'affronter entre elles les équipes qui étaient fixes, et séparément celles qui étaient tournantes, pour que tout le monde ait affronté tout le monde.">⚔️ ${aDesMatchsInternes?'Régénérer':'Lancer'} les matchs internes</button>
+          <button class="btn secondary small" id="btnExportRotation">📊 Exporter Excel</button>
+        </div>
       </div>
-      <p class="hint">Les participants "📍 Fixe" restent sur leur terrain toute la séance ; les "🔄 Tournant" changent de terrain à chaque tour. Cliquez sur le nom du vainqueur de chaque match.</p>
+      <p class="hint">Les participants "📍 Fixe" restent sur leur terrain toute la séance ; les "🔄 Tournant" changent de terrain à chaque tour. Cliquez sur le nom du vainqueur de chaque match. Une fois ce 1er tournoi joué, lancez "⚔️ Les matchs internes" pour faire s'affronter les fixes entre eux et les tournants entre eux : tout le monde aura alors joué contre tout le monde. S'il n'y a pas assez de ${act.terrainLabel.toLowerCase()} pour faire jouer tout le monde en même temps, les participants en attente de leur tour arbitrent un match (jamais deux fois d'affilée si une autre option existe).</p>
       <div class="config-grid" style="margin-bottom:10px;">${toursNav}</div>
       <div class="defis-tables-grid">${matchCards}</div>
     </div>
+    <div class="defis-classement-live" style="margin-top:14px;">
+      <h4>🏅 Classement — victoires séance par séance</h4>
+      <p class="hint">Se met à jour à chaque résultat enregistré. La séance la plus récente est la colonne juste après le nom.</p>
+      ${renderClassementParSeance(cd, students, true, activite)}
+    </div>
     <div class="card" style="margin-top:14px;">
       <h4 style="margin:0 0 8px;">📜 Historique des matchs de cette séance</h4>
+      <p class="hint">Du plus récent au plus ancien — utilisez la liste déroulante pour corriger un vainqueur mal saisi.</p>
       <div class="table-wrap">
         <table class="classement-table">
           <thead><tr>
             <th style="background:${PALETTE[0]}">N°</th>
             <th style="background:${PALETTE[5]}">Tour</th>
             <th style="background:${PALETTE[1]}">${act.terrainLabel.replace(/s$/,'')}</th>
-            <th style="background:${PALETTE[3]}">Fixe</th>
-            <th style="background:${PALETTE[4]}">Tournant</th>
+            <th style="background:${PALETTE[6]}">Phase</th>
+            <th style="background:${PALETTE[3]}">Participant A</th>
+            <th style="background:${PALETTE[4]}">Participant B</th>
             <th style="background:${PALETTE[2]}">Vainqueur</th>
+            <th style="background:${PALETTE[7]}">Arbitre</th>
           </tr></thead>
           <tbody>${historiqueHtml}</tbody>
         </table>
       </div>
-    </div>
-    <div class="defis-classement-live" style="margin-top:14px;">
-      <h4>🏅 Classement — victoires séance par séance</h4>
-      <p class="hint">Se met à jour à chaque résultat enregistré. La séance la plus récente est la colonne juste après le nom.</p>
-      ${renderClassementParSeance(cd, students, true, activite)}
     </div>`;
   return html;
 }

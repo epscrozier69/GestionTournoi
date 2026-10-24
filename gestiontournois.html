@@ -646,6 +646,7 @@ const ACTIVITIES = {
     pouleMin:3, pouleMax:4, pouleTerrainMin:6, pouleTerrainMax:14,
     defisTerrainMin:6, defisTerrainMax:14, defaultTerrains:8, scoreMax:25,
     rotationAllowed:true, // tournoi à rotation (voir Fonctionnalites.md ligne 16)
+    evaluationTechniqueRecordAllowed:true, // évaluation technique "record d'échanges" (binômes, pavé numérique) — même principe qu'en Tennis de table/Volley
   },
   'Handball': {
     icon:'🤾', type:'equipe', terrainLabel:'Terrains', defisAllowed:false,
@@ -5734,8 +5735,8 @@ function renderRotationSection(activite){
       <div class="config-grid" style="margin-bottom:10px;">${toursNav}</div>
       <div class="defis-tables-grid">${matchCards}</div>
     </div>
-    <div class="defis-classement-live" style="margin-top:14px;">
-      <h4>🏅 Classement — victoires séance par séance</h4>
+    <div class="card" style="margin-top:14px;">
+      <h4 style="margin:0 0 8px;">🏅 Classement — victoires séance par séance</h4>
       <p class="hint">Se met à jour à chaque résultat enregistré. La séance la plus récente est la colonne juste après le nom.</p>
       ${renderClassementParSeance(cd, students, true, activite)}
     </div>

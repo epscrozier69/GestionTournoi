@@ -68,6 +68,11 @@
   .btn.ghost{background:#fff;color:var(--ink);border:1px solid var(--line);box-shadow:none;}
   .btn.masque{background:#94a3b8;box-shadow:none;}
   .btn.small{padding:5px 10px;font-size:.75rem;}
+  /* Tournoi à rotation : distingue les tours de la phase 2 "matchs internes"
+     (voir genererRotationMatchesInternes) de ceux de la phase 1 (tournoi
+     croisé fixe/tournant) dans la navigation par tour. */
+  .btn.interne{background:#7c3aed;box-shadow:0 2px 6px rgba(124,58,237,.3);}
+  .btn.ghost.interne{background:#f3e8ff;color:#6d28d9;border-color:#c4b5fd;}
 
   .empty-state{padding:30px;text-align:center;color:var(--muted);font-size:.9rem;}
 
@@ -621,8 +626,10 @@ const ACTIVITIES = {
   },
   'Badminton': {
     icon:'🏸', type:'individuel', terrainLabel:'Terrains', defisAllowed:true,
-    pouleMin:3, pouleMax:4, pouleTerrainMin:6, pouleTerrainMax:13,
-    defisTerrainMin:6, defisTerrainMax:8, defaultTerrains:8, scoreMax:25,
+    // Capacité en terrains propre au Badminton (différente du Tennis de
+    // table) : jusqu'à 14 terrains disponibles.
+    pouleMin:3, pouleMax:4, pouleTerrainMin:6, pouleTerrainMax:14,
+    defisTerrainMin:6, defisTerrainMax:14, defaultTerrains:8, scoreMax:25,
     rotationAllowed:true, // tournoi à rotation (voir Fonctionnalites.md ligne 16)
   },
   'Handball': {
@@ -3150,6 +3157,7 @@ function genererRotationMatches(activite){
   let tourCourant = 1;
   for(let g=0; g*terrains < fixes.length; g++){
     const groupeFixes = fixes.slice(g*terrains, g*terrains+terrains);
+    const actifs = groupeFixes.length;
     for(let tour=0; tour<tournants.length; tour++){
       const matchsDuTour = [];
       groupeFixes.forEach((fixeId, k)=>{
@@ -3162,7 +3170,24 @@ function genererRotationMatches(activite){
       });
       const joueursDuTour = new Set(matchsDuTour.flatMap(m=>[m.a,m.b]));
       const idle = [...fixes, ...tournants].filter(id=>!joueursDuTour.has(id));
-      attribuerArbitresRotation(matchsDuTour, idle, refereeDerniereFois, tourCourant);
+      // Arbitrage prioritaire et déterministe (sur demande) : le tournant qui
+      // va entrer dans la rotation au tour SUIVANT (et donc jouer sur le
+      // dernier terrain actif de ce groupe) arbitre ce terrain-là CE tour-ci
+      // — il voit le match avant d'y jouer lui-même la fois d'après. Possible
+      // uniquement s'il reste des tournants pas encore entrés dans la
+      // rotation (tournants.length > actifs) ; sinon, repli direct sur
+      // l'arbitrage classique ci-dessous pour ce terrain aussi.
+      if(tournants.length > actifs){
+        const prochainEntrant = tournants[(actifs + tour) % tournants.length];
+        const dernierTerrain = matchsDuTour[actifs - 1];
+        if(dernierTerrain && idle.includes(prochainEntrant)){
+          dernierTerrain.referee = prochainEntrant;
+          refereeDerniereFois[prochainEntrant] = tourCourant;
+        }
+      }
+      const idleRestant = idle.filter(id=>!matchsDuTour.some(m=>m.referee===id));
+      const matchsSansArbitre = matchsDuTour.filter(m=>!m.referee);
+      attribuerArbitresRotation(matchsSansArbitre, idleRestant, refereeDerniereFois, tourCourant);
       seance.rotationMatches.push(...matchsDuTour);
       tourCourant++;
     }
@@ -5602,8 +5627,14 @@ function renderRotationSection(activite){
   const nbTours = Math.max(...seance.rotationMatches.map(m=>m.tour));
   const tourActuel = clamp(seance.rotationTourActuel || 1, 1, nbTours);
   const toursNav = Array.from({length:nbTours}, (_,i)=>i+1).map(t=>{
-    const termine = seance.rotationMatches.filter(m=>m.tour===t).every(m=>m.winner!==null);
-    return `<button class="btn small ${t===tourActuel?'':'ghost'}" data-rotation-tour="${t}">${termine?'✅ ':''}Tour ${t}</button>`;
+    const matchsTour = seance.rotationMatches.filter(m=>m.tour===t);
+    const termine = matchsTour.every(m=>m.winner!==null);
+    // Tours de la phase 2 (matchs internes, voir genererRotationMatchesInternes)
+    // dans une couleur distincte des tours de la phase 1 (tournoi croisé), pour
+    // repérer d'un coup d'œil où commence le 2e tournoi.
+    const interne = matchsTour.length && matchsTour.every(m=>m.phase==='interne');
+    const classe = t===tourActuel ? (interne?'interne':'') : (interne?'ghost interne':'ghost');
+    return `<button class="btn small ${classe}" data-rotation-tour="${t}">${termine?'✅ ':''}Tour ${t}</button>`;
   }).join('');
 
   const matchesDuTour = seance.rotationMatches.filter(m=>m.tour===tourActuel);

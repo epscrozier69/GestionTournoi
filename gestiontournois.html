@@ -302,6 +302,19 @@
   .th-sub-cell{display:block;font-size:.62rem;font-weight:600;opacity:.85;}
   .classement-table thead th[data-sort-classement]{cursor:pointer;}
   .classement-table thead th[data-sort-defis]{cursor:pointer;}
+  /* Tableaux "historique des matchs" (défis classement progressif, tournoi à
+     rotation) : volontairement une classe à part de .classement-table, qui
+     fige les 2 premières colonnes en position:sticky — pensé pour la large
+     grille "Classement par séance" avec Rang/Nom figés en défilant
+     horizontalement. Appliqué tel quel à ces tableaux plus simples (N°, Tour,
+     noms, un <select> Vainqueur...), le sticky laissait les 2 premières
+     colonnes se détacher du défilement normal et se superposer visuellement
+     à la carte juste au-dessus. */
+  .historique-table{width:100%;}
+  .historique-table th, .historique-table td{padding:4px 6px;border-bottom:1px solid var(--line);}
+  .historique-table tbody tr:nth-child(odd){background:#fff;}
+  .historique-table tbody tr:nth-child(even){background:#f8fafc;}
+  .historique-table select{font-size:.8rem;padding:2px 4px;}
   .win-edit-input{
     width:100%;box-sizing:border-box;text-align:center;padding:3px 2px;
     border:1px solid var(--line);border-radius:6px;font-size:.8rem;font-family:inherit;
@@ -622,7 +635,9 @@ const ACTIVITIES = {
     pouleMin:3, pouleMax:4, pouleTerrainMin:6, pouleTerrainMax:8,
     defisTerrainMin:6, defisTerrainMax:8, defaultTerrains:8, scoreMax:15,
     evaluationTechniqueRecordAllowed:true, // évaluation technique "record d'échanges" (binômes, pavé numérique)
-    rotationAllowed:true, // tournoi à rotation (voir Fonctionnalites.md ligne 16)
+    // Pas de rotationAllowed : tournoi à rotation jugé trop compliqué à gérer
+    // en Tennis de table (rotation arbitres/joueurs peu lisible avec autant
+    // de tables) — gardé uniquement pour Badminton et Volley.
   },
   'Badminton': {
     icon:'🏸', type:'individuel', terrainLabel:'Terrains', defisAllowed:true,
@@ -5493,7 +5508,7 @@ function renderDefisClassementSection(activite){
         <h4 style="margin:0 0 8px;">📜 Historique des matchs de cette séance</h4>
         <p class="hint">Du plus récent au plus ancien — sert à vérifier qui a déjà rencontré qui (l'appariement automatique en tient déjà compte).</p>
         <div class="table-wrap">
-          <table class="classement-table">
+          <table class="historique-table">
             <thead><tr>
               <th style="background:${PALETTE[0]}">N°</th>
               <th style="background:${PALETTE[1]}">${act.terrainLabel.replace(/s$/,'')}</th>
@@ -5586,6 +5601,18 @@ function renderRotationConfigCard(activite){
   const participants = estEquipe
     ? seance.teamsRotation.map(t=>({id:t.id, label:t.nom}))
     : STATE.allStudents.filter(s=>s.classe===cd.classe && !seance.absents.includes(s.id)).map(s=>({id:s.id, label:s.nomPrenom}));
+  // Pré-remplissage automatique (1ère moitié fixe, 2nde moitié tournante) dès
+  // qu'il y a des participants et qu'aucun rôle n'a encore été attribué cette
+  // séance — évite d'avoir à cliquer sur "Répartir automatiquement" à chaque
+  // fois (voir repartirRotationAutomatique, même logique) ; reste modifiable
+  // ensuite au cas par cas, et le bouton reste disponible pour réinitialiser.
+  if(participants.length && !seance.rotationFixes.length && !seance.rotationTournants.length){
+    const ids = participants.map(p=>p.id);
+    const moitie = Math.ceil(ids.length / 2);
+    seance.rotationFixes = ids.slice(0, moitie);
+    seance.rotationTournants = ids.slice(moitie);
+    saveState();
+  }
   const rolesHtml = participants.map(p=>{
     const role = seance.rotationFixes.includes(p.id) ? 'fixe' : seance.rotationTournants.includes(p.id) ? 'tournant' : '';
     return `
@@ -5716,7 +5743,7 @@ function renderRotationSection(activite){
       <h4 style="margin:0 0 8px;">📜 Historique des matchs de cette séance</h4>
       <p class="hint">Du plus récent au plus ancien — utilisez la liste déroulante pour corriger un vainqueur mal saisi.</p>
       <div class="table-wrap">
-        <table class="classement-table">
+        <table class="historique-table">
           <thead><tr>
             <th style="background:${PALETTE[0]}">N°</th>
             <th style="background:${PALETTE[5]}">Tour</th>

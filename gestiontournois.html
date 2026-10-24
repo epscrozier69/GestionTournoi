@@ -4212,9 +4212,10 @@ function renderActivityTab(activite){
     if(s.rotationMatches.some(m=>m.phase==='interne') && !confirm("Régénérer les matchs internes effacera les résultats déjà enregistrés pour cette phase (le tournoi croisé fixe/tournant n'est pas touché). Continuer ?")) return;
     genererRotationMatchesInternes(activite);
   });
-  panel.querySelectorAll('[data-corriger-vainqueur-rotation]').forEach(sel=>{
-    sel.addEventListener('change', ()=>{
-      corrigerVainqueurRotationHistorique(activite, sel.dataset.corrigerVainqueurRotation, sel.value);
+  panel.querySelectorAll('[data-corriger-vainqueur-rotation]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const [matchId, winnerId] = btn.dataset.corrigerVainqueurRotation.split('::');
+      corrigerVainqueurRotationHistorique(activite, matchId, winnerId);
     });
   });
   const btnExportRotation = q('#btnExportRotation');
@@ -5696,29 +5697,33 @@ function renderRotationSection(activite){
   }).join('');
 
   const aDesMatchsInternes = seance.rotationMatches.some(m=>m.phase==='interne');
-  const historiqueHtml = seance.rotationMatches.slice().reverse().map((m,idx)=>{
-    const nomA = participantLabel(activite, m.a);
-    const nomB = participantLabel(activite, m.b);
-    const phaseLabel = m.phase === 'interne' ? (m.groupe==='fixe' ? '⚔️ Interne (fixes)' : '⚔️ Interne (tournants)') : '📍🔄 Croisé';
-    const arbitre = m.referee ? participantLabel(activite, m.referee) : 'Auto-arbitrage';
-    return `
+  // Les matchs déjà joués (un vainqueur enregistré) d'abord, les plus récents
+  // de chaque groupe en tête ; les matchs pas encore joués ensuite — plus
+  // utile pour vérifier/corriger un résultat que de devoir faire défiler tous
+  // les tours à venir avant d'atteindre ceux déjà faits.
+  const historiqueHtml = seance.rotationMatches
+    .map((m, i) => ({ m, numero: i+1 }))
+    .sort((x, y) => {
+      const xJoue = x.m.winner ? 0 : 1, yJoue = y.m.winner ? 0 : 1;
+      if(xJoue !== yJoue) return xJoue - yJoue;
+      return y.numero - x.numero;
+    })
+    .map(({ m, numero })=>{
+      const nomA = participantLabel(activite, m.a);
+      const nomB = participantLabel(activite, m.b);
+      const phaseLabel = m.phase === 'interne' ? (m.groupe==='fixe' ? '⚔️ Interne (fixes)' : '⚔️ Interne (tournants)') : '📍🔄 Croisé';
+      const arbitre = m.referee ? participantLabel(activite, m.referee) : 'Auto-arbitrage';
+      return `
       <tr>
-        <td>${seance.rotationMatches.length-idx}</td>
+        <td>${numero}</td>
         <td>Tour ${m.tour}</td>
         <td>${act.terrainLabel.replace(/s$/,'')} ${m.terrain}</td>
         <td>${phaseLabel}</td>
-        <td>${nomA}</td>
-        <td>${nomB}</td>
-        <td>
-          <select data-corriger-vainqueur-rotation="${m.id}">
-            <option value="" ${!m.winner?'selected':''}>— Non joué —</option>
-            <option value="${m.a}" ${m.winner===m.a?'selected':''}>${nomA}</option>
-            <option value="${m.b}" ${m.winner===m.b?'selected':''}>${nomB}</option>
-          </select>
-        </td>
+        <td><button class="btn small ${m.winner===m.a?'':'ghost'}" data-corriger-vainqueur-rotation="${m.id}::${m.a}">${nomA}</button></td>
+        <td><button class="btn small ${m.winner===m.b?'':'ghost'}" data-corriger-vainqueur-rotation="${m.id}::${m.b}">${nomB}</button></td>
         <td>${arbitre}</td>
       </tr>`;
-  }).join('');
+    }).join('');
 
   const students = STATE.allStudents.filter(s=>s.classe===cd.classe);
 
@@ -5742,7 +5747,7 @@ function renderRotationSection(activite){
     </div>
     <div class="card" style="margin-top:14px;">
       <h4 style="margin:0 0 8px;">📜 Historique des matchs de cette séance</h4>
-      <p class="hint">Du plus récent au plus ancien — utilisez la liste déroulante pour corriger un vainqueur mal saisi.</p>
+      <p class="hint">Les matchs déjà joués en premier (les plus récents d'abord), puis ceux pas encore joués. Le vainqueur est surligné ; cliquez sur l'autre participant pour corriger.</p>
       <div class="table-wrap">
         <table class="historique-table">
           <thead><tr>
@@ -5752,7 +5757,6 @@ function renderRotationSection(activite){
             <th style="background:${PALETTE[6]}">Phase</th>
             <th style="background:${PALETTE[3]}">Participant A</th>
             <th style="background:${PALETTE[4]}">Participant B</th>
-            <th style="background:${PALETTE[2]}">Vainqueur</th>
             <th style="background:${PALETTE[7]}">Arbitre</th>
           </tr></thead>
           <tbody>${historiqueHtml}</tbody>

@@ -355,6 +355,12 @@
   .niveau-opt.statut-abs, .niveau-opt.statut-disp{width:auto;padding:0 8px;font-size:.68rem;}
   .niveau-opt.statut-abs.checked{background:#dc2626;color:#fff;border-color:#dc2626;}
   .niveau-opt.statut-disp.checked{background:#64748b;color:#fff;border-color:#64748b;}
+  /* Tournoi à rotation : rôle fixe/tournant de chaque participant (voir
+     renderRotationConfigCard) — même gabarit que les pastilles de niveau,
+     mais en largeur libre (texte "Fixe"/"Tournant" au lieu d'un chiffre). */
+  .niveau-opt.role-opt{width:auto;padding:0 10px;font-size:.78rem;}
+  .niveau-opt.role-opt.checked-fixe{background:#2563eb;color:#fff;border-color:#2563eb;}
+  .niveau-opt.role-opt.checked-tournant{background:#ea580c;color:#fff;border-color:#ea580c;}
   .niveau-badge{
     display:inline-block;background:var(--c7);color:#fff;font-size:.68rem;font-weight:700;
     padding:1px 6px;border-radius:999px;vertical-align:middle;
@@ -611,11 +617,13 @@ const ACTIVITIES = {
     pouleMin:3, pouleMax:4, pouleTerrainMin:6, pouleTerrainMax:8,
     defisTerrainMin:6, defisTerrainMax:8, defaultTerrains:8, scoreMax:15,
     evaluationTechniqueRecordAllowed:true, // évaluation technique "record d'échanges" (binômes, pavé numérique)
+    rotationAllowed:true, // tournoi à rotation (voir Fonctionnalites.md ligne 16)
   },
   'Badminton': {
     icon:'🏸', type:'individuel', terrainLabel:'Terrains', defisAllowed:true,
     pouleMin:3, pouleMax:4, pouleTerrainMin:6, pouleTerrainMax:13,
     defisTerrainMin:6, defisTerrainMax:8, defaultTerrains:8, scoreMax:25,
+    rotationAllowed:true, // tournoi à rotation (voir Fonctionnalites.md ligne 16)
   },
   'Handball': {
     icon:'🤾', type:'equipe', terrainLabel:'Terrains', defisAllowed:false,
@@ -636,6 +644,7 @@ const ACTIVITIES = {
     // en changeant. Pas de evaluationTechniqueAllowed (double mode cumulé) :
     // ce flag reste réservé à l'Ultimate.
     evaluationTechniqueRecordAllowed:true, // évaluation technique "record d'échanges" (binômes, pavé numérique) — même principe qu'en Tennis de table
+    rotationAllowed:true, // tournoi à rotation (voir Fonctionnalites.md lignes 16 et 74-78)
   },
 };
 const PALETTE = ['#2563eb','#7c3aed','#db2777','#ea580c','#dc2626','#0891b2','#4f46e5','#b45309','#e11d48','#0ea5e9'];
@@ -682,6 +691,20 @@ function defaultSeance(numero, activite){
     // poule/défis (seance.tournamentType peut valoir 'evaluationTechniqueRecord').
     binomesRecord:[], // [{id, memberIds:[a,b] ou [a] si évalué seul(e), score: null|nombre d'échanges}]
     dureeRecord:30, // secondes : 30, 45 ou 60 (1 min)
+    // Tennis de table, Badminton, Volley : tournoi "à rotation" (voir
+    // Fonctionnalites.md lignes 16 et 74-78) — la moitié des participants
+    // (élèves, ou équipes en Volley) reste fixe sur son terrain toute la
+    // séance, l'autre moitié tourne d'un terrain à chaque tour ; chaque fixe
+    // affronte ainsi chaque tournant exactement une fois (voir
+    // genererRotationMatches). rotationFixes/rotationTournants : ids des
+    // participants affectés à chaque rôle (tri manuel ou répartition auto
+    // moitié/moitié) — un participant non affecté ne joue pas.
+    rotationTerrains:defaultT, rotationFixes:[], rotationTournants:[],
+    rotationMatches:[], rotationTourActuel:1,
+    // Volley uniquement : équipes dédiées au tournoi à rotation, composition
+    // indépendante de seance.teams (poule) et seance.teamsDefis (défis) —
+    // même principe que teamsDefis (préfixe d'id 'equipeRotation').
+    joueursParEquipeRotation:4, nombreEquipesFixeRotation:0, teamsRotation:[],
   };
 }
 function defaultClasseData(classe, activite){
@@ -738,6 +761,14 @@ function ensureActivityData(){
         if(s.contenuMasque === undefined) s.contenuMasque = false;
         if(!s.joueursParEquipeDefis) s.joueursParEquipeDefis = 4;
         if(s.nombreEquipesFixeDefis === undefined) s.nombreEquipesFixeDefis = 0;
+        if(!s.teamsRotation) s.teamsRotation = [];
+        if(!s.joueursParEquipeRotation) s.joueursParEquipeRotation = 4;
+        if(s.nombreEquipesFixeRotation === undefined) s.nombreEquipesFixeRotation = 0;
+        if(!s.rotationFixes) s.rotationFixes = [];
+        if(!s.rotationTournants) s.rotationTournants = [];
+        if(!s.rotationMatches) s.rotationMatches = [];
+        if(!s.rotationTourActuel) s.rotationTourActuel = 1;
+        if(!s.rotationTerrains) s.rotationTerrains = ACTIVITIES[a].defaultTerrains || ACTIVITIES[a].defisTerrainMin || ACTIVITIES[a].pouleTerrainMin;
         if(ACTIVITIES[a].evaluationTechniqueAllowed){
           // Rattrapage pour les séances créées avant l'ajout du double mode :
           // on retrouve le choix déjà fait via l'ancien tournamentType exclusif.
@@ -902,6 +933,11 @@ function clearSeanceResults(activite){
   seance.lastAction = null;
   seance.binomes = [];
   seance.binomesRecord = [];
+  seance.teamsRotation = [];
+  seance.rotationFixes = [];
+  seance.rotationTournants = [];
+  seance.rotationMatches = [];
+  seance.rotationTourActuel = 1;
   recomputeCumulativeTotals(cd, activite);
   saveState();
   renderActivityTab(activite);
@@ -1619,6 +1655,19 @@ function exportDefisMatchesExcel(activite){
   }));
   exportRowsToExcel(rows, `defis_classement_${slug(activite)}_${slug(cd.classe)}_seance${seance.numero}.xlsx`, 'Matchs');
 }
+function exportRotationMatchesExcel(activite){
+  const cd = currentClasseData(activite);
+  const seance = currentSeance(activite);
+  if(!cd || !seance || !seance.rotationMatches || !seance.rotationMatches.length) return;
+  const rows = seance.rotationMatches.map(m=>({
+    'Tour': m.tour,
+    'Terrain': m.terrain,
+    'Fixe': participantLabel(activite, m.fixeId),
+    'Tournant': participantLabel(activite, m.tournantId),
+    'Vainqueur': m.winner ? participantLabel(activite, m.winner) : '',
+  }));
+  exportRowsToExcel(rows, `tournoi_rotation_${slug(activite)}_${slug(cd.classe)}_seance${seance.numero}.xlsx`, 'Matchs');
+}
 // Classement général du tournoi par poule, partagé par l'affichage à l'écran
 // (renderClassementParSeancePoule) et l'export Excel (exportClassementExcel) :
 // pour chaque séance jouée, le rang de chaque élève dans la classe ce jour-là
@@ -1689,7 +1738,7 @@ function exportClassementExcel(activite){
   if(!modePoints){
     // Défis (hasard/classement progressif) : même détail que la carte à
     // l'écran, avec une colonne par séance de défis + le total.
-    const seancesDefis = cd.seances.filter(s=> s.tournamentType==='defisHasard' || s.tournamentType==='defisClassement');
+    const seancesDefis = cd.seances.filter(s=> s.tournamentType==='defisHasard' || s.tournamentType==='defisClassement' || s.tournamentType==='rotation');
     const perSeance = seancesDefis.map(s=>computeSeanceDefisWinsParEleve(s, activite));
     const sorted = students.slice().sort((a,b)=>(cd.wins[b.id]||0)-(cd.wins[a.id]||0));
     const rows = sorted.map((s,i)=>{
@@ -1758,6 +1807,20 @@ function generateTeamsDefis(studentIds, joueursParEquipe, nombreEquipesFixe){
   let idx = 0;
   tailles.forEach((taille, i)=>{
     teams.push({ id:'equipeDefis'+(i+1), nom:'Équipe '+(i+1), memberIds: shuffled.slice(idx, idx+taille) });
+    idx += taille;
+  });
+  return teams;
+}
+// Volley : équipes du tournoi à rotation, préfixe d'id 'equipeRotation' pour
+// ne jamais entrer en collision avec seance.teams/seance.teamsDefis (voir
+// participantLabel).
+function generateTeamsRotation(studentIds, joueursParEquipe, nombreEquipesFixe){
+  const shuffled = shuffleArray(studentIds);
+  const tailles = computeTeamSizes(shuffled.length, joueursParEquipe, nombreEquipesFixe);
+  const teams = [];
+  let idx = 0;
+  tailles.forEach((taille, i)=>{
+    teams.push({ id:'equipeRotation'+(i+1), nom:'Équipe '+(i+1), memberIds: shuffled.slice(idx, idx+taille) });
     idx += taille;
   });
   return teams;
@@ -1933,6 +1996,8 @@ function participantLabel(activite, id){
     // (voir seance.teamsDefis dans defaultSeance).
     const td = (seance.teamsDefis||[]).find(t=>t.id===id);
     if(td) return td.nom;
+    const tr = (seance.teamsRotation||[]).find(t=>t.id===id);
+    if(tr) return tr.nom;
   }
   const s = STATE.allStudents.find(s=>s.id===id);
   return s ? s.nomPrenom : id;
@@ -1944,7 +2009,7 @@ function participantMembresLabel(activite, id){
   const act = ACTIVITIES[activite];
   const seance = currentSeance(activite);
   if(act.type !== 'equipe' || !seance) return '';
-  const t = seance.teams.find(t=>t.id===id) || (seance.teamsDefis||[]).find(t=>t.id===id);
+  const t = seance.teams.find(t=>t.id===id) || (seance.teamsDefis||[]).find(t=>t.id===id) || (seance.teamsRotation||[]).find(t=>t.id===id);
   if(!t) return '';
   return t.memberIds.map(mid=>{
     const s = STATE.allStudents.find(s=>s.id===mid);
@@ -2005,6 +2070,10 @@ function getPouleLabelForClasse(activite, cd, student){
     const b = (seance.binomesRecord||[]).find(b=>b.memberIds.includes(student.id));
     if(!b || b.score === null || b.score === undefined) return 'Record d\'échanges — pas encore évalué';
     return `Record d'échanges — ${b.score}`;
+  }
+  if(seance.tournamentType === 'rotation'){
+    const w = cd.wins[student.id] || 0;
+    return `Tournoi à rotation — ${w} victoire${w>1?'s':''}`;
   }
   return '';
 }
@@ -2209,6 +2278,79 @@ function viderEquipesDefis(activite){
   seance.defisMatches = [];
   seance.defisBye = [];
   seance.lastAction = null;
+  recomputeCumulativeTotals(cd, activite);
+  saveState();
+  renderActivityTab(activite);
+  renderGeneral();
+}
+// Volley : équipes du tournoi à rotation — même principe que les équipes de
+// défis ci-dessus (génération au hasard + constitution manuelle par clic),
+// mais dans un pool indépendant (seance.teamsRotation).
+function onGenererEquipesRotation(activite){
+  const cd = currentClasseData(activite);
+  const seance = currentSeance(activite);
+  if(!cd || !seance) return;
+  if(seance.teamsRotation.length){
+    if(!confirm("Cela régénère les équipes du tournoi à rotation et efface les résultats déjà enregistrés pour cette séance. Continuer ?")) return;
+  }
+  const studentIds = STATE.allStudents.filter(s=>s.classe===cd.classe && !seance.absents.includes(s.id)).map(s=>s.id);
+  const joueursParEquipe = clamp(seance.joueursParEquipeRotation || 4, 2, 15);
+  const nombreEquipesFixe = seance.nombreEquipesFixeRotation || 0;
+  seance.teamsRotation = generateTeamsRotation(studentIds, joueursParEquipe, nombreEquipesFixe);
+  seance.rotationFixes = [];
+  seance.rotationTournants = [];
+  seance.rotationMatches = [];
+  seance.rotationTourActuel = 1;
+  recomputeCumulativeTotals(cd, activite);
+  saveState();
+  renderActivityTab(activite);
+  renderGeneral();
+}
+function moveStudentTeamRotation(activite, studentId, targetTeamId){
+  const seance = currentSeance(activite);
+  seance.teamsRotation.forEach(t=>{ t.memberIds = t.memberIds.filter(id=>id!==studentId); });
+  const target = seance.teamsRotation.find(t=>t.id===targetTeamId);
+  if(target) target.memberIds.push(studentId);
+  saveState();
+  renderActivityTab(activite);
+  renderGeneral();
+}
+function renameTeamRotation(activite, teamId, newName){
+  const seance = currentSeance(activite);
+  const t = seance.teamsRotation.find(t=>t.id===teamId);
+  if(t){ t.nom = newName || t.nom; saveState(); renderGeneral(); }
+}
+let equipeRotationSelectionEnCours = [];
+function toggleEquipeRotationCandidat(activite, studentId){
+  const seance = currentSeance(activite);
+  const idx = equipeRotationSelectionEnCours.indexOf(studentId);
+  if(idx !== -1){ equipeRotationSelectionEnCours.splice(idx, 1); renderActivityTab(activite); return; }
+  const taille = clamp(seance.joueursParEquipeRotation || 4, 2, 15);
+  equipeRotationSelectionEnCours.push(studentId);
+  if(equipeRotationSelectionEnCours.length >= taille){ creerEquipeRotationManuelle(activite); return; }
+  renderActivityTab(activite);
+}
+function creerEquipeRotationManuelle(activite){
+  if(!equipeRotationSelectionEnCours.length) return;
+  const seance = currentSeance(activite);
+  const numero = seance.teamsRotation.length + 1;
+  seance.teamsRotation.push({ id:'equipeRotation'+Date.now()+Math.floor(Math.random()*1000), nom:'Équipe '+numero, memberIds: equipeRotationSelectionEnCours.slice() });
+  equipeRotationSelectionEnCours = [];
+  saveState();
+  renderActivityTab(activite);
+  renderGeneral();
+}
+function viderEquipesRotation(activite){
+  const cd = currentClasseData(activite);
+  const seance = currentSeance(activite);
+  if(!seance.teamsRotation.length) return;
+  if(!confirm("Vider toutes les équipes du tournoi à rotation et effacer les résultats déjà enregistrés pour cette séance ?")) return;
+  seance.teamsRotation = [];
+  equipeRotationSelectionEnCours = [];
+  seance.rotationFixes = [];
+  seance.rotationTournants = [];
+  seance.rotationMatches = [];
+  seance.rotationTourActuel = 1;
   recomputeCumulativeTotals(cd, activite);
   saveState();
   renderActivityTab(activite);
@@ -2571,7 +2713,7 @@ function onGenererMatchs(activite){
 // contrairement à un élève, donc le total cumulé doit rester par élève.
 function defisMembreIds(activite, seance, participantId){
   if(ACTIVITIES[activite].type === 'equipe'){
-    const t = (seance.teamsDefis||[]).find(t=>t.id===participantId);
+    const t = (seance.teamsDefis||[]).find(t=>t.id===participantId) || (seance.teamsRotation||[]).find(t=>t.id===participantId);
     if(t) return t.memberIds;
   }
   return [participantId];
@@ -2923,6 +3065,101 @@ function undoLastDefisAction(activite){
     match.winner = action.previousWinner || null;
   }
   seance.lastAction = null;
+  saveState();
+  renderActivityTab(activite);
+  renderGeneral();
+}
+
+/* ----------------------------------------------- TOURNOI À ROTATION --- */
+// Affecte/retire le rôle d'un participant (élève, ou équipe en Volley) :
+// "fixe" reste sur son terrain toute la séance, "tournant" change de
+// terrain à chaque tour. Un participant ne peut avoir qu'un seul rôle à la
+// fois ; recliquer sur le rôle déjà attribué le retire (participant non
+// affecté, exclu de la génération des matchs).
+function toggleRotationRole(activite, participantId, role){
+  const seance = currentSeance(activite);
+  const dejaCeRole = (role === 'fixe' ? seance.rotationFixes : seance.rotationTournants).includes(participantId);
+  seance.rotationFixes = seance.rotationFixes.filter(id=>id!==participantId);
+  seance.rotationTournants = seance.rotationTournants.filter(id=>id!==participantId);
+  if(!dejaCeRole){
+    if(role === 'fixe') seance.rotationFixes.push(participantId);
+    else seance.rotationTournants.push(participantId);
+  }
+  saveState();
+  renderActivityTab(activite);
+}
+// Répartition rapide moitié/moitié (au hasard), modifiable ensuite au cas
+// par cas via toggleRotationRole.
+function repartirRotationAutomatique(activite){
+  const cd = currentClasseData(activite);
+  const seance = currentSeance(activite);
+  const act = ACTIVITIES[activite];
+  const ids = act.type === 'equipe'
+    ? seance.teamsRotation.map(t=>t.id)
+    : STATE.allStudents.filter(s=>s.classe===cd.classe && !seance.absents.includes(s.id)).map(s=>s.id);
+  const shuffled = shuffleArray(ids);
+  const moitie = Math.ceil(shuffled.length / 2);
+  seance.rotationFixes = shuffled.slice(0, moitie);
+  seance.rotationTournants = shuffled.slice(moitie);
+  saveState();
+  renderActivityTab(activite);
+}
+// Génère tous les tours du tournoi à rotation : au tour T (0-indexé), le
+// terrain k (0-indexé, parmi les terrains "actifs") accueille
+// fixes[k] contre tournants[(k+T) % nbTournants]. Avec ce décalage circulaire,
+// chaque fixe actif rencontre CHAQUE tournant exactement une fois au bout des
+// nbTournants tours, quels que soient les effectifs respectifs (voir
+// Fonctionnalites.md lignes 16 et 74-78 : la moitié reste fixe, l'autre
+// tourne d'un terrain à chaque match). Le nombre de terrains réellement
+// utilisés par tour est limité au plus petit des trois : terrains
+// disponibles, nombre de fixes, nombre de tournants (sinon un même
+// participant serait affecté à deux terrains le même tour).
+function genererRotationMatches(activite){
+  const seance = currentSeance(activite);
+  const fixes = seance.rotationFixes.slice();
+  const tournants = seance.rotationTournants.slice();
+  const actifs = Math.min(seance.rotationTerrains || 1, fixes.length, tournants.length);
+  seance.rotationMatches = [];
+  seance.rotationTourActuel = 1;
+  if(actifs >= 1){
+    for(let tour=0; tour<tournants.length; tour++){
+      for(let k=0; k<actifs; k++){
+        const tournantIdx = (k + tour) % tournants.length;
+        seance.rotationMatches.push({
+          id:'rot'+tour+'-'+k, tour:tour+1, terrain:k+1,
+          fixeId:fixes[k], tournantId:tournants[tournantIdx], winner:null,
+        });
+      }
+    }
+  }
+  saveState();
+  renderActivityTab(activite);
+}
+// Enregistre le vainqueur d'un match de rotation — même principe que
+// enregistrerVainqueur (défis classement progressif) : recliquer sur le
+// vainqueur déjà enregistré annule le résultat, cliquer sur l'autre
+// participant corrige une erreur de saisie sans perdre la victoire déjà
+// comptée pour l'autre. Contribue au total cumulé (cd.wins) comme les défis,
+// avec le même partage par membre d'équipe en Volley (voir defisMembreIds).
+function enregistrerVainqueurRotation(activite, matchId, winnerId){
+  const cd = currentClasseData(activite);
+  const seance = currentSeance(activite);
+  const match = (seance.rotationMatches||[]).find(m=>m.id===matchId);
+  if(!match) return;
+  if(match.winner === winnerId){
+    match.winner = null;
+    defisMembreIds(activite, seance, winnerId).forEach(id=>{ cd.wins[id] = Math.max(0, (cd.wins[id]||0) - 1); });
+    saveState();
+    renderActivityTab(activite);
+    renderGeneral();
+    return;
+  }
+  const previousWinner = match.winner;
+  if(previousWinner){
+    defisMembreIds(activite, seance, previousWinner).forEach(id=>{ cd.wins[id] = Math.max(0, (cd.wins[id]||0) - 1); });
+  }
+  match.winner = winnerId;
+  defisMembreIds(activite, seance, winnerId).forEach(id=>{ cd.wins[id] = (cd.wins[id]||0) + 1; });
   saveState();
   renderActivityTab(activite);
   renderGeneral();
@@ -3349,6 +3586,7 @@ function renderActivityTab(activite){
           if(type === 'defisClassement') return (seance.defisMatches||[]).length > 0;
           if(type === 'defisHasard') return Object.keys(seance.hasardWins||{}).length > 0;
           if(type === 'evaluationTechniqueRecord') return (seance.binomesRecord||[]).length > 0;
+          if(type === 'rotation') return (seance.rotationMatches||[]).length > 0;
           return false;
         };
         const typeTournoiBtn = (type, label) => {
@@ -3368,6 +3606,7 @@ function renderActivityTab(activite){
               ${typeTournoiBtn('defisClassement', '📈 Défis classement progressif')}
               ${typeTournoiBtn('defisHasard', '🎲 Défis hasard')}
               ${act.evaluationTechniqueRecordAllowed ? typeTournoiBtn('evaluationTechniqueRecord', "📊 Évaluation technique (record d'échanges)") : ''}
+              ${act.rotationAllowed ? typeTournoiBtn('rotation', '🔁 Tournoi à rotation') : ''}
             </div>
           </div>`;
       } else if(act.evaluationTechniqueAllowed){
@@ -3425,6 +3664,8 @@ function renderActivityTab(activite){
         html += renderDefisClassementSection(activite);
       } else if(seance.tournamentType === 'evaluationTechniqueRecord'){
         html += renderEvaluationTechniqueRecordSection(activite);
+      } else if(seance.tournamentType === 'rotation'){
+        html += renderRotationSection(activite);
       }
     }
   }
@@ -3592,6 +3833,18 @@ function renderActivityTab(activite){
     currentSeance(activite).nombreEquipesFixeDefis = v;
     saveState();
   });
+  wireCheckboxRange(panel, 'cfgJoueursEquipeRotationCbGroup', (v)=>{
+    currentSeance(activite).joueursParEquipeRotation = v;
+    saveState();
+  });
+  wireCheckboxRange(panel, 'cfgNombreEquipesFixeRotationCbGroup', (v)=>{
+    currentSeance(activite).nombreEquipesFixeRotation = v;
+    saveState();
+  });
+  wireCheckboxRange(panel, 'rotationTerrainCbGroup', (v)=>{
+    currentSeance(activite).rotationTerrains = v;
+    saveState();
+  });
   wireCheckboxRange(panel, 'cfgNombreRencontresPoule3CbGroup', (v)=>{
     currentSeance(activite).nombreRencontresPoule3 = v;
     saveState();
@@ -3645,6 +3898,15 @@ function renderActivityTab(activite){
   panel.querySelectorAll('[data-equipe-defis-candidat]').forEach(input=>{
     input.addEventListener('change', ()=>toggleEquipeDefisCandidat(activite, input.dataset.equipeDefisCandidat));
   });
+  const btnGenererEquipesRotation = q('#btnGenererEquipesRotation');
+  if(btnGenererEquipesRotation) btnGenererEquipesRotation.addEventListener('click', ()=>onGenererEquipesRotation(activite));
+  const btnViderEquipesRotation = q('#btnViderEquipesRotation');
+  if(btnViderEquipesRotation) btnViderEquipesRotation.addEventListener('click', ()=>viderEquipesRotation(activite));
+  const btnCreerEquipeRotationPartielle = q('#btnCreerEquipeRotationPartielle');
+  if(btnCreerEquipeRotationPartielle) btnCreerEquipeRotationPartielle.addEventListener('click', ()=>creerEquipeRotationManuelle(activite));
+  panel.querySelectorAll('[data-equipe-rotation-candidat]').forEach(input=>{
+    input.addEventListener('change', ()=>toggleEquipeRotationCandidat(activite, input.dataset.equipeRotationCandidat));
+  });
   const btnMatchs = q('#btnGenererMatchs');
   if(btnMatchs) btnMatchs.addEventListener('click', ()=>onGenererMatchs(activite));
   const btnExportMatchs = q('#btnExportMatchs');
@@ -3691,6 +3953,17 @@ function renderActivityTab(activite){
   });
   panel.querySelectorAll('[data-team-name-defis]').forEach(input=>{
     input.addEventListener('change', ()=>renameTeamDefis(activite, input.dataset.teamNameDefis, input.value.trim()));
+  });
+  panel.querySelectorAll('[data-move-student-rotation]').forEach(sel=>{
+    sel.addEventListener('change', ()=>moveStudentTeamRotation(activite, sel.dataset.moveStudentRotation, sel.value));
+  });
+  panel.querySelectorAll('[data-add-eleve-equipe-rotation]').forEach(sel=>{
+    sel.addEventListener('change', ()=>{
+      if(sel.value) moveStudentTeamRotation(activite, sel.value, sel.dataset.addEleveEquipeRotation);
+    });
+  });
+  panel.querySelectorAll('[data-team-name-rotation]').forEach(input=>{
+    input.addEventListener('change', ()=>renameTeamRotation(activite, input.dataset.teamNameRotation, input.value.trim()));
   });
 
   panel.querySelectorAll('.defis-row').forEach(tr=>{
@@ -3743,6 +4016,35 @@ function renderActivityTab(activite){
   panel.querySelectorAll('[data-open-score]').forEach(row=>{
     row.addEventListener('click', ()=> openScoreModal(activite, parseInt(row.dataset.openScore, 10)));
   });
+
+  panel.querySelectorAll('[data-rotation-role]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const [pid, role] = btn.dataset.rotationRole.split('::');
+      toggleRotationRole(activite, pid, role);
+    });
+  });
+  const btnRepartirRotationAuto = q('#btnRepartirRotationAuto');
+  if(btnRepartirRotationAuto) btnRepartirRotationAuto.addEventListener('click', ()=>repartirRotationAutomatique(activite));
+  const btnGenererRotation = q('#btnGenererRotation');
+  if(btnGenererRotation) btnGenererRotation.addEventListener('click', ()=>{
+    if(currentSeance(activite).rotationMatches.length && !confirm("Régénérer le tournoi à rotation effacera les résultats déjà enregistrés pour cette séance. Continuer ?")) return;
+    genererRotationMatches(activite);
+  });
+  panel.querySelectorAll('[data-rotation-tour]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      currentSeance(activite).rotationTourActuel = parseInt(btn.dataset.rotationTour, 10);
+      saveState();
+      renderActivityTab(activite);
+    });
+  });
+  panel.querySelectorAll('[data-set-winner-rotation]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const [matchId, winnerId] = btn.dataset.setWinnerRotation.split('::');
+      enregistrerVainqueurRotation(activite, matchId, winnerId);
+    });
+  });
+  const btnExportRotation = q('#btnExportRotation');
+  if(btnExportRotation) btnExportRotation.addEventListener('click', ()=>exportRotationMatchesExcel(activite));
 }
 
 // Chaque motif d'exclusion a le même effet (l'élève ne joue pas) mais un
@@ -4196,6 +4498,9 @@ function computeSeanceDefisWins(seance){
   else if(seance.tournamentType === 'defisClassement'){
     tally = {};
     (seance.defisMatches||[]).forEach(m=>{ if(m.winner) tally[m.winner] = (tally[m.winner]||0) + 1; });
+  } else if(seance.tournamentType === 'rotation'){
+    tally = {};
+    (seance.rotationMatches||[]).forEach(m=>{ if(m.winner) tally[m.winner] = (tally[m.winner]||0) + 1; });
   } else return {};
   if(seance.winsOverride){
     Object.keys(seance.winsOverride).forEach(id=>{ tally[id] = seance.winsOverride[id]; });
@@ -4210,7 +4515,7 @@ function computeSeanceDefisWinsParEleve(seance, activite){
   const parEquipeOuEleve = computeSeanceDefisWins(seance);
   if(ACTIVITIES[activite].type !== 'equipe') return parEquipeOuEleve;
   const totals = {};
-  (seance.teamsDefis||[]).forEach(t=>{
+  [...(seance.teamsDefis||[]), ...(seance.teamsRotation||[])].forEach(t=>{
     const w = parEquipeOuEleve[t.id] || 0;
     t.memberIds.forEach(mid=>{ totals[mid] = (totals[mid]||0) + w; });
   });
@@ -4252,7 +4557,7 @@ function toggleClassementDefisSort(field, activite){
   renderActivityTab(activite);
 }
 function renderClassementParSeance(cd, students, recentFirst, activite){
-  let seancesDefis = cd.seances.filter(s=> s.tournamentType==='defisHasard' || s.tournamentType==='defisClassement');
+  let seancesDefis = cd.seances.filter(s=> s.tournamentType==='defisHasard' || s.tournamentType==='defisClassement' || s.tournamentType==='rotation');
   if(!seancesDefis.length) return '';
   // recentFirst : la séance la plus récente juste après le nom (au lieu de
   // l'ordre chronologique habituel) — utilisé dans le tableau affiché à côté
@@ -5044,6 +5349,194 @@ function renderDefisClassementSection(activite){
         </div>
       </div>` : `<div class="empty-state">Choisissez le nombre de ${act.terrainLabel.toLowerCase()} puis cliquez sur « Démarrer les matchs ».</div>`}
     </div>`;
+}
+
+/* ----------------------------------------------- TOURNOI À ROTATION --- */
+// Volley : constitution des équipes dédiées au tournoi à rotation — même
+// gabarit que renderEquipesDefisSection (génération au hasard + constitution
+// manuelle par clic), dans le pool indépendant seance.teamsRotation.
+function renderEquipesRotationSection(activite){
+  const cd = currentClasseData(activite);
+  const seance = currentSeance(activite);
+  const taille = clamp(seance.joueursParEquipeRotation || 4, 2, 15);
+  const dejaAssignes = new Set(seance.teamsRotation.flatMap(t=>t.memberIds));
+  const candidats = STATE.allStudents.filter(s=>s.classe===cd.classe && !seance.absents.includes(s.id) && !dejaAssignes.has(s.id));
+  const selectionHtml = candidats.map(s=>{
+    const checked = equipeRotationSelectionEnCours.includes(s.id);
+    return `
+      <label class="cb-opt ${checked?'checked':''}" style="min-width:auto;">
+        <input type="checkbox" data-equipe-rotation-candidat="${s.id}" ${checked?'checked':''}>
+        <span class="code">${s.nomPrenom}</span>
+      </label>`;
+  }).join('');
+  const nbSelection = equipeRotationSelectionEnCours.length;
+  let html = `
+    <div class="card">
+      <h3>👥 Équipes du tournoi à rotation</h3>
+      <p class="hint">Taille d'équipe propre au tournoi à rotation, réglable indépendamment de celle du tournoi par poule et des défis.</p>
+      ${checkboxRangeHtml('cfgJoueursEquipeRotationCbGroup', 'Joueurs par équipe', 2, 15, seance.joueursParEquipeRotation || 4)}
+      ${nombreEquipesFixeHtml('cfgNombreEquipesFixeRotationCbGroup', seance.nombreEquipesFixeRotation || 0)}
+      <div class="config-grid" style="margin-top:10px;">
+        <button class="btn" id="btnGenererEquipesRotation">🎲 Générer les équipes au hasard</button>
+        ${seance.teamsRotation.length ? '<button class="btn danger" id="btnViderEquipesRotation">🗑️ Vider les équipes</button>' : ''}
+      </div>
+      ${seance.teamsRotation.length ? '<p class="hint" style="margin-top:6px;">Générer au hasard ou vider efface les résultats du tournoi à rotation déjà enregistrés pour cette séance.</p>' : ''}
+      <p class="hint" style="margin:14px 0 4px;"><b>Ou constituez les équipes en cliquant sur les élèves (${nbSelection}/${taille} sélectionné${nbSelection>1?'s':''}) :</b></p>
+      <div class="cb-group" style="margin-bottom:10px;">${selectionHtml || '<span class="muted">Tous les élèves présents sont déjà dans une équipe.</span>'}</div>
+      ${nbSelection >= 1 && nbSelection < taille ? `<button class="btn secondary small" id="btnCreerEquipeRotationPartielle">➕ Créer l'équipe avec ${nbSelection} élève${nbSelection>1?'s':''} (effectif incomplet)</button>` : ''}
+    </div>`;
+  if(seance.teamsRotation.length){
+    html += `
+      <div class="card">
+        <h3>Équipes</h3>
+        <div class="teams-grid">
+          ${seance.teamsRotation.map(t=>`
+            <div class="team-card">
+              <div class="team-name-row">
+                <input class="team-name" data-team-name-rotation="${t.id}" value="${t.nom}">
+                <span class="muted team-count">${t.memberIds.length} élève${t.memberIds.length>1?'s':''}</span>
+              </div>
+              <ul>
+                ${t.memberIds.map(mid=>{
+                  const student = STATE.allStudents.find(s=>s.id===mid);
+                  if(!student) return '';
+                  return `<li>${student.nomPrenom}
+                    <select data-move-student-rotation="${mid}">
+                      ${seance.teamsRotation.map(t2=>`<option value="${t2.id}" ${t2.id===t.id?'selected':''}>${t2.nom}</option>`).join('')}
+                    </select>
+                  </li>`;
+                }).join('')}
+              </ul>
+              ${candidats.length ? `
+              <select class="team-add-select" data-add-eleve-equipe-rotation="${t.id}">
+                <option value="">➕ Ajouter un élève…</option>
+                ${candidats.map(c=>`<option value="${c.id}">${c.nomPrenom}</option>`).join('')}
+              </select>` : ''}
+            </div>`).join('')}
+        </div>
+      </div>`;
+  }
+  return html;
+}
+// Choix des terrains + attribution du rôle fixe/tournant à chaque
+// participant (élève ou équipe), puis génération des matchs.
+function renderRotationConfigCard(activite){
+  const act = ACTIVITIES[activite];
+  const cd = currentClasseData(activite);
+  const seance = currentSeance(activite);
+  const estEquipe = act.type === 'equipe';
+  const participants = estEquipe
+    ? seance.teamsRotation.map(t=>({id:t.id, label:t.nom}))
+    : STATE.allStudents.filter(s=>s.classe===cd.classe && !seance.absents.includes(s.id)).map(s=>({id:s.id, label:s.nomPrenom}));
+  const rolesHtml = participants.map(p=>{
+    const role = seance.rotationFixes.includes(p.id) ? 'fixe' : seance.rotationTournants.includes(p.id) ? 'tournant' : '';
+    return `
+      <div class="presence-row-niveau">
+        <span class="presence-chip">${p.label}</span>
+        <div class="niveau-group">
+          <button class="niveau-opt role-opt ${role==='fixe'?'checked-fixe':''}" data-rotation-role="${p.id}::fixe">📍 Fixe</button>
+          <button class="niveau-opt role-opt ${role==='tournant'?'checked-tournant':''}" data-rotation-role="${p.id}::tournant">🔄 Tournant</button>
+        </div>
+      </div>`;
+  }).join('');
+  return `
+    <div class="card">
+      <h3>⚙️ Configuration du tournoi à rotation</h3>
+      <p class="hint">La moitié ${estEquipe?'des équipes':'des élèves'} reste fixe sur son terrain toute la séance ; l'autre moitié tourne d'un terrain à chaque tour, jusqu'à avoir rencontré chaque ${estEquipe?'équipe fixe':'élève fixe'}.</p>
+      ${checkboxRangeHtml('rotationTerrainCbGroup', act.terrainLabel+' disponibles', act.defisTerrainMin, act.defisTerrainMax, seance.rotationTerrains || act.defisTerrainMin)}
+      <div class="config-grid" style="margin:10px 0;">
+        <button class="btn secondary" id="btnRepartirRotationAuto">🎲 Répartir automatiquement (moitié / moitié)</button>
+      </div>
+      <p class="hint" style="margin-bottom:4px;"><b>${seance.rotationFixes.length} fixe(s), ${seance.rotationTournants.length} tournant(s)</b> — cliquez pour ajuster manuellement :</p>
+      <div class="presence-list-vertical">${rolesHtml || '<span class="muted">Aucun participant disponible.</span>'}</div>
+      <button class="btn" id="btnGenererRotation" style="margin-top:10px;">▶️ ${seance.rotationMatches.length?'Régénérer':'Générer'} le tournoi à rotation</button>
+      ${seance.rotationMatches.length ? '<p class="hint" style="margin-top:6px;">Régénérer efface les résultats déjà enregistrés pour cette séance.</p>' : ''}
+    </div>`;
+}
+function renderRotationSection(activite){
+  const cd = currentClasseData(activite);
+  const seance = currentSeance(activite);
+  const act = ACTIVITIES[activite];
+  const estEquipe = act.type === 'equipe';
+  if(estEquipe && !seance.teamsRotation.length){
+    return renderEquipesRotationSection(activite) + `
+      <div class="card"><p class="hint" style="margin:0;">Générez les équipes ci-dessus pour configurer le tournoi à rotation.</p></div>`;
+  }
+  let html = estEquipe ? renderEquipesRotationSection(activite) : '';
+  html += renderRotationConfigCard(activite);
+  if(!seance.rotationMatches.length) return html;
+
+  const nbTours = Math.max(...seance.rotationMatches.map(m=>m.tour));
+  const tourActuel = clamp(seance.rotationTourActuel || 1, 1, nbTours);
+  const toursNav = Array.from({length:nbTours}, (_,i)=>i+1).map(t=>{
+    const termine = seance.rotationMatches.filter(m=>m.tour===t).every(m=>m.winner!==null);
+    return `<button class="btn small ${t===tourActuel?'':'ghost'}" data-rotation-tour="${t}">${termine?'✅ ':''}Tour ${t}</button>`;
+  }).join('');
+
+  const matchesDuTour = seance.rotationMatches.filter(m=>m.tour===tourActuel);
+  const matchCards = matchesDuTour.map(m=>{
+    const nomFixe = participantLabel(activite, m.fixeId);
+    const nomTournant = participantLabel(activite, m.tournantId);
+    const membresFixe = participantMembresLabel(activite, m.fixeId);
+    const membresTournant = participantMembresLabel(activite, m.tournantId);
+    return `
+      <div class="poule-card">
+        <h4>${act.terrainLabel.replace(/s$/,'')} ${m.terrain}</h4>
+        <button class="btn ${m.winner===m.fixeId?'':'ghost'}" data-set-winner-rotation="${m.id}::${m.fixeId}">📍 ${nomFixe}${membresFixe?`<span class="team-members-inline">${membresFixe}</span>`:''}</button>
+        <div class="hint" style="text-align:center;margin:4px 0;">contre</div>
+        <button class="btn ${m.winner===m.tournantId?'':'ghost'}" data-set-winner-rotation="${m.id}::${m.tournantId}">🔄 ${nomTournant}${membresTournant?`<span class="team-members-inline">${membresTournant}</span>`:''}</button>
+      </div>`;
+  }).join('');
+
+  const historiqueHtml = seance.rotationMatches.slice().reverse().map((m,idx)=>{
+    const nomFixe = participantLabel(activite, m.fixeId);
+    const nomTournant = participantLabel(activite, m.tournantId);
+    const vainqueur = m.winner ? `<b>${participantLabel(activite, m.winner)}</b>` : '<span class="muted">En cours…</span>';
+    return `
+      <tr>
+        <td>${seance.rotationMatches.length-idx}</td>
+        <td>Tour ${m.tour}</td>
+        <td>${act.terrainLabel.replace(/s$/,'')} ${m.terrain}</td>
+        <td>${nomFixe}</td>
+        <td>${nomTournant}</td>
+        <td>${vainqueur}</td>
+      </tr>`;
+  }).join('');
+
+  const students = STATE.allStudents.filter(s=>s.classe===cd.classe);
+
+  html += `
+    <div class="card">
+      <div class="toolbar">
+        <h3>🔁 Tournoi à rotation — Tour ${tourActuel}/${nbTours}</h3>
+        <button class="btn secondary small" id="btnExportRotation">📊 Exporter Excel</button>
+      </div>
+      <p class="hint">Les participants "📍 Fixe" restent sur leur terrain toute la séance ; les "🔄 Tournant" changent de terrain à chaque tour. Cliquez sur le nom du vainqueur de chaque match.</p>
+      <div class="config-grid" style="margin-bottom:10px;">${toursNav}</div>
+      <div class="defis-tables-grid">${matchCards}</div>
+    </div>
+    <div class="card" style="margin-top:14px;">
+      <h4 style="margin:0 0 8px;">📜 Historique des matchs de cette séance</h4>
+      <div class="table-wrap">
+        <table class="classement-table">
+          <thead><tr>
+            <th style="background:${PALETTE[0]}">N°</th>
+            <th style="background:${PALETTE[5]}">Tour</th>
+            <th style="background:${PALETTE[1]}">${act.terrainLabel.replace(/s$/,'')}</th>
+            <th style="background:${PALETTE[3]}">Fixe</th>
+            <th style="background:${PALETTE[4]}">Tournant</th>
+            <th style="background:${PALETTE[2]}">Vainqueur</th>
+          </tr></thead>
+          <tbody>${historiqueHtml}</tbody>
+        </table>
+      </div>
+    </div>
+    <div class="defis-classement-live" style="margin-top:14px;">
+      <h4>🏅 Classement — victoires séance par séance</h4>
+      <p class="hint">Se met à jour à chaque résultat enregistré. La séance la plus récente est la colonne juste après le nom.</p>
+      ${renderClassementParSeance(cd, students, true, activite)}
+    </div>`;
+  return html;
 }
 
 /* -------------------------------------------------------------- INIT -- */

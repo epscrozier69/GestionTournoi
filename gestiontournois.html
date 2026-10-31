@@ -148,14 +148,16 @@
   .seance-tab-item.active .seance-tab-date-input::-webkit-calendar-picker-indicator{filter:invert(1);}
   /* Sous-onglets Présence / Type de tournoi : un seul bloc affiché à la fois
      pour alléger la présentation (avant : deux cartes toujours empilées). */
-  .sub-tab-bar{display:flex;gap:10px;margin:14px 0 10px;flex-wrap:wrap;}
+  .sub-tab-bar{display:flex;gap:6px;margin:14px 0 10px;flex-wrap:wrap;}
+  /* Même gabarit que les onglets d'activité (nav.tabs button) tout en haut,
+     juste en gras en plus — pour que ce soit cohérent visuellement. */
   .sub-tab-btn{
-    border:none;background:#fff;color:var(--muted);padding:10px 20px;border-radius:12px;
-    font-weight:800;font-size:.95rem;box-shadow:var(--shadow);cursor:pointer;transition:.15s;
+    border:none;background:#fff;color:var(--muted);padding:8px 16px;border-radius:999px;cursor:pointer;
+    font-weight:700;font-size:.85rem;box-shadow:0 1px 3px rgba(0,0,0,.06);transition:.15s;
   }
   .sub-tab-btn:hover{color:var(--ink);}
-  .sub-tab-btn.active{background:var(--c7);color:#fff;}
-  .sub-tab-count{opacity:.8;font-weight:700;font-size:.82rem;margin-left:4px;}
+  .sub-tab-btn.active{background:var(--c1);color:#fff;box-shadow:0 3px 10px rgba(37,99,235,.35);}
+  .sub-tab-count{opacity:.85;font-weight:700;font-size:.82rem;margin-left:4px;}
   /* Chaque classe importée est sa propre vignette (même gabarit que les
      cartes de l'appli : coins arrondis, ombre), plutôt qu'une pastille dans
      un conteneur partagé. La classe active se distingue par sa pleine

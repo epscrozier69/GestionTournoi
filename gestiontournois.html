@@ -142,6 +142,16 @@
   }
   .seance-tab-date-input:hover{opacity:1;}
   .seance-tab-item.active .seance-tab-date-input::-webkit-calendar-picker-indicator{filter:invert(1);}
+  /* Sous-onglets Présence / Type de tournoi : un seul bloc affiché à la fois
+     pour alléger la présentation (avant : deux cartes toujours empilées). */
+  .sub-tab-bar{display:flex;gap:10px;margin:14px 0 10px;flex-wrap:wrap;}
+  .sub-tab-btn{
+    border:none;background:#fff;color:var(--muted);padding:10px 20px;border-radius:12px;
+    font-weight:800;font-size:.95rem;box-shadow:var(--shadow);cursor:pointer;transition:.15s;
+  }
+  .sub-tab-btn:hover{color:var(--ink);}
+  .sub-tab-btn.active{background:var(--c7);color:#fff;}
+  .sub-tab-count{opacity:.8;font-weight:700;font-size:.82rem;margin-left:4px;}
   /* Chaque classe importée est sa propre vignette (même gabarit que les
      cartes de l'appli : coins arrondis, ombre), plutôt qu'une pastille dans
      un conteneur partagé. La classe active se distingue par sa pleine
@@ -686,6 +696,11 @@ const ACTIVITIES = {
   },
 };
 const PALETTE = ['#2563eb','#7c3aed','#db2777','#ea580c','#dc2626','#0891b2','#4f46e5','#b45309','#e11d48','#0ea5e9'];
+// Sous-onglet affiché (Présence ou Type de tournoi) dans la zone séance de
+// chaque activité — simple état d'affichage, pas besoin d'être persisté avec
+// le reste des données (ni sauvegardé, ni par séance : juste pour alléger la
+// présentation en n'affichant qu'un bloc à la fois).
+const SOUS_ONGLET_SEANCE = {};
 
 /* ------------------------------------------------------------ STATE --- */
 // Hiérarchie : activité -> classes importées (sous-onglet, n'efface pas les
@@ -3909,13 +3924,12 @@ function renderActivityTab(activite){
       html += `<div class="card"><p class="hint" style="margin:0;">👁️‍🗨️ Contenu de la Séance ${seance.numero} masqué — cliquez de nouveau sur son onglet ci-dessus pour l'afficher.</p></div>`;
     }
     if(seance && !cd.seanceMasquee){
-      html += renderPresenceCard(activite, students, seance);
-
       if(!act.defisAllowed && !act.evaluationTechniqueAllowed && !seance.tournamentType){
         seance.tournamentType = 'poule';
         saveState();
       }
 
+      let tournoiHtml = '';
       if(act.defisAllowed){
         // Recliquer sur le type déjà sélectionné masque/affiche son contenu
         // (voir câblage de [data-tournament-type]) — icône et style distincts
@@ -3938,7 +3952,7 @@ function renderActivityTab(activite){
           const prefixe = (typeTournoiDemarre(type) ? '✅ ' : '') + (masque ? '👁️‍🗨️ ' : '');
           return `<button class="btn ${actif ? (masque?'masque':'') : 'ghost'}" data-tournament-type="${type}">${prefixe}${label}</button>`;
         };
-        html += `
+        tournoiHtml += `
           <div class="card">
             <div class="toolbar">
               <h3>Type de tournoi</h3>
@@ -3957,7 +3971,7 @@ function renderActivityTab(activite){
         // poule et l'évaluation technique peuvent être actifs en même temps
         // dans une même séance : ce sont deux cases à cocher indépendantes,
         // pas un choix unique.
-        html += `
+        tournoiHtml += `
           <div class="card">
             <div class="toolbar">
               <h3>Type de séance</h3>
@@ -3972,7 +3986,7 @@ function renderActivityTab(activite){
       } else if(cd.seances.length){
         // Sports collectifs : pas de choix de type de tournoi (toujours poule),
         // mais le bouton doit rester accessible quelque part.
-        html += `
+        tournoiHtml += `
           <div class="card">
             <div class="toolbar" style="margin-bottom:0;">
               <h3 style="margin:0;">🏆 Tournoi par poule</h3>
@@ -3983,33 +3997,47 @@ function renderActivityTab(activite){
 
       if(act.evaluationTechniqueAllowed){
         if(seance.pouleActif){
-          html += renderPouleConfigCard(activite);
-          html += renderTeamsSection(activite);
-          html += renderPoulesSection(activite);
-          html += renderMatchesSection(activite);
+          tournoiHtml += renderPouleConfigCard(activite);
+          tournoiHtml += renderTeamsSection(activite);
+          tournoiHtml += renderPoulesSection(activite);
+          tournoiHtml += renderMatchesSection(activite);
         }
         if(seance.evalTechActif){
-          html += act.evaluationTechniqueRecordAllowed ? renderEvaluationTechniqueRecordSection(activite) : renderEvaluationTechniqueSection(activite);
+          tournoiHtml += act.evaluationTechniqueRecordAllowed ? renderEvaluationTechniqueRecordSection(activite) : renderEvaluationTechniqueSection(activite);
         }
       } else if(seance.contenuMasque && seance.tournamentType){
         // Reclic sur le type de tournoi déjà sélectionné (voir câblage de
         // [data-tournament-type]) : masque son contenu, même principe que le
         // clic sur l'onglet de la séance déjà affichée.
-        html += `<div class="card"><p class="hint" style="margin:0;">👁️‍🗨️ Contenu masqué — recliquez sur le type sélectionné ci-dessus pour l'afficher.</p></div>`;
+        tournoiHtml += `<div class="card"><p class="hint" style="margin:0;">👁️‍🗨️ Contenu masqué — recliquez sur le type sélectionné ci-dessus pour l'afficher.</p></div>`;
       } else if(seance.tournamentType === 'poule'){
-        html += renderPouleConfigCard(activite);
-        html += renderTeamsSection(activite);
-        html += renderPoulesSection(activite);
-        html += renderMatchesSection(activite);
+        tournoiHtml += renderPouleConfigCard(activite);
+        tournoiHtml += renderTeamsSection(activite);
+        tournoiHtml += renderPoulesSection(activite);
+        tournoiHtml += renderMatchesSection(activite);
       } else if(seance.tournamentType === 'defisHasard'){
-        html += renderDefisHasardSection(activite);
+        tournoiHtml += renderDefisHasardSection(activite);
       } else if(seance.tournamentType === 'defisClassement'){
-        html += renderDefisClassementSection(activite);
+        tournoiHtml += renderDefisClassementSection(activite);
       } else if(seance.tournamentType === 'evaluationTechniqueRecord'){
-        html += renderEvaluationTechniqueRecordSection(activite);
+        tournoiHtml += renderEvaluationTechniqueRecordSection(activite);
       } else if(seance.tournamentType === 'rotation'){
-        html += renderRotationSection(activite);
+        tournoiHtml += renderRotationSection(activite);
       }
+
+      // Présence et Type de tournoi sont désormais deux sous-onglets (plutôt
+      // que deux cartes toujours empilées) pour une présentation plus claire :
+      // on affiche l'un ou l'autre, pas les deux à la fois.
+      const presenceHtml = renderPresenceCard(activite, students, seance);
+      const presents = students.filter(s=>!seance.absents.includes(s.id)).length;
+      if(!SOUS_ONGLET_SEANCE[activite]) SOUS_ONGLET_SEANCE[activite] = 'tournoi';
+      const sousOnglet = SOUS_ONGLET_SEANCE[activite];
+      html += `
+        <div class="sub-tab-bar">
+          <button class="sub-tab-btn ${sousOnglet==='presence'?'active':''}" data-sous-onglet="presence">🧍 Présence <span class="sub-tab-count">${presents}/${students.length}</span></button>
+          <button class="sub-tab-btn ${sousOnglet==='tournoi'?'active':''}" data-sous-onglet="tournoi">🏆 Type de tournoi</button>
+        </div>`;
+      html += sousOnglet === 'presence' ? presenceHtml : tournoiHtml;
     }
   }
 
@@ -4034,6 +4062,12 @@ function renderActivityTab(activite){
   }
   panel.querySelectorAll('[data-classe-select]').forEach(btn=>{
     btn.addEventListener('click', ()=>switchClasse(activite, btn.dataset.classeSelect));
+  });
+  panel.querySelectorAll('[data-sous-onglet]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      SOUS_ONGLET_SEANCE[activite] = btn.dataset.sousOnglet;
+      renderActivityTab(activite);
+    });
   });
   panel.querySelectorAll('[data-classe-delete]').forEach(btn=>{
     btn.addEventListener('click', (e)=>{

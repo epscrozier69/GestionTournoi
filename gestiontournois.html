@@ -95,7 +95,11 @@
   .badge.empty{background:#cbd5e1;color:#475569;}
 
   /* Config */
-  .config-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:14px;}
+  .config-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:14px;}
+  /* Boutons de choix (type de tournoi, niveaux...) : texte aligné à gauche et
+     interligne plus aéré, plus lisible qu'un texte centré qui retombe sur
+     plusieurs lignes en zigzag quand le libellé est long. */
+  .config-grid .btn{text-align:left;line-height:1.35;}
   .field label{display:block;font-size:.78rem;font-weight:600;color:var(--muted);margin-bottom:4px;}
   .field select, .field input{
     width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;font-size:.85rem;background:#fff;
@@ -740,8 +744,9 @@ function defaultSeance(numero, activite){
     // explicitement cliqué sur l'un des deux boutons.
     pouleActif: act.evaluationTechniqueAllowed ? false : undefined,
     evalTechActif: act.evaluationTechniqueAllowed ? false : undefined,
-    // Tennis de table ET Volley : choix de type de tournoi exclusif, comme
-    // poule/défis (seance.tournamentType peut valoir 'evaluationTechniqueRecord').
+    // Tennis de table, Badminton, Volley : l'évaluation technique (record
+    // d'échanges) a son propre sous-onglet, indépendant du choix de type de
+    // tournoi (voir aEvalTechIndependante dans renderActivityTab).
     binomesRecord:[], // [{id, memberIds:[a,b] ou [a] si évalué seul(e), score: null|nombre d'échanges}]
     dureeRecord:30, // secondes : 30, 45 ou 60 (1 min)
     // Tennis de table, Badminton, Volley : tournoi "à rotation" (voir
@@ -1947,11 +1952,16 @@ function exportClasseCompleteExcel(activite){
       if(seance.evalTechActif){
         if(act.evaluationTechniqueRecordAllowed) exporterRecord(); else exporterEvalUltimate();
       }
-    } else if(seance.tournamentType === 'poule') exporterPoule();
-    else if(seance.tournamentType === 'defisHasard') exporterDefisHasard();
-    else if(seance.tournamentType === 'defisClassement') exporterDefisClassement();
-    else if(seance.tournamentType === 'rotation') exporterRotation();
-    else if(seance.tournamentType === 'evaluationTechniqueRecord') exporterRecord();
+    } else {
+      if(seance.tournamentType === 'poule') exporterPoule();
+      else if(seance.tournamentType === 'defisHasard') exporterDefisHasard();
+      else if(seance.tournamentType === 'defisClassement') exporterDefisClassement();
+      else if(seance.tournamentType === 'rotation') exporterRotation();
+      // L'évaluation technique (record d'échanges) a son propre sous-onglet,
+      // indépendant du type de tournoi choisi : exportée dès qu'elle a des
+      // données, quel que soit seance.tournamentType.
+      if(act.evaluationTechniqueRecordAllowed) exporterRecord();
+    }
   });
 
   if(!auMoinsUneFeuille){ alert("Aucune donnée à exporter pour cette classe (aucun résultat enregistré dans les séances)."); return; }
@@ -2264,22 +2274,26 @@ function getPouleLabelForClasse(activite, cd, student){
     if(seance.evalTechActif) parts.push(act.evaluationTechniqueRecordAllowed ? getEvalTechRecordFragment(seance, student) : getEvalTechFragment(seance, student));
     return parts.join(' • ');
   }
-  if(seance.tournamentType === 'poule') return getPouleFragment(act, seance, student);
-  if(seance.tournamentType === 'defisHasard' || seance.tournamentType === 'defisClassement'){
+  const parts = [];
+  if(seance.tournamentType === 'poule'){
+    const frag = getPouleFragment(act, seance, student);
+    if(frag) parts.push(frag);
+  } else if(seance.tournamentType === 'defisHasard' || seance.tournamentType === 'defisClassement'){
     const w = cd.wins[student.id] || 0;
     const label = seance.tournamentType === 'defisHasard' ? 'Défis hasard' : 'Défis classement';
-    return `${label} — ${w} victoire${w>1?'s':''}`;
-  }
-  if(seance.tournamentType === 'evaluationTechniqueRecord'){
-    const b = (seance.binomesRecord||[]).find(b=>b.memberIds.includes(student.id));
-    if(!b || b.score === null || b.score === undefined) return 'Record d\'échanges — pas encore évalué';
-    return `Record d'échanges — ${b.score}`;
-  }
-  if(seance.tournamentType === 'rotation'){
+    parts.push(`${label} — ${w} victoire${w>1?'s':''}`);
+  } else if(seance.tournamentType === 'rotation'){
     const w = cd.wins[student.id] || 0;
-    return `Tournoi à rotation — ${w} victoire${w>1?'s':''}`;
+    parts.push(`Tournoi à rotation — ${w} victoire${w>1?'s':''}`);
   }
-  return '';
+  // Tennis de table, Badminton, Volley : l'évaluation technique (record
+  // d'échanges) est indépendante du type de tournoi choisi (son propre
+  // sous-onglet, voir renderActivityTab) — ajoutée dès qu'un résultat existe.
+  if(act.evaluationTechniqueRecordAllowed && act.defisAllowed){
+    const b = (seance.binomesRecord||[]).find(bb=>bb.memberIds.includes(student.id));
+    if(b && b.score !== null && b.score !== undefined) parts.push(`Record d'échanges — ${b.score}`);
+  }
+  return parts.join(' • ');
 }
 function getStudentAssignment(student){
   for(const activite of Object.keys(ACTIVITIES)){
@@ -3938,11 +3952,14 @@ function renderActivityTab(activite){
         // (pas seulement celui actuellement affiché), un type de tournoi déjà
         // commencé cette séance — pour voir d'un coup d'œil ce qui a déjà été
         // fait sans avoir à cliquer sur chacun.
+        // L'évaluation technique (record d'échanges) a son propre sous-onglet
+        // (voir plus bas, aEvalTechIndependante) : elle n'est plus l'un des
+        // boutons ici, pour que cette grille reste lisible (texte court, pas
+        // de bouton qui retombe sur deux lignes).
         const typeTournoiDemarre = (type) => {
           if(type === 'poule') return (seance.poules||[]).length > 0;
           if(type === 'defisClassement') return (seance.defisMatches||[]).length > 0;
           if(type === 'defisHasard') return Object.keys(seance.hasardWins||{}).length > 0;
-          if(type === 'evaluationTechniqueRecord') return (seance.binomesRecord||[]).length > 0;
           if(type === 'rotation') return (seance.rotationMatches||[]).length > 0;
           return false;
         };
@@ -3963,7 +3980,6 @@ function renderActivityTab(activite){
               ${typeTournoiBtn('defisClassement', '📈 Défis classement progressif')}
               ${typeTournoiBtn('defisHasard', '🎲 Défis hasard')}
               ${typeTournoiBtn('poule', '🏆 Par poule')}
-              ${act.evaluationTechniqueRecordAllowed ? typeTournoiBtn('evaluationTechniqueRecord', "📊 Évaluation technique (record d'échanges)") : ''}
             </div>
           </div>`;
       } else if(act.evaluationTechniqueAllowed){
@@ -4019,25 +4035,33 @@ function renderActivityTab(activite){
         tournoiHtml += renderDefisHasardSection(activite);
       } else if(seance.tournamentType === 'defisClassement'){
         tournoiHtml += renderDefisClassementSection(activite);
-      } else if(seance.tournamentType === 'evaluationTechniqueRecord'){
-        tournoiHtml += renderEvaluationTechniqueRecordSection(activite);
       } else if(seance.tournamentType === 'rotation'){
         tournoiHtml += renderRotationSection(activite);
       }
 
-      // Présence et Type de tournoi sont désormais deux sous-onglets (plutôt
-      // que deux cartes toujours empilées) pour une présentation plus claire :
-      // on affiche l'un ou l'autre, pas les deux à la fois.
+      // Présence, Type de tournoi, et (pour les activités concernées)
+      // Évaluation technique sont désormais des sous-onglets (plutôt que des
+      // cartes toujours empilées) pour une présentation plus claire : on
+      // n'affiche qu'un seul bloc à la fois. L'évaluation technique est
+      // indépendante du type de tournoi choisi (pas besoin de "perdre" sa
+      // poule/ses défis pour y accéder), comme en Ultimate (pouleActif /
+      // evalTechActif) — simplement affichée directement, sans bouton
+      // d'activation supplémentaire puisque le sous-onglet en tient lieu.
       const presenceHtml = renderPresenceCard(activite, students, seance);
       const presents = students.filter(s=>!seance.absents.includes(s.id)).length;
+      const aEvalTechIndependante = act.defisAllowed && act.evaluationTechniqueRecordAllowed;
+      const evalTechHtml = aEvalTechIndependante ? renderEvaluationTechniqueRecordSection(activite) : '';
+      const evalTechDemarre = (seance.binomesRecord||[]).length > 0;
       if(!SOUS_ONGLET_SEANCE[activite]) SOUS_ONGLET_SEANCE[activite] = 'tournoi';
-      const sousOnglet = SOUS_ONGLET_SEANCE[activite];
+      let sousOnglet = SOUS_ONGLET_SEANCE[activite];
+      if(sousOnglet === 'evaluation' && !aEvalTechIndependante) sousOnglet = 'tournoi';
       html += `
         <div class="sub-tab-bar">
           <button class="sub-tab-btn ${sousOnglet==='presence'?'active':''}" data-sous-onglet="presence">🧍 Présence <span class="sub-tab-count">${presents}/${students.length}</span></button>
           <button class="sub-tab-btn ${sousOnglet==='tournoi'?'active':''}" data-sous-onglet="tournoi">🏆 Type de tournoi</button>
+          ${aEvalTechIndependante ? `<button class="sub-tab-btn ${sousOnglet==='evaluation'?'active':''}" data-sous-onglet="evaluation">📊 Évaluation technique ${evalTechDemarre?'✅':''}</button>` : ''}
         </div>`;
-      html += sousOnglet === 'presence' ? presenceHtml : tournoiHtml;
+      html += sousOnglet === 'presence' ? presenceHtml : sousOnglet === 'evaluation' ? evalTechHtml : tournoiHtml;
     }
   }
 

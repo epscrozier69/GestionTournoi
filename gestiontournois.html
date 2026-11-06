@@ -4805,7 +4805,7 @@ function renderActivityTab(activite){
     row.addEventListener('click', ()=> openScoreModalMultijoueurs(activite, parseInt(row.dataset.openScoreMulti, 10)));
   });
   panel.querySelectorAll('[data-export-fiche-multi]').forEach(btn=>{
-    btn.addEventListener('click', ()=>exportFicheObservationMultijoueurs(activite, btn.dataset.exportFicheMulti));
+    btn.addEventListener('click', ()=>imprimerOrganisationMultijoueurs(activite, btn.dataset.exportFicheMulti));
   });
 }
 
@@ -6469,7 +6469,7 @@ function renderMultijoueursSection(activite){
       <h4>${p.nom} (${p.members.length})</h4>
       ${membresHtml}
       <button class="btn secondary small" style="margin-top:8px;" data-generer-matchs-multi="${p.id}">📅 ${matchesPoule.length?'Régénérer':'Générer'} les matchs</button>
-      ${matchesPoule.length ? `<button class="btn secondary small" style="margin-top:4px;" data-export-fiche-multi="${p.id}">📊 Exporter la fiche d'observation</button>` : ''}
+      ${matchesPoule.length ? `<button class="btn secondary small" style="margin-top:4px;" data-export-fiche-multi="${p.id}">🖨️ Imprimer l'organisation des matchs (PDF)</button>` : ''}
       <div style="margin-top:10px;">${matchesHtml}</div>
     </div>`;
   }).join('') + `</div>`;
@@ -6516,47 +6516,62 @@ function renderMultijoueursSection(activite){
 // Fiche d'observation (voir image fournie par l'utilisatrice) : reflète
 // l'état courant des données (vide si pas encore joué). 2 feuilles : grille
 // arbitrage + classement, et détail des matchs.
-function exportFicheObservationMultijoueurs(activite, pouleId){
+// Feuille d'organisation des matchs (PDF, une page) : juste de quoi mener la
+// séance — composition des 2 équipes de chaque match + arbitres — sans la
+// grille récapitulative ni le détail des scores (voir demande de
+// l'utilisatrice). Même principe que exportFeuillesMatchsPDF (fenêtre
+// d'impression du navigateur, "Enregistrer en PDF") : pas de bibliothèque PDF
+// à charger. Disposition en colonnes CSS pour rester sur une seule page même
+// avec beaucoup de matchs (poule de 12 en 2c2 par exemple).
+function imprimerOrganisationMultijoueurs(activite, pouleId){
   const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
   const poule = seance.multijoueursPoules.find(p=>p.id===pouleId);
   if(!cd || !poule) return;
   const matchesPoule = seance.multijoueursMatches.filter(m=>m.pouleId===pouleId);
-  if(!matchesPoule.length) return;
-  const standing = computeMultijoueursPouleStanding(seance, poule);
-  const totals = computeMultijoueursPoulePoints(seance, poule);
-  const rang = {};
-  standing.forEach((id,i)=>{ rang[id] = i+1; });
+  if(!matchesPoule.length){ alert("Générez d'abord les matchs de cette poule."); return; }
+  const tailleEquipe = seance.multijoueursTailleEquipe || 2;
+  const colonnes = matchesPoule.length <= 8 ? 1 : (matchesPoule.length <= 20 ? 2 : 3);
 
-  const rowsGrille = poule.members.map((id,i)=>{
-    const row = { 'N°': i+1, 'Nom Prénom': participantLabel(activite, id) };
-    matchesPoule.forEach((m,mi)=>{ row['Match '+(mi+1)] = m.referees.includes(id) ? 'ARB' : ''; });
-    row['Total points'] = totals[id] || 0;
-    row['Classement'] = rang[id] || '';
-    return row;
-  });
+  const matchsHtml = matchesPoule.map((m,i)=>{
+    const arbitresLabel = m.referees.length ? m.referees.map(id=>participantLabel(activite, id)).join(', ') : 'tout le monde joue';
+    return `
+      <div class="orga-match">
+        <div class="orga-match-num">Match ${i+1}</div>
+        <div class="orga-equipe">${labelEquipeAdHoc(activite, m.equipeA)}</div>
+        <div class="orga-contre">contre</div>
+        <div class="orga-equipe">${labelEquipeAdHoc(activite, m.equipeB)}</div>
+        <div class="orga-arbitres">🧑‍⚖️ Arbitres : ${arbitresLabel}</div>
+      </div>`;
+  }).join('');
 
-  const resultatLabel = (m)=>{
-    if(m.abandon) return m.abandon==='A' ? 'Abandon équipe A' : 'Abandon équipe B';
-    if(m.winner === 'A') return 'Victoire équipe A';
-    if(m.winner === 'B') return 'Victoire équipe B';
-    if(m.winner === null && m.pointsA !== null && m.pointsA !== undefined) return 'Match nul';
-    return '';
-  };
-  const rowsMatchs = matchesPoule.map((m,i)=>({
-    'Match': i+1,
-    'Équipe A': labelEquipeAdHoc(activite, m.equipeA),
-    'Équipe B': labelEquipeAdHoc(activite, m.equipeB),
-    'Score A': m.scoreA !== null && m.scoreA !== undefined ? m.scoreA : '',
-    'Score B': m.scoreB !== null && m.scoreB !== undefined ? m.scoreB : '',
-    'Résultat': resultatLabel(m),
-    'Arbitres': m.referees.map(id=>participantLabel(activite, id)).join(', '),
-  }));
-
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rowsGrille), 'Grille');
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rowsMatchs), 'Matchs');
-  XLSX.writeFile(wb, `fiche_observation_multijoueurs_${slug(activite)}_${slug(cd.classe)}_${slug(poule.nom)}_seance${seance.numero}.xlsx`);
+  const dateLabel = formatDateSeance(seance.dateCreation);
+  const w = window.open('', '_blank');
+  if(!w){ alert("Le navigateur a bloqué l'ouverture de la fenêtre d'impression. Autorisez les pop-ups pour ce site."); return; }
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Organisation des matchs — ${poule.nom}</title>
+    <style>
+      @page{ size: portrait; margin: 10mm; }
+      body{font-family:Arial, Helvetica, sans-serif;color:#111;margin:0;}
+      .orga-entete{display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid #111;padding-bottom:4px;margin-bottom:10px;}
+      .orga-entete h1{font-size:1.1rem;margin:0;}
+      .orga-entete span{font-size:.85rem;}
+      .orga-matchs{columns:${colonnes};column-gap:18px;}
+      .orga-match{break-inside:avoid;margin-bottom:8px;padding-bottom:6px;border-bottom:1px dashed #999;font-size:.78rem;}
+      .orga-match-num{font-weight:bold;color:#1d4ed8;margin-bottom:2px;}
+      .orga-equipe{font-weight:bold;}
+      .orga-contre{color:#666;font-size:.7rem;margin:1px 0;}
+      .orga-arbitres{color:#b91c1c;font-size:.7rem;margin-top:2px;}
+    </style>
+    </head><body>
+      <div class="orga-entete">
+        <h1>🏐 Tournoi multijoueurs — ${poule.nom} (${tailleEquipe} contre ${tailleEquipe})</h1>
+        <span>Séance ${seance.numero}${dateLabel ? ' — ' + dateLabel : ''} — ${cd.classe}</span>
+      </div>
+      <div class="orga-matchs">${matchsHtml}</div>
+    </body></html>`);
+  w.document.close();
+  w.focus();
+  setTimeout(()=>{ w.print(); }, 300);
 }
 
 /* -------------------------------------------------------------- INIT -- */

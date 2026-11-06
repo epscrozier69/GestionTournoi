@@ -229,6 +229,14 @@
   .poule-card h4, .team-card .team-name{
     margin:0 0 8px;font-size:.9rem;font-weight:700;color:var(--ink);
   }
+  /* Tournoi à rotation reporté d'une séance précédente (voir
+     reporterRotationSeancePrecedente) : distingue d'un coup d'œil les matchs
+     déjà joués (reportés tels quels, non modifiables ici) de ceux qui restent
+     à faire cette séance. */
+  .poule-card.match-a-faire{border-color:var(--warn);background:#fffbeb;}
+  .poule-card.match-deja-joue{opacity:.8;background:#f0fdf4;border-color:#86efac;}
+  .badge-a-faire{display:inline-block;margin:0 0 6px;padding:2px 8px;border-radius:999px;background:var(--warn);color:#fff;font-size:.72rem;font-weight:700;}
+  .badge-deja-joue{display:inline-block;margin:0 0 6px;padding:2px 8px;border-radius:999px;background:var(--ok);color:#fff;font-size:.72rem;font-weight:700;}
   .match-row{
     display:flex;align-items:center;gap:4px;flex-wrap:wrap;cursor:pointer;
     padding:6px 4px;border-bottom:1px dashed var(--line);font-size:.78rem;border-radius:6px;
@@ -345,6 +353,7 @@
   .historique-table th, .historique-table td{padding:4px 6px;border-bottom:1px solid var(--line);}
   .historique-table tbody tr:nth-child(odd){background:#fff;}
   .historique-table tbody tr:nth-child(even){background:#f8fafc;}
+  .historique-table tbody tr.ligne-reportee{opacity:.7;}
   .historique-table select{font-size:.8rem;padding:2px 4px;}
   .win-edit-input{
     width:100%;box-sizing:border-box;text-align:center;padding:3px 2px;
@@ -699,6 +708,7 @@ const ACTIVITIES = {
     // ce flag reste réservé à l'Ultimate.
     evaluationTechniqueRecordAllowed:true, // évaluation technique "record d'échanges" (binômes, pavé numérique) — même principe qu'en Tennis de table
     rotationAllowed:true, // tournoi à rotation (voir Fonctionnalites.md lignes 16 et 74-78)
+    multijoueursAllowed:true, // tournoi multijoueurs, Volley uniquement (voir Fonctionnalites.md lignes 79-85)
   },
 };
 const PALETTE = ['#2563eb','#7c3aed','#db2777','#ea580c','#dc2626','#0891b2','#4f46e5','#b45309','#e11d48','#0ea5e9'];
@@ -765,6 +775,18 @@ function defaultSeance(numero, activite){
     // indépendante de seance.teams (poule) et seance.teamsDefis (défis) —
     // même principe que teamsDefis (préfixe d'id 'equipeRotation').
     joueursParEquipeRotation:4, nombreEquipesFixeRotation:0, teamsRotation:[],
+    // Volley uniquement : tournoi "multijoueurs" (voir Fonctionnalites.md
+    // lignes 79-85) — à l'intérieur de chaque poule, les élèves jouent des
+    // matchs à k contre k en changeant de partenaire à chaque match, jusqu'à
+    // avoir joué avec tous les autres joueurs de la poule (voir
+    // genererMultijoueursMatches). Poules à l'échelle de l'élève (pas de
+    // l'équipe) : seance.multijoueursPoules a la même forme que seance.poules
+    // mais reste totalement séparé pour ne rien mélanger avec le tournoi par
+    // poule classique.
+    multijoueursTaillePoule:6, // joueurs par poule, réglable
+    multijoueursTailleEquipe:2, // format : 2c2, 3c3 ou 4c4
+    multijoueursPoules:[], // [{id, nom, members:[studentId,...]}]
+    multijoueursMatches:[], // [{id, pouleId, tour, equipeA:[ids], equipeB:[ids], referees:[ids], scoreA, scoreB, pointsA, pointsB, winner:'A'|'B'|null, abandon:'A'|'B'|null}]
   };
 }
 function defaultClasseData(classe, activite){
@@ -774,7 +796,10 @@ function defaultClasseData(classe, activite){
     // victoire quel que soit le format) ; poulePoints = tournoi par poule,
     // compté à part car son barème (points selon l'écart de score) n'a rien
     // à voir avec un simple décompte de victoires.
-    classe, wins:{}, poulePoints:{},
+    // multijoueursPoints = tournoi multijoueurs (Volley), compté à part comme
+    // poulePoints : barème propre (victoire/nul/défaite/abandon par match ad
+    // hoc) et continuité (montée-descente) indépendante du tournoi par poule.
+    classe, wins:{}, poulePoints:{}, multijoueursPoints:{},
     seances:[defaultSeance(1, activite)], currentSeanceIndex:0, showClassementTotal:false,
     seanceMasquee:false, // clic sur l'onglet de la séance déjà sélectionnée : masque/affiche son contenu
   };
@@ -806,6 +831,7 @@ function ensureActivityData(){
         delete cd.classementWins;
       }
       if(!cd.poulePoints) cd.poulePoints = {};
+      if(!cd.multijoueursPoints) cd.multijoueursPoints = {};
       if(cd.seanceMasquee === undefined) cd.seanceMasquee = false;
       cd.seances.forEach(s=>{
         if(!s.hasardWins) s.hasardWins = {};
@@ -829,6 +855,10 @@ function ensureActivityData(){
         if(!s.rotationMatches) s.rotationMatches = [];
         if(!s.rotationTourActuel) s.rotationTourActuel = 1;
         if(!s.rotationTerrains) s.rotationTerrains = ACTIVITIES[a].defaultTerrains || ACTIVITIES[a].defisTerrainMin || ACTIVITIES[a].pouleTerrainMin;
+        if(!s.multijoueursTaillePoule) s.multijoueursTaillePoule = 6;
+        if(!s.multijoueursTailleEquipe) s.multijoueursTailleEquipe = 2;
+        if(!s.multijoueursPoules) s.multijoueursPoules = [];
+        if(!s.multijoueursMatches) s.multijoueursMatches = [];
         if(ACTIVITIES[a].evaluationTechniqueAllowed){
           // Rattrapage pour les séances créées avant l'ajout du double mode :
           // on retrouve le choix déjà fait via l'ancien tournamentType exclusif.
@@ -1728,6 +1758,7 @@ function exportRotationMatchesExcel(activite){
     'Participant B': participantLabel(activite, m.b),
     'Vainqueur': m.winner ? participantLabel(activite, m.winner) : '',
     'Arbitre': m.referee ? participantLabel(activite, m.referee) : 'Auto-arbitrage',
+    'Reporté de la séance précédente': m.reporte ? 'Oui' : '',
   }));
   exportRowsToExcel(rows, `tournoi_rotation_${slug(activite)}_${slug(cd.classe)}_seance${seance.numero}.xlsx`, 'Matchs');
 }
@@ -2287,6 +2318,12 @@ function getPouleLabelForClasse(activite, cd, student){
   } else if(seance.tournamentType === 'rotation'){
     const w = cd.wins[student.id] || 0;
     parts.push(`Tournoi à rotation — ${w} victoire${w>1?'s':''}`);
+  } else if(seance.tournamentType === 'multijoueurs'){
+    const poule = (seance.multijoueursPoules||[]).find(p=>p.members.includes(student.id));
+    if(poule){
+      const pts = computeMultijoueursPoulePoints(seance, poule)[student.id] || 0;
+      parts.push(`Multijoueurs — ${poule.nom} — ${pts} pt${pts>1?'s':''}`);
+    }
   }
   // Tennis de table, Badminton, Volley : l'évaluation technique (record
   // d'échanges) est indépendante du type de tournoi choisi (son propre
@@ -2653,14 +2690,18 @@ function computeSeancePoulePointsParEleve(seance, activite){
 function recomputeCumulativeTotals(cd, activite){
   const wins = {};
   const poulePoints = {};
+  const multijoueursPoints = {};
   cd.seances.forEach(s=>{
     const w = computeSeanceDefisWinsParEleve(s, activite);
     Object.keys(w).forEach(id=>{ wins[id] = (wins[id]||0) + w[id]; });
     const p = computeSeancePoulePointsParEleve(s, activite);
     Object.keys(p).forEach(id=>{ poulePoints[id] = (poulePoints[id]||0) + p[id]; });
+    const m = computeSeanceMultijoueursPointsParEleve(s);
+    Object.keys(m).forEach(id=>{ multijoueursPoints[id] = (multijoueursPoints[id]||0) + m[id]; });
   });
   cd.wins = wins;
   cd.poulePoints = poulePoints;
+  cd.multijoueursPoints = multijoueursPoints;
 }
 // Classement (ordre décroissant de points marqués) des membres ACTIFS (non
 // absents) d'une poule, à partir des matchs de cette séance.
@@ -2704,9 +2745,23 @@ function openScoreModal(activite, matchIndex){
   const seance = currentSeance(activite);
   const match = seance.matches[matchIndex];
   if(!match) return;
-  scoreModalContext = { activite, matchIndex };
-  document.getElementById('scoreModalNomA').textContent = participantLabel(activite, match.a);
-  document.getElementById('scoreModalNomB').textContent = participantLabel(activite, match.b);
+  scoreModalContext = { activite, matchIndex, source:'poule' };
+  remplirScoreModal(activite, match, participantLabel(activite, match.a), participantLabel(activite, match.b));
+}
+// Tournoi multijoueurs (Volley) : équipes ad hoc par match (tableaux d'ids,
+// pas d'id d'équipe stable) — même modale, juste un libellé composé pour
+// chaque "équipe" (voir labelEquipeAdHoc) et scoreModalContext.source
+// distinct pour que validerScoreModal/abandonScoreModal/effacerResultatMatch
+// sachent écrire dans seance.multijoueursMatches au lieu de seance.matches.
+function openScoreModalMultijoueurs(activite, matchIndex){
+  const match = trouverMatchMultijoueurs(activite, matchIndex);
+  if(!match) return;
+  scoreModalContext = { activite, matchIndex, source:'multijoueurs' };
+  remplirScoreModal(activite, match, labelEquipeAdHoc(activite, match.equipeA), labelEquipeAdHoc(activite, match.equipeB));
+}
+function remplirScoreModal(activite, match, nomA, nomB){
+  document.getElementById('scoreModalNomA').textContent = nomA;
+  document.getElementById('scoreModalNomB').textContent = nomB;
   const scoreA = (match.scoreA !== undefined && match.scoreA !== null) ? match.scoreA : null;
   const scoreB = (match.scoreB !== undefined && match.scoreB !== null) ? match.scoreB : null;
   const max = ACTIVITIES[activite].scoreMax || SCORE_PICKER_MAX_DEFAUT;
@@ -2720,6 +2775,13 @@ function openScoreModal(activite, matchIndex){
 function closeScoreModal(){
   document.getElementById('scoreModal').hidden = true;
   scoreModalContext = null;
+}
+// Résout le match actuellement ouvert dans la modale, quelle que soit sa
+// source (poule classique ou multijoueurs — voir scoreModalContext.source).
+function resolveScoreModalMatch(activite, matchIndex){
+  return scoreModalContext && scoreModalContext.source === 'multijoueurs'
+    ? trouverMatchMultijoueurs(activite, matchIndex)
+    : currentSeance(activite).matches[matchIndex];
 }
 
 /* ---------------------------------------------- MODALE DE PRÉSENCE ---- */
@@ -2770,17 +2832,16 @@ function effacerResultatMatch(activite, match){
 function btnEffacerResultatMatchClick(){
   if(!scoreModalContext) return;
   const { activite, matchIndex } = scoreModalContext;
-  const seance = currentSeance(activite);
-  const match = seance.matches[matchIndex];
+  const match = resolveScoreModalMatch(activite, matchIndex);
   if(!match) return;
   effacerResultatMatch(activite, match);
 }
 function validerScoreModal(){
   if(!scoreModalContext) return;
-  const { activite, matchIndex } = scoreModalContext;
-  const seance = currentSeance(activite);
-  const match = seance.matches[matchIndex];
+  const { activite, matchIndex, source } = scoreModalContext;
+  const match = resolveScoreModalMatch(activite, matchIndex);
   if(!match) return;
+  const estMultijoueurs = source === 'multijoueurs';
   const scoreA = getScorePickerValue('scoreModalPickerA');
   const scoreB = getScorePickerValue('scoreModalPickerB');
   if(scoreA === null && scoreB === null){
@@ -2790,16 +2851,18 @@ function validerScoreModal(){
     return;
   }
   if(scoreA === null || scoreB === null){ alert('Cochez les deux scores (ou décochez les deux pour effacer ce résultat).'); return; }
-  // Sports collectifs : barème fixe par résultat (victoire/nul/défaite), match
-  // nul autorisé. Sports de raquette : barème selon l'écart, égalité refusée.
-  const estEquipe = ACTIVITIES[activite].type === 'equipe';
+  // Sports collectifs (et multijoueurs, toujours en équipe) : barème fixe par
+  // résultat (victoire/nul/défaite), match nul autorisé. Sports de raquette :
+  // barème selon l'écart, égalité refusée.
+  const estEquipe = estMultijoueurs || ACTIVITIES[activite].type === 'equipe';
   const result = estEquipe ? computeMatchPointsEquipe(scoreA, scoreB) : computeMatchPoints(scoreA, scoreB);
   if(!result){ alert('Les deux scores ne peuvent pas être égaux : il doit y avoir un vainqueur.'); return; }
   appliquerDeltaPoulePoints(activite, match, result.pointsA, result.pointsB);
   match.scoreA = scoreA; match.scoreB = scoreB;
   match.pointsA = result.pointsA; match.pointsB = result.pointsB;
-  match.winner = result.winnerIsA === null ? null : (result.winnerIsA ? match.a : match.b);
+  match.winner = result.winnerIsA === null ? null : (estMultijoueurs ? (result.winnerIsA?'A':'B') : (result.winnerIsA ? match.a : match.b));
   match.abandon = null;
+  if(estMultijoueurs) recomputeCumulativeTotals(currentClasseData(activite), activite);
   saveState();
   closeScoreModal();
   renderActivityTab(activite);
@@ -2809,18 +2872,19 @@ function validerScoreModal(){
 // qu'un score n'ait besoin d'être saisi.
 function abandonScoreModal(who){
   if(!scoreModalContext) return;
-  const { activite, matchIndex } = scoreModalContext;
-  const seance = currentSeance(activite);
-  const match = seance.matches[matchIndex];
+  const { activite, matchIndex, source } = scoreModalContext;
+  const match = resolveScoreModalMatch(activite, matchIndex);
   if(!match) return;
-  const pointsVictoire = ACTIVITIES[activite].type === 'equipe' ? 4 : 5;
+  const estMultijoueurs = source === 'multijoueurs';
+  const pointsVictoire = (estMultijoueurs || ACTIVITIES[activite].type === 'equipe') ? 4 : 5;
   const newPointsA = who === 'a' ? 0 : pointsVictoire;
   const newPointsB = who === 'a' ? pointsVictoire : 0;
   appliquerDeltaPoulePoints(activite, match, newPointsA, newPointsB);
   match.pointsA = newPointsA; match.pointsB = newPointsB;
-  match.winner = who === 'a' ? match.b : match.a;
+  match.winner = estMultijoueurs ? (who === 'a' ? 'B' : 'A') : (who === 'a' ? match.b : match.a);
   match.scoreA = null; match.scoreB = null;
-  match.abandon = who;
+  match.abandon = estMultijoueurs ? (who === 'a' ? 'A' : 'B') : who;
+  if(estMultijoueurs) recomputeCumulativeTotals(currentClasseData(activite), activite);
   saveState();
   closeScoreModal();
   renderActivityTab(activite);
@@ -2858,6 +2922,212 @@ function computeMonteeDescente(previousSeance){
     }
   });
   return assignment;
+}
+
+/* --------------------------------------- TOURNOI MULTIJOUEURS (Volley) - */
+// Contrairement au tournoi par poule classique (équipes), le tournoi
+// multijoueurs raisonne directement en élèves : chaque match forme 2 équipes
+// ad hoc (seance.multijoueursMatches[].equipeA/equipeB, de simples tableaux
+// d'ids), donc pas de passage par un id d'équipe pour cumuler les points —
+// on additionne directement sur les ids des 2 équipes du match.
+function computeMultijoueursPoulePoints(seance, poule){
+  const totals = {};
+  (seance.multijoueursMatches||[]).forEach(m=>{
+    if(m.pouleId !== poule.id || m.pointsA === undefined || m.pointsA === null) return;
+    m.equipeA.forEach(id=>{ totals[id] = (totals[id]||0) + m.pointsA; });
+    m.equipeB.forEach(id=>{ totals[id] = (totals[id]||0) + m.pointsB; });
+  });
+  return totals;
+}
+// Comme computeMultijoueursPoulePoints mais toutes poules confondues de la
+// séance — utilisé pour le classement combiné de la séance et pour le cumul
+// inter-séances (cd.multijoueursPoints, voir recomputeCumulativeTotals).
+function computeSeanceMultijoueursPointsParEleve(seance){
+  const totals = {};
+  (seance.multijoueursMatches||[]).forEach(m=>{
+    if(m.pointsA === undefined || m.pointsA === null) return;
+    m.equipeA.forEach(id=>{ totals[id] = (totals[id]||0) + m.pointsA; });
+    m.equipeB.forEach(id=>{ totals[id] = (totals[id]||0) + m.pointsB; });
+  });
+  return totals;
+}
+// Classement (ordre décroissant de points) des membres ACTIFS (non absents)
+// d'une poule multijoueurs — même principe que computePouleStanding.
+function computeMultijoueursPouleStanding(seance, poule){
+  const totals = computeMultijoueursPoulePoints(seance, poule);
+  const actifs = poule.members.filter(id=>!seance.absents.includes(id));
+  return actifs.slice().sort((a,b)=> (totals[b]||0) - (totals[a]||0));
+}
+// Montée-descente pour le tournoi multijoueurs — copie conforme de
+// computeMonteeDescente (même règle : 1er monte, dernier descend, le milieu
+// reste), appliquée à seance.multijoueursPoules/computeMultijoueursPouleStanding
+// au lieu de seance.poules/computePouleStanding.
+function computeMonteeDescenteMultijoueurs(previousSeance){
+  const poules = previousSeance.multijoueursPoules;
+  const n = poules.length;
+  const assignment = {};
+  poules.forEach((p, idx)=>{
+    const standing = computeMultijoueursPouleStanding(previousSeance, p);
+    if(!standing.length) return;
+    if(standing.length === 1){
+      assignment[standing[0]] = idx;
+      return;
+    }
+    const premier = standing[0];
+    const dernier = standing[standing.length-1];
+    const milieu = standing.slice(1, -1);
+    if(idx === 0){
+      assignment[premier] = idx;
+      milieu.forEach(id=>{ assignment[id] = idx; });
+      assignment[dernier] = Math.min(idx+1, n-1);
+    } else if(idx === n-1){
+      assignment[premier] = Math.max(idx-1, 0);
+      milieu.forEach(id=>{ assignment[id] = idx; });
+      assignment[dernier] = idx;
+    } else {
+      assignment[premier] = idx-1;
+      milieu.forEach(id=>{ assignment[id] = idx; });
+      assignment[dernier] = idx+1;
+    }
+  });
+  return assignment;
+}
+// Génère (ou régénère) les poules multijoueurs d'une séance : reprend la
+// montée-descente de la séance précédente si elle a des résultats
+// exploitables, sinon sème depuis cd.multijoueursPoints (meilleurs en
+// poule 1), comme onGenererPoules pour les activités individuelles.
+function onGenererPoulesMultijoueurs(activite){
+  const cd = currentClasseData(activite);
+  const seance = currentSeance(activite);
+  if(!cd){ alert("Choisissez d'abord une classe."); return; }
+  if(!seance){ alert("Créez d'abord une séance."); return; }
+  if(seance.multijoueursPoules.length){
+    if(!confirm('Cela régénère les poules et efface les matchs multijoueurs actuels de cette séance. Continuer ?')) return;
+  }
+  const taillePoule = clamp(seance.multijoueursTaillePoule || 6, 4, 12);
+  const studentIds = STATE.allStudents.filter(s=>s.classe===cd.classe && !seance.absents.includes(s.id)).map(s=>s.id);
+  const seanceIdx = cd.seances.indexOf(seance);
+  const prevSeance = seanceIdx > 0 ? cd.seances[seanceIdx-1] : null;
+  const prevHasResults = prevSeance && prevSeance.tournamentType === 'multijoueurs' && prevSeance.multijoueursPoules.length && prevSeance.multijoueursMatches.some(m=>m.winner || m.abandon);
+
+  if(prevHasResults){
+    const assignment = computeMonteeDescenteMultijoueurs(prevSeance);
+    const nbPoules = prevSeance.multijoueursPoules.length;
+    const groups = Array.from({length:nbPoules}, ()=>[]);
+    const unassigned = [];
+    studentIds.forEach(id=>{
+      if(assignment[id] !== undefined) groups[assignment[id]].push(id);
+      else unassigned.push(id); // nouvel élève, ou absent la séance précédente
+    });
+    unassigned.forEach(id=>{
+      let target = 0, min = Infinity;
+      groups.forEach((g,i)=>{ if(g.length < min){ min = g.length; target = i; } });
+      groups[target].push(id);
+    });
+    seance.multijoueursPoules = groups.map((members,i)=>({ id:'poule'+(i+1), nom:'Poule '+(i+1), members: shuffleArray(members) }));
+  } else {
+    seance.multijoueursPoules = generatePoules(studentIds, taillePoule, cd.multijoueursPoints, Math.max(2, taillePoule-1), taillePoule+2);
+  }
+  seance.multijoueursMatches = [];
+  saveState();
+  renderActivityTab(activite);
+  renderGeneral();
+}
+function moveParticipantMultijoueurs(activite, studentId, targetPouleId){
+  const seance = currentSeance(activite);
+  seance.multijoueursPoules.forEach(p=>{ p.members = p.members.filter(id=>id!==studentId); });
+  const target = seance.multijoueursPoules.find(p=>p.id===targetPouleId);
+  if(target) target.members.push(studentId);
+  seance.multijoueursMatches = [];
+  saveState();
+  renderActivityTab(activite);
+  renderGeneral();
+}
+// Nom affiché pour une équipe ad hoc (tableau d'ids, pas d'id d'équipe
+// stable) : simple concaténation des noms, ex. "Dupont Marie + Martin Lucas".
+function labelEquipeAdHoc(activite, ids){
+  return ids.map(id=>participantLabel(activite, id)).join(' + ');
+}
+function trouverMatchMultijoueurs(activite, matchIndex){
+  const seance = currentSeance(activite);
+  return (seance.multijoueursMatches||[])[matchIndex];
+}
+// Génère les matchs d'une poule multijoueurs : à chaque match, 2 équipes de
+// seance.multijoueursTailleEquipe joueurs s'affrontent, les autres membres de
+// la poule arbitrent. On continue à générer des matchs (tours) tant que
+// toutes les paires de partenaires possibles n'ont pas encore joué ensemble
+// au moins une fois (demande explicite : "un élève devra avoir joué avec
+// l'ensemble des joueurs de cette poule"), avec un minimum de répétitions
+// quand le nombre de joueurs ne tombe pas juste (ex. poule de 6 en 2c2 :
+// C(6,2)=15 paires à raison de 2 paires/match → 8 matchs minimum, avec 1
+// répétition inévitable). MAX_TOURS est un garde-fou pour éviter toute
+// boucle infinie dans un cas limite (ne devrait jamais être atteint en
+// pratique pour les tailles de poule proposées par l'appli).
+const MULTIJOUEURS_MAX_TOURS = 60;
+function pairKey(a, b){ return a < b ? a+'::'+b : b+'::'+a; }
+function genererMultijoueursMatches(activite, pouleId){
+  const seance = currentSeance(activite);
+  const poule = seance.multijoueursPoules.find(p=>p.id===pouleId);
+  if(!poule) return;
+  const k = seance.multijoueursTailleEquipe || 2;
+  const tailleMatch = 2*k;
+  const membres = poule.members.filter(id=>!seance.absents.includes(id));
+  if(membres.length < tailleMatch){
+    alert(`Il faut au moins ${tailleMatch} joueurs disponibles dans cette poule pour un format ${k}c${k}.`);
+    return;
+  }
+  // Toutes les paires possibles de la poule, pour savoir quand s'arrêter.
+  const partnerCount = {};
+  let pairesRestantes = 0;
+  for(let i=0; i<membres.length; i++){
+    for(let j=i+1; j<membres.length; j++){
+      partnerCount[pairKey(membres[i], membres[j])] = 0;
+      pairesRestantes++;
+    }
+  }
+  const refereeDerniereFois = {};
+  membres.forEach(id=>{ refereeDerniereFois[id] = 0; });
+  const matches = [];
+  let tour = 0;
+  while(pairesRestantes > 0 && tour < MULTIJOUEURS_MAX_TOURS){
+    tour++;
+    // Arbitres de ce tour : priorité à ceux qui ont arbitré le moins
+    // récemment (même logique que attribuerArbitresRotation).
+    const triParArbitrage = membres.slice().sort((a,b)=>(refereeDerniereFois[a]||0) - (refereeDerniereFois[b]||0));
+    const referees = triParArbitrage.slice(0, membres.length - tailleMatch);
+    const actifs = triParArbitrage.slice(membres.length - tailleMatch);
+    referees.forEach(id=>{ refereeDerniereFois[id] = tour; });
+    // Forme 2 équipes de k parmi les joueurs actifs, en minimisant les
+    // partenariats déjà joués (essai glouton sur plusieurs répartitions
+    // aléatoires candidates), adversaires déjà rencontrés en critère
+    // secondaire.
+    let meilleur = null, meilleurScore = Infinity;
+    for(let essai=0; essai<30; essai++){
+      const melange = shuffleArray(actifs);
+      const equipeA = melange.slice(0, k), equipeB = melange.slice(k);
+      let repetitionsPartenaires = 0;
+      for(let i=0; i<equipeA.length; i++) for(let j=i+1; j<equipeA.length; j++) if(partnerCount[pairKey(equipeA[i],equipeA[j])] > 0) repetitionsPartenaires++;
+      for(let i=0; i<equipeB.length; i++) for(let j=i+1; j<equipeB.length; j++) if(partnerCount[pairKey(equipeB[i],equipeB[j])] > 0) repetitionsPartenaires++;
+      const score = repetitionsPartenaires;
+      if(score < meilleurScore){ meilleurScore = score; meilleur = { equipeA, equipeB }; if(score===0) break; }
+    }
+    const { equipeA, equipeB } = meilleur;
+    [equipeA, equipeB].forEach(equipe=>{
+      for(let i=0; i<equipe.length; i++) for(let j=i+1; j<equipe.length; j++){
+        const key = pairKey(equipe[i], equipe[j]);
+        if(partnerCount[key] === 0) pairesRestantes--;
+        partnerCount[key]++;
+      }
+    });
+    matches.push({
+      id:'multi'+poule.id+'-'+tour, pouleId, tour, equipeA, equipeB, referees,
+      scoreA:null, scoreB:null, pointsA:null, pointsB:null, winner:null, abandon:null,
+    });
+  }
+  seance.multijoueursMatches = seance.multijoueursMatches.filter(m=>m.pouleId !== pouleId).concat(matches);
+  recomputeCumulativeTotals(currentClasseData(activite), activite);
+  saveState();
+  renderActivityTab(activite);
 }
 
 /* ------------------------------------------------------------ MATCHES - */
@@ -3412,6 +3682,36 @@ function genererRotationMatches(activite){
   saveState();
   renderActivityTab(activite);
 }
+// Un tournoi à rotation complet tient rarement en une seule séance : quand on
+// sélectionne "Tournoi à rotation" pour une NOUVELLE séance (aucun match
+// encore généré) et que la séance précédente avait elle aussi un tournoi à
+// rotation en cours, reprend tel quel son tirage (fixes/tournants, équipes,
+// terrains) et TOUS ses matchs plutôt que d'en tirer un nouveau : les matchs
+// déjà joués sont reportés (champ "reporte", lecture seule ici — pour
+// corriger un résultat déjà saisi, retourner sur la séance où il a été
+// joué) et ne comptent qu'une fois dans cd.wins (voir le filtre sur
+// m.reporte dans computeSeanceDefisWins) ; les matchs pas encore joués
+// restent à faire cette séance et sont mis en évidence (voir
+// renderRotationSection). Ne fait rien si cette séance a déjà son propre
+// tournoi en cours ou si la précédente n'en avait pas.
+function reporterRotationSeancePrecedente(activite){
+  const cd = currentClasseData(activite);
+  const seance = currentSeance(activite);
+  if(!cd || !seance || seance.rotationMatches.length) return false;
+  const idx = cd.seances.indexOf(seance);
+  const precedente = idx > 0 ? cd.seances[idx - 1] : null;
+  if(!precedente || precedente.tournamentType !== 'rotation' || !precedente.rotationMatches.length) return false;
+  seance.rotationFixes = precedente.rotationFixes.slice();
+  seance.rotationTournants = precedente.rotationTournants.slice();
+  seance.rotationTerrains = precedente.rotationTerrains;
+  if(precedente.teamsRotation && precedente.teamsRotation.length){
+    seance.teamsRotation = precedente.teamsRotation.map(t=>Object.assign({}, t, { memberIds: t.memberIds.slice() }));
+  }
+  seance.rotationMatches = precedente.rotationMatches.map(m=>Object.assign({}, m, { reporte: !!m.winner }));
+  const premierRestant = seance.rotationMatches.find(m=>!m.reporte);
+  seance.rotationTourActuel = premierRestant ? premierRestant.tour : Math.max(...seance.rotationMatches.map(m=>m.tour));
+  return true;
+}
 // Répartit n participants en rondes façon "poule à l'américaine" (méthode du
 // cercle) : un participant fixé, les autres tournent d'un cran à chaque
 // ronde — garantit que chaque paire se rencontre exactement une fois en
@@ -3963,6 +4263,7 @@ function renderActivityTab(activite){
           if(type === 'defisClassement') return (seance.defisMatches||[]).length > 0;
           if(type === 'defisHasard') return Object.keys(seance.hasardWins||{}).length > 0;
           if(type === 'rotation') return (seance.rotationMatches||[]).length > 0;
+          if(type === 'multijoueurs') return (seance.multijoueursMatches||[]).length > 0;
           return false;
         };
         const typeTournoiBtn = (type, label) => {
@@ -3982,6 +4283,7 @@ function renderActivityTab(activite){
               ${typeTournoiBtn('defisClassement', '📈 Défis classement progressif')}
               ${typeTournoiBtn('defisHasard', '🎲 Défis hasard')}
               ${typeTournoiBtn('poule', '🏆 Par poule')}
+              ${act.multijoueursAllowed ? typeTournoiBtn('multijoueurs', '🏐 Multijoueurs') : ''}
             </div>
           </div>`;
       } else if(act.evaluationTechniqueAllowed){
@@ -4039,6 +4341,8 @@ function renderActivityTab(activite){
         tournoiHtml += renderDefisClassementSection(activite);
       } else if(seance.tournamentType === 'rotation'){
         tournoiHtml += renderRotationSection(activite);
+      } else if(seance.tournamentType === 'multijoueurs'){
+        tournoiHtml += renderMultijoueursSection(activite);
       }
 
       // Présence, Type de tournoi, et (pour les activités concernées)
@@ -4197,6 +4501,10 @@ function renderActivityTab(activite){
       } else {
         s.tournamentType = btn.dataset.tournamentType;
         s.contenuMasque = false;
+        // Tournoi à rotation : reprend celui de la séance précédente s'il
+        // n'était pas terminé, plutôt que d'en tirer un nouveau à vide (voir
+        // reporterRotationSeancePrecedente).
+        if(btn.dataset.tournamentType === 'rotation') reporterRotationSeancePrecedente(activite);
       }
       saveState();
       renderActivityTab(activite);
@@ -4468,6 +4776,37 @@ function renderActivityTab(activite){
   });
   const btnExportRotation = q('#btnExportRotation');
   if(btnExportRotation) btnExportRotation.addEventListener('click', ()=>exportRotationMatchesExcel(activite));
+
+  const btnGenererPoulesMulti = q('#btnGenererPoulesMulti');
+  if(btnGenererPoulesMulti) btnGenererPoulesMulti.addEventListener('click', ()=>onGenererPoulesMultijoueurs(activite));
+  panel.querySelectorAll('[data-taille-equipe-multi]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      currentSeance(activite).multijoueursTailleEquipe = parseInt(btn.dataset.tailleEquipeMulti, 10);
+      saveState();
+      renderActivityTab(activite);
+    });
+  });
+  wireCheckboxRange(panel, 'multijoueursTaillePouleCbGroup', (v)=>{
+    currentSeance(activite).multijoueursTaillePoule = v;
+    saveState();
+  });
+  panel.querySelectorAll('[data-move-participant-multi]').forEach(sel=>{
+    sel.addEventListener('change', ()=>moveParticipantMultijoueurs(activite, sel.dataset.moveParticipantMulti, sel.value));
+  });
+  panel.querySelectorAll('[data-generer-matchs-multi]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const pouleId = btn.dataset.genererMatchsMulti;
+      const dejaDesMatchs = currentSeance(activite).multijoueursMatches.some(m=>m.pouleId===pouleId);
+      if(dejaDesMatchs && !confirm("Régénérer les matchs de cette poule effacera les résultats déjà enregistrés. Continuer ?")) return;
+      genererMultijoueursMatches(activite, pouleId);
+    });
+  });
+  panel.querySelectorAll('[data-open-score-multi]').forEach(row=>{
+    row.addEventListener('click', ()=> openScoreModalMultijoueurs(activite, parseInt(row.dataset.openScoreMulti, 10)));
+  });
+  panel.querySelectorAll('[data-export-fiche-multi]').forEach(btn=>{
+    btn.addEventListener('click', ()=>exportFicheObservationMultijoueurs(activite, btn.dataset.exportFicheMulti));
+  });
 }
 
 // Chaque motif d'exclusion a le même effet (l'élève ne joue pas) mais un
@@ -4923,7 +5262,11 @@ function computeSeanceDefisWins(seance){
     (seance.defisMatches||[]).forEach(m=>{ if(m.winner) tally[m.winner] = (tally[m.winner]||0) + 1; });
   } else if(seance.tournamentType === 'rotation'){
     tally = {};
-    (seance.rotationMatches||[]).forEach(m=>{ if(m.winner) tally[m.winner] = (tally[m.winner]||0) + 1; });
+    // m.reporte : match repris d'une séance précédente déjà joué (voir
+    // reporterRotationSeancePrecedente) — exclu ici pour ne pas compter deux
+    // fois la même victoire (elle est déjà comptée dans la séance où elle a
+    // réellement été jouée).
+    (seance.rotationMatches||[]).forEach(m=>{ if(m.winner && !m.reporte) tally[m.winner] = (tally[m.winner]||0) + 1; });
   } else return {};
   if(seance.winsOverride){
     Object.keys(seance.winsOverride).forEach(id=>{ tally[id] = seance.winsOverride[id]; });
@@ -5947,13 +6290,28 @@ function renderRotationSection(activite){
     // attribuerArbitresRotation. Pas d'arbitre désigné = auto-arbitrage.
     const refereeLabel = m.referee ? participantLabel(activite, m.referee) : 'Auto-arbitrage';
     const membresReferee = m.referee ? participantMembresLabel(activite, m.referee) : '';
+    // m.reporte : match déjà joué lors de la séance précédente, repris tel
+    // quel (voir reporterRotationSeancePrecedente) — affiché en lecture seule
+    // (pas de data-set-winner-rotation : pour corriger, retourner sur la
+    // séance où il a été joué) avec un badge distinct des matchs pas encore
+    // joués, qui sont eux mis en évidence pour signaler le travail restant.
+    const carteClasse = m.reporte ? 'match-deja-joue' : (m.winner ? '' : 'match-a-faire');
+    const badgeReport = m.reporte ? '<span class="badge-deja-joue">✅ Déjà joué (séance précédente)</span>'
+      : (!m.winner ? '<span class="badge-a-faire">🟠 À faire</span>' : '');
+    const btnA = m.reporte
+      ? `<div class="btn ${m.winner===m.a?'':'ghost'}" style="cursor:default;">${iconA} ${nomA}${membresA?`<span class="team-members-inline">${membresA}</span>`:''}</div>`
+      : `<button class="btn ${m.winner===m.a?'':'ghost'}" data-set-winner-rotation="${m.id}::${m.a}">${iconA} ${nomA}${membresA?`<span class="team-members-inline">${membresA}</span>`:''}</button>`;
+    const btnB = m.reporte
+      ? `<div class="btn ${m.winner===m.b?'':'ghost'}" style="cursor:default;">${iconB} ${nomB}${membresB?`<span class="team-members-inline">${membresB}</span>`:''}</div>`
+      : `<button class="btn ${m.winner===m.b?'':'ghost'}" data-set-winner-rotation="${m.id}::${m.b}">${iconB} ${nomB}${membresB?`<span class="team-members-inline">${membresB}</span>`:''}</button>`;
     return `
-      <div class="poule-card">
+      <div class="poule-card ${carteClasse}">
         <h4>${act.terrainLabel.replace(/s$/,'')} ${m.terrain}</h4>
         ${badgePhase}
-        <button class="btn ${m.winner===m.a?'':'ghost'}" data-set-winner-rotation="${m.id}::${m.a}">${iconA} ${nomA}${membresA?`<span class="team-members-inline">${membresA}</span>`:''}</button>
+        ${badgeReport}
+        ${btnA}
         <div class="hint" style="text-align:center;margin:4px 0;">contre</div>
-        <button class="btn ${m.winner===m.b?'':'ghost'}" data-set-winner-rotation="${m.id}::${m.b}">${iconB} ${nomB}${membresB?`<span class="team-members-inline">${membresB}</span>`:''}</button>
+        ${btnB}
         <div class="arbitre-label">🧑‍⚖️ Arbitre : <b>${refereeLabel}</b>${membresReferee?` <span class="muted">(${membresReferee})</span>`:''}</div>
       </div>`;
   }).join('');
@@ -5975,21 +6333,31 @@ function renderRotationSection(activite){
       const nomB = participantLabel(activite, m.b);
       const phaseLabel = m.phase === 'interne' ? (m.groupe==='fixe' ? '⚔️ Interne (fixes)' : '⚔️ Interne (tournants)') : '📍🔄 Croisé';
       const arbitre = m.referee ? participantLabel(activite, m.referee) : 'Auto-arbitrage';
+      // Reporté d'une séance précédente : lecture seule ici (voir le même
+      // choix pour les cartes de match ci-dessus).
+      const celluleA = m.reporte ? `<b>${nomA}</b>` : `<button class="btn small ${m.winner===m.a?'':'ghost'}" data-corriger-vainqueur-rotation="${m.id}::${m.a}">${nomA}</button>`;
+      const celluleB = m.reporte ? `<b>${nomB}</b>` : `<button class="btn small ${m.winner===m.b?'':'ghost'}" data-corriger-vainqueur-rotation="${m.id}::${m.b}">${nomB}</button>`;
       return `
-      <tr>
+      <tr class="${m.reporte?'ligne-reportee':''}">
         <td>${numero}</td>
         <td>Tour ${m.tour}</td>
         <td>${act.terrainLabel.replace(/s$/,'')} ${m.terrain}</td>
-        <td>${phaseLabel}</td>
-        <td><button class="btn small ${m.winner===m.a?'':'ghost'}" data-corriger-vainqueur-rotation="${m.id}::${m.a}">${nomA}</button></td>
-        <td><button class="btn small ${m.winner===m.b?'':'ghost'}" data-corriger-vainqueur-rotation="${m.id}::${m.b}">${nomB}</button></td>
+        <td>${phaseLabel}${m.reporte?' <span class="muted">(reporté)</span>':''}</td>
+        <td>${celluleA}</td>
+        <td>${celluleB}</td>
         <td>${arbitre}</td>
       </tr>`;
     }).join('');
 
   const students = STATE.allStudents.filter(s=>s.classe===cd.classe);
+  const nbReportes = seance.rotationMatches.filter(m=>m.reporte).length;
+  const bandeauReport = nbReportes
+    ? `<div class="card" style="margin-bottom:14px;background:#f0fdf4;border-color:#86efac;">
+        <p class="hint" style="margin:0;color:#166534;"><b>📥 Tournoi repris de la séance précédente :</b> ${nbReportes} match${nbReportes>1?'s':''} déjà joué${nbReportes>1?'s':''} (reporté${nbReportes>1?'s':''} tel${nbReportes>1?'s':''} quel${nbReportes>1?'s':''}, ci-dessous en vert), ${seance.rotationMatches.length - nbReportes} restant${seance.rotationMatches.length - nbReportes > 1?'s':''} à faire cette séance (en orange).</p>
+      </div>`
+    : '';
 
-  html += `
+  html += bandeauReport + `
     <div class="card">
       <div class="toolbar">
         <h3>🔁 Tournoi à rotation — Tour ${tourActuel}/${nbTours}</h3>
@@ -6029,6 +6397,166 @@ function renderRotationSection(activite){
       </div>
     </div>`;
   return html;
+}
+
+// Tournoi multijoueurs (Volley uniquement, voir Fonctionnalites.md lignes
+// 79-85) : poules à l'échelle de l'élève, matchs à k contre k avec
+// changement de partenaire à chaque match (voir genererMultijoueursMatches),
+// joueurs non programmés = arbitres.
+function renderMultijoueursSection(activite){
+  const cd = currentClasseData(activite);
+  const seance = currentSeance(activite);
+  const taillePoule = clamp(seance.multijoueursTaillePoule || 6, 4, 12);
+  const tailleEquipe = seance.multijoueursTailleEquipe || 2;
+
+  let html = `
+    <div class="card">
+      <h3>⚙️ Configuration du tournoi multijoueurs</h3>
+      <p class="hint">À l'intérieur de chaque poule, les élèves jouent des matchs à ${tailleEquipe} contre ${tailleEquipe} en changeant de partenaire à chaque match, jusqu'à avoir joué avec tous les autres joueurs de la poule. Les joueurs qui ne jouent pas un match arbitrent.</p>
+      ${checkboxRangeHtml('multijoueursTaillePouleCbGroup', 'Joueurs par poule', 4, 12, taillePoule)}
+      <div class="config-grid" style="margin:10px 0;">
+        <button class="btn ${tailleEquipe===2?'':'ghost'}" data-taille-equipe-multi="2">2 contre 2</button>
+        <button class="btn ${tailleEquipe===3?'':'ghost'}" data-taille-equipe-multi="3">3 contre 3</button>
+        <button class="btn ${tailleEquipe===4?'':'ghost'}" data-taille-equipe-multi="4">4 contre 4</button>
+      </div>
+      <button class="btn" id="btnGenererPoulesMulti">▶️ ${seance.multijoueursPoules.length?'Régénérer':'Générer'} les poules</button>
+      ${seance.multijoueursPoules.length ? '<p class="hint" style="margin-top:6px;">Régénérer efface les poules et les matchs multijoueurs déjà enregistrés pour cette séance.</p>' : ''}
+    </div>`;
+
+  if(!seance.multijoueursPoules.length) return html;
+
+  html += `<div class="poules-grid">` + seance.multijoueursPoules.map(p=>{
+    const absentsDeLaPoule = p.members.filter(id=>seance.absents.includes(id));
+    const matchesPoule = seance.multijoueursMatches.filter(m=>m.pouleId===p.id);
+    const standing = computeMultijoueursPouleStanding(seance, p);
+    const totals = computeMultijoueursPoulePoints(seance, p);
+
+    const membresHtml = `<ul>
+      ${standing.map((mid,rank)=>{
+        const pts = totals[mid]||0;
+        return `<li>${rank+1}. ${participantLabel(activite, mid)} <span class="muted">(${pts}pts)</span>
+          <select data-move-participant-multi="${mid}">
+            ${seance.multijoueursPoules.map(p2=>`<option value="${p2.id}" ${p2.id===p.id?'selected':''}>${p2.nom}</option>`).join('')}
+          </select>
+        </li>`;
+      }).join('')}
+      ${absentsDeLaPoule.map(mid=>`
+        <li style="opacity:.55;text-decoration:line-through;">${participantLabel(activite, mid)} (absent)
+          <select data-move-participant-multi="${mid}">
+            ${seance.multijoueursPoules.map(p2=>`<option value="${p2.id}" ${p2.id===p.id?'selected':''}>${p2.nom}</option>`).join('')}
+          </select>
+        </li>`).join('')}
+    </ul>`;
+
+    const matchesHtml = matchesPoule.length ? matchesPoule.map((m,idx)=>{
+      const globalIdx = seance.multijoueursMatches.indexOf(m);
+      const joue = m.pointsA !== undefined && m.pointsA !== null;
+      const scoreLabel = m.abandon ? '(abandon)' : (joue ? `${m.scoreA} - ${m.scoreB}` : 'vs');
+      const arbitresLabel = m.referees.length ? m.referees.map(id=>participantLabel(activite, id)).join(', ') : 'tout le monde joue';
+      return `
+      <div class="match-row" data-open-score-multi="${globalIdx}">
+        <span class="tour-badge">Match ${idx+1}</span>
+        <span class="match-name ${m.winner==='A'?'winner':''}">${labelEquipeAdHoc(activite, m.equipeA)}</span>
+        <span class="hint" style="margin:0 4px;">${scoreLabel}</span>
+        <span class="match-name ${m.winner==='B'?'winner':''}">${labelEquipeAdHoc(activite, m.equipeB)}</span>
+        ${joue ? `<span class="hint">(${m.pointsA}/${m.pointsB} pts)</span>` : ''}
+        <div class="hint" style="width:100%;margin:2px 0 0;">🧑‍⚖️ Arbitres : ${arbitresLabel}</div>
+      </div>`;
+    }).join('') : '<p class="hint" style="margin:6px 0 0;">Pas encore de matchs générés pour cette poule.</p>';
+
+    return `
+    <div class="poule-card">
+      <h4>${p.nom} (${p.members.length})</h4>
+      ${membresHtml}
+      <button class="btn secondary small" style="margin-top:8px;" data-generer-matchs-multi="${p.id}">📅 ${matchesPoule.length?'Régénérer':'Générer'} les matchs</button>
+      ${matchesPoule.length ? `<button class="btn secondary small" style="margin-top:4px;" data-export-fiche-multi="${p.id}">📊 Exporter la fiche d'observation</button>` : ''}
+      <div style="margin-top:10px;">${matchesHtml}</div>
+    </div>`;
+  }).join('') + `</div>`;
+
+  // Classement combiné de la séance : hiérarchie des poules d'abord (poule 1
+  // meilleure que poule 2...), points à l'intérieur de la poule ensuite —
+  // même logique que computeClassementPouleGeneral mais pour cette seule
+  // séance (le cumul inter-séances reste porté par cd.multijoueursPoints en
+  // coulisse, pour la continuité).
+  const pouleIndexParEleve = {};
+  seance.multijoueursPoules.forEach((p,pi)=>{ p.members.forEach(id=>{ pouleIndexParEleve[id]=pi; }); });
+  const totalParEleve = computeSeanceMultijoueursPointsParEleve(seance);
+  const tousLesMembres = seance.multijoueursPoules.flatMap(p=>p.members).filter(id=>!seance.absents.includes(id));
+  const classementRows = tousLesMembres.slice().sort((a,b)=>{
+    const pa = pouleIndexParEleve[a], pb = pouleIndexParEleve[b];
+    if(pa !== pb) return pa - pb;
+    return (totalParEleve[b]||0) - (totalParEleve[a]||0);
+  }).map((id,i)=>`
+    <tr>
+      <td><b>${i+1}</b></td>
+      <td>${participantLabel(activite, id)}</td>
+      <td>${seance.multijoueursPoules[pouleIndexParEleve[id]].nom}</td>
+      <td>${totalParEleve[id]||0}</td>
+    </tr>`).join('');
+
+  html += `
+    <div class="card" style="margin-top:14px;">
+      <h4 style="margin:0 0 8px;">🏅 Classement de la séance</h4>
+      <p class="hint">Trié d'abord par poule (poule 1 meilleure), puis par points marqués dans la poule.</p>
+      <div class="table-wrap">
+        <table class="classement-table">
+          <thead><tr>
+            <th style="background:${PALETTE[0]}">Rang</th>
+            <th style="background:${PALETTE[1]}">Nom Prénom</th>
+            <th style="background:${PALETTE[2]}">Poule</th>
+            <th style="background:${PALETTE[3]}">Points</th>
+          </tr></thead>
+          <tbody>${classementRows}</tbody>
+        </table>
+      </div>
+    </div>`;
+  return html;
+}
+// Fiche d'observation (voir image fournie par l'utilisatrice) : reflète
+// l'état courant des données (vide si pas encore joué). 2 feuilles : grille
+// arbitrage + classement, et détail des matchs.
+function exportFicheObservationMultijoueurs(activite, pouleId){
+  const cd = currentClasseData(activite);
+  const seance = currentSeance(activite);
+  const poule = seance.multijoueursPoules.find(p=>p.id===pouleId);
+  if(!cd || !poule) return;
+  const matchesPoule = seance.multijoueursMatches.filter(m=>m.pouleId===pouleId);
+  if(!matchesPoule.length) return;
+  const standing = computeMultijoueursPouleStanding(seance, poule);
+  const totals = computeMultijoueursPoulePoints(seance, poule);
+  const rang = {};
+  standing.forEach((id,i)=>{ rang[id] = i+1; });
+
+  const rowsGrille = poule.members.map((id,i)=>{
+    const row = { 'N°': i+1, 'Nom Prénom': participantLabel(activite, id) };
+    matchesPoule.forEach((m,mi)=>{ row['Match '+(mi+1)] = m.referees.includes(id) ? 'ARB' : ''; });
+    row['Total points'] = totals[id] || 0;
+    row['Classement'] = rang[id] || '';
+    return row;
+  });
+
+  const resultatLabel = (m)=>{
+    if(m.abandon) return m.abandon==='A' ? 'Abandon équipe A' : 'Abandon équipe B';
+    if(m.winner === 'A') return 'Victoire équipe A';
+    if(m.winner === 'B') return 'Victoire équipe B';
+    if(m.winner === null && m.pointsA !== null && m.pointsA !== undefined) return 'Match nul';
+    return '';
+  };
+  const rowsMatchs = matchesPoule.map((m,i)=>({
+    'Match': i+1,
+    'Équipe A': labelEquipeAdHoc(activite, m.equipeA),
+    'Équipe B': labelEquipeAdHoc(activite, m.equipeB),
+    'Score A': m.scoreA !== null && m.scoreA !== undefined ? m.scoreA : '',
+    'Score B': m.scoreB !== null && m.scoreB !== undefined ? m.scoreB : '',
+    'Résultat': resultatLabel(m),
+    'Arbitres': m.referees.map(id=>participantLabel(activite, id)).join(', '),
+  }));
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rowsGrille), 'Grille');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rowsMatchs), 'Matchs');
+  XLSX.writeFile(wb, `fiche_observation_multijoueurs_${slug(activite)}_${slug(cd.classe)}_${slug(poule.nom)}_seance${seance.numero}.xlsx`);
 }
 
 /* -------------------------------------------------------------- INIT -- */

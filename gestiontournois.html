@@ -147,8 +147,8 @@
     font-weight:800;font-size:1.15rem;text-transform:uppercase;letter-spacing:.02em;
   }
   .seance-tab-date-input{
-    border:none;background:transparent;color:inherit;font-size:.68rem;font-weight:600;
-    opacity:.85;cursor:pointer;padding:0;width:64px;text-align:center;font-family:inherit;
+    border:none;background:transparent;color:inherit;font-size:.78rem;font-weight:600;
+    opacity:.85;cursor:pointer;padding:0;width:86px;text-align:center;font-family:inherit;
   }
   .seance-tab-date-input:hover{opacity:1;}
   .seance-tab-item.active .seance-tab-date-input::-webkit-calendar-picker-indicator{filter:invert(1);}
@@ -2354,6 +2354,18 @@ function participantLabel(activite, id){
   }
   const s = STATE.allStudents.find(s=>s.id===id);
   return s ? s.nomPrenom : id;
+}
+// Version raccourcie "Nom Prénom" (le 1er segment du nom de famille avant un
+// éventuel tiret, ex. "NJILAMULE-KANIONGA" -> "NJILAMULE") pour les
+// affichages compacts où le prénom doit rester visible (ex. cartes de match
+// multijoueurs, voir .match-multi-equipe) — jamais utilisée pour les exports
+// ou listes officielles, qui gardent le nom complet.
+function participantLabelCourt(activite, id){
+  const label = participantLabel(activite, id);
+  const espace = label.indexOf(' ');
+  if(espace < 0) return label;
+  const nom = label.slice(0, espace).split('-')[0];
+  return nom + ' ' + label.slice(espace+1);
 }
 // Liste des noms des élèves d'une équipe (défis ou poule), pour affichage en
 // plus du nom de l'équipe — '' si l'id ne correspond à aucune équipe (élève
@@ -6707,7 +6719,7 @@ function renderMultijoueursSection(activite){
           const joue = m.pointsA !== undefined && m.pointsA !== null;
           const scoreLabel = m.abandon ? '(abandon)' : (joue ? `${m.scoreA} - ${m.scoreB}` : 'vs');
           const arbitresLabel = m.referees.length ? m.referees.map(id=>participantLabel(activite, id)).join(', ') : 'tout le monde joue';
-          const nomsEquipe = (ids)=>ids.map(id=>`<div>${participantLabel(activite, id)}</div>`).join('');
+          const nomsEquipe = (ids)=>ids.map(id=>`<div>${participantLabelCourt(activite, id)}</div>`).join('');
           return `
           <div class="match-row-multi" data-open-score-multi="${globalIdx}">
             <span class="tour-badge" style="align-self:flex-start;">Match ${idx+1}</span>
@@ -6812,9 +6824,10 @@ function construirePageOrganisationMultijoueurs(activite, cd, seance, poule){
     const scoreFinal = m.abandon ? 'Abandon' : (joue ? `${m.scoreA} - ${m.scoreB}` : '');
     return `
     <table class="orga-match-table">
-      <tr><th colspan="2">Joueurs</th><th colspan="${MULTIJOUEURS_SCORE_MAX_FICHE}"></th><th>SCORE<br>FINAL</th></tr>
+      <tr><th colspan="3">Joueurs</th><th colspan="${MULTIJOUEURS_SCORE_MAX_FICHE}"></th><th>SCORE<br>FINAL</th></tr>
       <tr>
-        <td class="orga-match-label" rowspan="2">Match ${i+1}<div class="orga-contre-chip">CONTRE</div></td>
+        <td class="orga-match-label" rowspan="2">Match ${i+1}</td>
+        <td class="orga-contre-cell" rowspan="2">CONTRE</td>
         <td class="orga-equipe-cell">${labelA}</td>
         ${ligneScore(m.scoreA)}
         <td class="orga-score-final" rowspan="2">${scoreFinal}</td>
@@ -6825,12 +6838,13 @@ function construirePageOrganisationMultijoueurs(activite, cd, seance, poule){
       </tr>
     </table>`;
   }).join('');
-  // Une seule colonne jusqu'à 8 matchs (lignes plus hautes, plus lisibles,
-  // la page A4 est utilisée sur toute sa hauteur) ; au-delà, 2 colonnes pour
-  // ne pas déborder sur une 2e page. Grille CSS (pas "columns:", qui fait
-  // se chevaucher les tableaux avec rowspan à l'impression) : les blocs
-  // s'enchaînent ligne par ligne, sans bug de répartition automatique.
-  const colonnes = matchesPoule.length <= 8 ? 1 : 2;
+  // Toujours 1 seule colonne, quel que soit le nombre de matchs : une poule
+  // avec beaucoup de matchs déborde simplement sur une 2e page imprimée (le
+  // navigateur la découpe tout seul), plutôt que de passer à 2 colonnes —
+  // cette mise en page à 2 colonnes provoquait des chevauchements de texte
+  // à l'impression. Toutes les pages gardent ainsi exactement la même
+  // organisation, quelle que soit la poule.
+  const colonnes = 1;
   const dateLabel = formatDateSeance(seance.dateCreation);
 
   return `
@@ -6901,8 +6915,8 @@ function imprimerOrganisationMultijoueursSeance(activite){
       table.orga-match-table{border-collapse:collapse;width:100%;table-layout:fixed;break-inside:avoid;font-size:.85rem;}
       table.orga-match-table th, table.orga-match-table td{border:1px solid #333;text-align:center;padding:0;height:30px;}
       table.orga-match-table th{background:#f3f4f6;font-size:.8rem;}
-      .orga-match-label{width:58px;font-weight:bold;color:#1d4ed8;background:#eef2ff;font-size:.78rem;line-height:1.3;}
-      .orga-contre-chip{font-size:.62rem;color:#666;border:1px solid #999;border-radius:4px;margin-top:2px;padding:1px 0;}
+      .orga-match-label{width:50px;font-weight:bold;color:#1d4ed8;background:#eef2ff;font-size:.78rem;line-height:1.3;}
+      .orga-contre-cell{width:48px;font-weight:bold;color:#666;background:#f8fafc;font-size:.68rem;}
       .orga-equipe-cell{font-weight:bold;width:42px;font-size:.95rem;}
       .orga-score-final{width:70px;font-weight:bold;font-size:.95rem;}
       .orga-score-atteint{background:#1d4ed8;color:#fff;font-weight:bold;}

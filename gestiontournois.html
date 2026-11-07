@@ -870,13 +870,31 @@ function defaultClasseData(classe, activite){
 function defaultActivityData(){
   return { classes:{}, currentClasse:'' };
 }
+// Texte par défaut de l'encadré "Règles" de la fiche imprimée du tournoi
+// multijoueurs (Volley) — modifiable par l'utilisatrice (voir
+// STATE.reglesMultijoueurs et le champ dans renderMultijoueursSection).
+const REGLES_MULTIJOUEURS_DEFAUT = `Service cuillière derrière la ligne fond de court
+1 touche par personne
+3 passes autorisées
+2 services chacun
+Rotation à chaque fois que l'on récupère le service
+La première équipe arrivée à 15 gagne le match
+1 seul blocage par échange
+
+Points gagnants : renvoi 1 touche = 1 pt, renvoi avec blocage = 2 pts, renvoi en 2/3 touches = 3 pts.`;
 let STATE = {
   allStudents: [],     // {id, nomPrenom, classe, sexe} — toute la liste chargée depuis le Sheet
   activityData: {},    // activité -> { classes: {classeName: classeData}, currentClasse }
   listeElevesVisible: true, // onglet Général : afficher/masquer le tableau des élèves
+  // Texte libre affiché dans l'encadré "Règles" de la fiche imprimée du
+  // tournoi multijoueurs — commun à toutes les classes (le règlement d'un
+  // sport ne change pas d'une classe à l'autre), modifiable depuis l'onglet
+  // Paramètres du tournoi multijoueurs.
+  reglesMultijoueurs: REGLES_MULTIJOUEURS_DEFAUT,
 };
 function ensureActivityData(){
   if(STATE.listeElevesVisible === undefined) STATE.listeElevesVisible = true;
+  if(STATE.reglesMultijoueurs === undefined) STATE.reglesMultijoueurs = REGLES_MULTIJOUEURS_DEFAUT;
   Object.keys(ACTIVITIES).forEach(a=>{
     if(!STATE.activityData[a]) STATE.activityData[a] = defaultActivityData();
     if(!STATE.activityData[a].classes) STATE.activityData[a].classes = {};
@@ -1105,6 +1123,11 @@ function slug(s){
   return String(s || '')
     .normalize('NFD').replace(/[̀-ͯ]/g,'')
     .toLowerCase().replace(/[^a-z0-9]+/g,'');
+}
+// Échappe le texte libre saisi par l'utilisatrice (ex. STATE.reglesMultijoueurs)
+// avant insertion dans du HTML généré par template literal.
+function escapeHtml(s){
+  return String(s || '').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 function normalizeSexe(v){
   const s = String(v || '').trim().toUpperCase();
@@ -4881,6 +4904,18 @@ function renderActivityTab(activite){
 
   const btnGenererPoulesMulti = q('#btnGenererPoulesMulti');
   if(btnGenererPoulesMulti) btnGenererPoulesMulti.addEventListener('click', ()=>onGenererPoulesMultijoueurs(activite));
+  const txtReglesMultijoueurs = q('#txtReglesMultijoueurs');
+  if(txtReglesMultijoueurs) txtReglesMultijoueurs.addEventListener('change', ()=>{
+    STATE.reglesMultijoueurs = txtReglesMultijoueurs.value;
+    saveState();
+  });
+  const btnReinitReglesMultijoueurs = q('#btnReinitReglesMultijoueurs');
+  if(btnReinitReglesMultijoueurs) btnReinitReglesMultijoueurs.addEventListener('click', ()=>{
+    if(!confirm('Remplacer le texte actuel par le texte par défaut ?')) return;
+    STATE.reglesMultijoueurs = REGLES_MULTIJOUEURS_DEFAUT;
+    saveState();
+    renderActivityTab(activite);
+  });
   panel.querySelectorAll('[data-taille-equipe-multi]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       currentSeance(activite).multijoueursTailleEquipe = parseInt(btn.dataset.tailleEquipeMulti, 10);
@@ -6592,6 +6627,12 @@ function renderMultijoueursSection(activite){
       </div>
       <button class="btn" id="btnGenererPoulesMulti">▶️ ${seance.multijoueursPoules.length?'Régénérer':'Générer'} les poules</button>
       ${seance.multijoueursPoules.length ? '<p class="hint" style="margin-top:6px;">Régénérer efface les poules et les matchs multijoueurs déjà enregistrés pour cette séance.</p>' : ''}
+    </div>
+    <div class="card">
+      <h3>📋 Règles affichées sur la fiche imprimée</h3>
+      <p class="hint">Ce texte apparaît dans l'encadré « Règles » de la fiche d'organisation des matchs (commun à toutes les classes, pas besoin de le ressaisir à chaque séance).</p>
+      <textarea id="txtReglesMultijoueurs" rows="9" style="width:100%;font-family:inherit;font-size:.85rem;padding:8px;border:1px solid var(--line);border-radius:8px;">${escapeHtml(STATE.reglesMultijoueurs || REGLES_MULTIJOUEURS_DEFAUT)}</textarea>
+      <button class="btn secondary small" id="btnReinitReglesMultijoueurs" style="margin-top:6px;">↩️ Réinitialiser le texte par défaut</button>
     </div>`;
 
   if(!seance.multijoueursPoules.length) return { params, matchs: '' };
@@ -6717,11 +6758,12 @@ function construirePageOrganisationMultijoueurs(activite, cd, seance, poule){
   const legende = legendeNumerosMultijoueurs(activite, poule);
   const numeroParId = {};
   legende.forEach(l=>{ numeroParId[l.id] = l.numero; });
-  const totals = computeMultijoueursPoulePoints(seance, poule);
-  const rang = {};
-  computeMultijoueursPouleStanding(seance, poule).forEach((id,i)=>{ rang[id] = i+1; });
 
   const enteteMatchsCols = matchesPoule.map((m,i)=>`<th>Match ${i+1}</th>`).join('');
+  // Total points / Classement : laissés vides volontairement (à remplir à la
+  // main par l'observateur), plutôt que pré-remplis avec des valeurs qui
+  // n'ont de sens qu'une fois tous les matchs joués (ex. tout à 0 avant le
+  // début de la séance).
   const grilleRows = legende.map((l,i)=>{
     const cellsMatchs = matchesPoule.map(m=>`<td>${m.referees.includes(l.id)?'ARB':''}</td>`).join('');
     return `<tr>
@@ -6729,8 +6771,8 @@ function construirePageOrganisationMultijoueurs(activite, cd, seance, poule){
       <td class="orga-num-cell">${l.numero}</td>
       <td class="orga-nom-cell">${l.nom}</td>
       ${cellsMatchs}
-      <td>${totals[l.id]||0}</td>
-      <td>${rang[l.id]||''}</td>
+      <td></td>
+      <td></td>
     </tr>`;
   }).join('');
 
@@ -6756,7 +6798,10 @@ function construirePageOrganisationMultijoueurs(activite, cd, seance, poule){
       </tr>
     </table>`;
   }).join('');
-  const colonnes = matchesPoule.length <= 4 ? 1 : (matchesPoule.length <= 10 ? 2 : 3);
+  // Une seule colonne jusqu'à 8 matchs (lignes plus hautes, plus lisibles,
+  // la page A4 est utilisée sur toute sa hauteur) ; au-delà, 2 colonnes pour
+  // ne pas déborder sur une 2e page.
+  const colonnes = matchesPoule.length <= 8 ? 1 : 2;
   const dateLabel = formatDateSeance(seance.dateCreation);
 
   return `
@@ -6774,16 +6819,7 @@ function construirePageOrganisationMultijoueurs(activite, cd, seance, poule){
         </table>
         <div class="orga-regles">
           <h3>Règles :</h3>
-          <ul>
-            <li>Service cuillière derrière la ligne fond de court</li>
-            <li>1 touche par personne</li>
-            <li>3 passes autorisées</li>
-            <li>2 services chacun</li>
-            <li>Rotation à chaque fois que l'on récupère le service</li>
-            <li>La première équipe arrivée à 15 gagne le match</li>
-            <li>1 seul blocage par échange</li>
-          </ul>
-          <p class="orga-points-gagnants"><b>Points gagnants :</b> renvoi 1 touche = 1 pt, renvoi avec blocage = 2 pts, renvoi en 2/3 touches = 3 pts.</p>
+          <p class="orga-regles-texte">${escapeHtml(STATE.reglesMultijoueurs || REGLES_MULTIJOUEURS_DEFAUT).replace(/\n/g,'<br>')}</p>
         </div>
       </div>
       <p class="orga-bareme"><b>Victoire = 4 points</b> &nbsp;&nbsp; <b>Nul = 2 points</b> &nbsp;&nbsp; <b>Défaite = 1 point</b> &nbsp;&nbsp; <b>Abandon = 0 point</b></p>
@@ -6807,30 +6843,32 @@ function imprimerOrganisationMultijoueursSeance(activite){
   w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Organisation des matchs multijoueurs — ${cd.classe}</title>
     <style>
       @page{ size: portrait; margin: 8mm; }
-      body{font-family:Arial, Helvetica, sans-serif;color:#111;margin:0;}
-      .feuille-page{page-break-after:always;padding:4px;}
-      .orga-entete{display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid #111;padding-bottom:4px;margin-bottom:6px;}
-      .orga-entete h1{font-size:1rem;margin:0;}
-      .orga-entete span{font-size:.75rem;}
-      .orga-haut{display:flex;gap:10px;align-items:flex-start;margin-bottom:6px;}
-      table.orga-grille{border-collapse:collapse;font-size:.6rem;flex:1 1 auto;}
-      table.orga-grille th, table.orga-grille td{border:1px solid #333;padding:1px 3px;text-align:center;}
+      body{font-family:Arial, Helvetica, sans-serif;color:#111;margin:0;height:100%;}
+      /* La page occupe toute la hauteur disponible (voir demande : "page A4
+         entièrement utilisée, lignes plus hautes, lisible pour
+         l'observateur") plutôt qu'un contenu minimaliste groupé en haut. */
+      .feuille-page{page-break-after:always;padding:6px;min-height:277mm;display:flex;flex-direction:column;}
+      .orga-entete{display:flex;justify-content:space-between;align-items:baseline;border-bottom:3px solid #111;padding-bottom:6px;margin-bottom:12px;}
+      .orga-entete h1{font-size:1.5rem;margin:0;}
+      .orga-entete span{font-size:1.05rem;}
+      .orga-haut{display:flex;gap:16px;align-items:flex-start;margin-bottom:14px;}
+      table.orga-grille{border-collapse:collapse;font-size:1rem;flex:1 1 auto;}
+      table.orga-grille th, table.orga-grille td{border:1px solid #333;padding:6px 8px;text-align:center;height:30px;}
       table.orga-grille thead th{background:#f3f4f6;font-weight:bold;}
-      .orga-terrain-cell{width:14px;}
+      .orga-terrain-cell{width:24px;}
       .orga-nom-cell{text-align:left;white-space:nowrap;font-weight:600;}
-      .orga-regles{flex:0 0 220px;font-size:.6rem;border:1px solid #333;padding:4px 6px;}
-      .orga-regles h3{margin:0 0 2px;font-size:.68rem;text-decoration:underline;}
-      .orga-regles ul{margin:0 0 4px;padding-left:14px;}
-      .orga-points-gagnants{margin:0;}
-      .orga-bareme{font-size:.68rem;margin:2px 0 6px;}
-      .orga-matchs-blocs{column-gap:10px;}
-      table.orga-match-table{border-collapse:collapse;width:100%;table-layout:fixed;margin-bottom:6px;break-inside:avoid;font-size:.52rem;}
-      table.orga-match-table th, table.orga-match-table td{border:1px solid #333;text-align:center;padding:0;height:11px;}
-      table.orga-match-table th{background:#f3f4f6;font-size:.55rem;}
-      .orga-match-label{width:38px;font-weight:bold;color:#1d4ed8;background:#eef2ff;font-size:.5rem;}
-      .orga-contre-chip{font-size:.42rem;color:#666;border:1px solid #999;border-radius:3px;margin-top:1px;}
-      .orga-equipe-cell{font-weight:bold;width:26px;}
-      .orga-score-final{width:46px;font-weight:bold;}
+      .orga-regles{flex:0 0 280px;font-size:.95rem;border:1px solid #333;padding:8px 10px;line-height:1.45;}
+      .orga-regles h3{margin:0 0 4px;font-size:1.05rem;text-decoration:underline;}
+      .orga-regles-texte{margin:0;}
+      .orga-bareme{font-size:1.1rem;margin:4px 0 14px;}
+      .orga-matchs-blocs{column-gap:20px;flex:1 1 auto;}
+      table.orga-match-table{border-collapse:collapse;width:100%;table-layout:fixed;margin-bottom:16px;break-inside:avoid;font-size:.85rem;}
+      table.orga-match-table th, table.orga-match-table td{border:1px solid #333;text-align:center;padding:0;height:30px;}
+      table.orga-match-table th{background:#f3f4f6;font-size:.8rem;}
+      .orga-match-label{width:58px;font-weight:bold;color:#1d4ed8;background:#eef2ff;font-size:.78rem;line-height:1.3;}
+      .orga-contre-chip{font-size:.62rem;color:#666;border:1px solid #999;border-radius:4px;margin-top:2px;padding:1px 0;}
+      .orga-equipe-cell{font-weight:bold;width:42px;font-size:.95rem;}
+      .orga-score-final{width:70px;font-weight:bold;font-size:.95rem;}
       .orga-score-atteint{background:#1d4ed8;color:#fff;font-weight:bold;}
     </style>
     </head><body>${pages.join('')}</body></html>`);

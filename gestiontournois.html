@@ -272,6 +272,23 @@
   .match-row:last-child{border-bottom:none;}
   .match-name{font-weight:600;}
   .match-name.winner{color:var(--ok);text-decoration:underline;}
+  /* Tournoi multijoueurs : équipes ad hoc à 2/3/4 joueurs — les 2 équipes
+     d'un match face à face, chaque binôme/trinôme empilé verticalement
+     (un joueur par ligne) plutôt que listé en ligne avec des "+", pour
+     rester lisible même avec des noms longs. */
+  .match-row-multi{
+    display:flex;flex-direction:column;gap:4px;cursor:pointer;
+    padding:8px 6px;border-bottom:1px dashed var(--line);font-size:.8rem;border-radius:6px;
+  }
+  .match-row-multi:hover{background:#eef2ff;}
+  .match-row-multi:last-child{border-bottom:none;}
+  .match-multi-core{display:flex;align-items:center;gap:10px;width:100%;}
+  .match-multi-equipe{flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:2px;font-weight:600;}
+  .match-multi-equipe > div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .match-multi-equipe.equipe-a{text-align:right;}
+  .match-multi-equipe.equipe-b{text-align:left;}
+  .match-multi-equipe.winner{color:var(--ok);text-decoration:underline;}
+  .match-multi-vs{flex:0 0 auto;font-size:.72rem;font-weight:700;color:var(--muted);text-align:center;}
   .arbitre-label{
     margin-top:8px;padding:5px 8px;border-radius:7px;background:#fff7ed;
     color:#9a3412;font-size:.85rem;font-weight:600;
@@ -6690,13 +6707,15 @@ function renderMultijoueursSection(activite){
           const joue = m.pointsA !== undefined && m.pointsA !== null;
           const scoreLabel = m.abandon ? '(abandon)' : (joue ? `${m.scoreA} - ${m.scoreB}` : 'vs');
           const arbitresLabel = m.referees.length ? m.referees.map(id=>participantLabel(activite, id)).join(', ') : 'tout le monde joue';
+          const nomsEquipe = (ids)=>ids.map(id=>`<div>${participantLabel(activite, id)}</div>`).join('');
           return `
-          <div class="match-row" data-open-score-multi="${globalIdx}">
-            <span class="tour-badge">Match ${idx+1}</span>
-            <span class="match-name ${m.winner==='A'?'winner':''}">${labelEquipeAdHoc(activite, m.equipeA)}</span>
-            <span class="hint" style="margin:0 4px;">${scoreLabel}</span>
-            <span class="match-name ${m.winner==='B'?'winner':''}">${labelEquipeAdHoc(activite, m.equipeB)}</span>
-            ${joue ? `<span class="hint">(${m.pointsA}/${m.pointsB} pts)</span>` : ''}
+          <div class="match-row-multi" data-open-score-multi="${globalIdx}">
+            <span class="tour-badge" style="align-self:flex-start;">Match ${idx+1}</span>
+            <div class="match-multi-core">
+              <div class="match-multi-equipe equipe-a ${m.winner==='A'?'winner':''}">${nomsEquipe(m.equipeA)}</div>
+              <div class="match-multi-vs">${scoreLabel}${joue ? `<br>(${m.pointsA}/${m.pointsB} pts)` : ''}</div>
+              <div class="match-multi-equipe equipe-b ${m.winner==='B'?'winner':''}">${nomsEquipe(m.equipeB)}</div>
+            </div>
             <div class="hint" style="width:100%;margin:2px 0 0;">🧑‍⚖️ Arbitres : ${arbitresLabel}</div>
           </div>`;
         }).join('') : '<p class="hint" style="margin:6px 0 0;">Pas encore de matchs générés pour cette poule.</p>';

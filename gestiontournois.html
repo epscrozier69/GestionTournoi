@@ -717,6 +717,31 @@ const PALETTE = ['#2563eb','#7c3aed','#db2777','#ea580c','#dc2626','#0891b2','#4
 // le reste des données (ni sauvegardé, ni par séance : juste pour alléger la
 // présentation en n'affichant qu'un bloc à la fois).
 const SOUS_ONGLET_SEANCE = {};
+// Même principe, un niveau plus bas : À L'INTÉRIEUR du tournoi actuellement
+// sélectionné (poule, défis, rotation, multijoueurs...), sous-onglets
+// "Paramètres" (constitution des équipes/poules + réglages) et "Matchs et
+// résultats" (les matchs à faire + le classement) — voir
+// renderSousOngletsTournoi. Un seul choix par activité (pas par type de
+// tournoi) : changer de type de tournoi garde le sous-onglet déjà choisi.
+const SOUS_ONGLET_TOURNOI = {};
+// Enrobe {params, matchs} (renvoyés par renderRotationSection,
+// renderDefisHasardSection, renderDefisClassementSection,
+// renderMultijoueursSection, ou construits à la volée pour le tournoi par
+// poule) avec la barre de sous-onglets Paramètres / Matchs et résultats.
+function renderSousOngletsTournoi(activite, parametresHtml, matchsHtml){
+  if(!SOUS_ONGLET_TOURNOI[activite]) SOUS_ONGLET_TOURNOI[activite] = 'parametres';
+  const sousOnglet = SOUS_ONGLET_TOURNOI[activite];
+  // Rien à montrer tant que la configuration (équipes/poules/tournoi) n'a pas
+  // été faite : un message renvoie vers l'onglet Paramètres plutôt qu'un
+  // panneau vide.
+  const matchsAffiches = matchsHtml || `<div class="card"><p class="hint" style="margin:0;">Configurez puis générez le tournoi dans l'onglet « Paramètres » pour voir les matchs ici.</p></div>`;
+  return `
+    <div class="sub-tab-bar">
+      <button class="sub-tab-btn ${sousOnglet==='parametres'?'active':''}" data-sous-onglet-tournoi="parametres">⚙️ Paramètres</button>
+      <button class="sub-tab-btn ${sousOnglet==='matchs'?'active':''}" data-sous-onglet-tournoi="matchs">📅 Matchs et résultats</button>
+    </div>
+    ${sousOnglet === 'matchs' ? matchsAffiches : parametresHtml}`;
+}
 
 /* ------------------------------------------------------------ STATE --- */
 // Hiérarchie : activité -> classes importées (sous-onglet, n'efface pas les
@@ -4331,18 +4356,21 @@ function renderActivityTab(activite){
         // clic sur l'onglet de la séance déjà affichée.
         tournoiHtml += `<div class="card"><p class="hint" style="margin:0;">👁️‍🗨️ Contenu masqué — recliquez sur le type sélectionné ci-dessus pour l'afficher.</p></div>`;
       } else if(seance.tournamentType === 'poule'){
-        tournoiHtml += renderPouleConfigCard(activite);
-        tournoiHtml += renderTeamsSection(activite);
-        tournoiHtml += renderPoulesSection(activite);
-        tournoiHtml += renderMatchesSection(activite);
+        tournoiHtml += renderSousOngletsTournoi(activite,
+          renderPouleConfigCard(activite) + renderTeamsSection(activite) + renderPoulesSection(activite),
+          renderMatchesSection(activite));
       } else if(seance.tournamentType === 'defisHasard'){
-        tournoiHtml += renderDefisHasardSection(activite);
+        const { params, matchs } = renderDefisHasardSection(activite);
+        tournoiHtml += renderSousOngletsTournoi(activite, params, matchs);
       } else if(seance.tournamentType === 'defisClassement'){
-        tournoiHtml += renderDefisClassementSection(activite);
+        const { params, matchs } = renderDefisClassementSection(activite);
+        tournoiHtml += renderSousOngletsTournoi(activite, params, matchs);
       } else if(seance.tournamentType === 'rotation'){
-        tournoiHtml += renderRotationSection(activite);
+        const { params, matchs } = renderRotationSection(activite);
+        tournoiHtml += renderSousOngletsTournoi(activite, params, matchs);
       } else if(seance.tournamentType === 'multijoueurs'){
-        tournoiHtml += renderMultijoueursSection(activite);
+        const { params, matchs } = renderMultijoueursSection(activite);
+        tournoiHtml += renderSousOngletsTournoi(activite, params, matchs);
       }
 
       // Présence, Type de tournoi, et (pour les activités concernées)
@@ -4396,6 +4424,12 @@ function renderActivityTab(activite){
   panel.querySelectorAll('[data-sous-onglet]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       SOUS_ONGLET_SEANCE[activite] = btn.dataset.sousOnglet;
+      renderActivityTab(activite);
+    });
+  });
+  panel.querySelectorAll('[data-sous-onglet-tournoi]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      SOUS_ONGLET_TOURNOI[activite] = btn.dataset.sousOngletTournoi;
       renderActivityTab(activite);
     });
   });
@@ -5917,14 +5951,15 @@ function renderEquipesDefisSection(activite){
   }
   return html;
 }
+// Retourne {params, matchs} — voir renderSousOngletsTournoi.
 function renderDefisHasardSection(activite){
   const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
   const act = ACTIVITIES[activite];
   const estEquipe = act.type === 'equipe';
   if(estEquipe && !seance.teamsDefis.length){
-    return renderEquipesDefisSection(activite) + `
-      <div class="card"><p class="hint" style="margin:0;">Générez les équipes ci-dessus pour commencer les défis hasard.</p></div>`;
+    return { params: renderEquipesDefisSection(activite) + `
+      <div class="card"><p class="hint" style="margin:0;">Générez les équipes ci-dessus pour commencer les défis hasard.</p></div>`, matchs: '' };
   }
   const students = STATE.allStudents.filter(s=>s.classe===cd.classe && !seance.absents.includes(s.id));
   // Volley : la composition d'équipe change à chaque séance, donc la grille
@@ -5954,11 +5989,15 @@ function renderDefisHasardSection(activite){
       </tr>`;
   }).join('');
 
-  return `
+  const params = `
     ${estEquipe ? renderEquipesDefisSection(activite) : ''}
     <div class="card">
-      <h3>🎲 Défis hasard — Nombre de victoires</h3>
+      <h3>⚙️ Configuration</h3>
       ${checkboxRangeHtml('defisTerrainCbGroup', act.terrainLabel+' disponibles', act.defisTerrainMin, act.defisTerrainMax, seance.defisTerrains || act.defisTerrainMin)}
+    </div>`;
+  const matchs = `
+    <div class="card">
+      <h3>🎲 Défis hasard — Nombre de victoires</h3>
       <p class="hint">Cliquez sur la ligne ${estEquipe ? "d'une équipe" : "d'un élève"} pour lui ajouter une victoire.</p>
       <div class="defis-layout">
         <div class="table-wrap">
@@ -5980,16 +6019,18 @@ function renderDefisHasardSection(activite){
         </div>
       </div>
     </div>`;
+  return { params, matchs };
 }
 
+// Retourne {params, matchs} — voir renderSousOngletsTournoi.
 function renderDefisClassementSection(activite){
   const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
   const act = ACTIVITIES[activite];
   const estEquipe = act.type === 'equipe';
   if(estEquipe && !seance.teamsDefis.length){
-    return renderEquipesDefisSection(activite) + `
-      <div class="card"><p class="hint" style="margin:0;">Générez les équipes ci-dessus pour commencer les défis classement progressif.</p></div>`;
+    return { params: renderEquipesDefisSection(activite) + `
+      <div class="card"><p class="hint" style="margin:0;">Générez les équipes ci-dessus pour commencer les défis classement progressif.</p></div>`, matchs: '' };
   }
   if(!seance.defisMatches) seance.defisMatches = [];
   const isBadminton = activite === 'Badminton';
@@ -6080,26 +6121,34 @@ function renderDefisClassementSection(activite){
       </tr>`;
   }).reverse().join('');
 
-  return `
+  const reglesHint = estEquipe
+    ? "Les équipes ayant le même nombre de victoires (cette séance) s'affrontent (jusqu'à ±2 victoires d'écart si personne n'est exactement à égalité). Deux équipes qui se sont déjà rencontrées ne se réaffrontent que si chacune a rejoué au moins 4 matchs depuis. Cliquez sur le nom de l'équipe vainqueur de chaque match. La rotation suivante s'organise automatiquement pour tout le monde une fois que tous les matchs de la rotation en cours sont terminés."
+    : "Les élèves ayant le même nombre de victoires s'affrontent (jusqu'à ±2 victoires d'écart si personne n'est exactement à égalité). Deux élèves qui se sont déjà rencontrés ne se réaffrontent que si chacun a rejoué au moins 4 matchs depuis. Cliquez sur le nom du vainqueur de chaque match. La rotation suivante s'organise automatiquement pour tout le monde une fois que <b>tous</b> les matchs de la rotation en cours sont terminés (pas de table qui avance plus vite qu'une autre). S'il y a plus d'élèves que de tables, les non-joueurs officient comme arbitres (jamais deux fois de suite : il faut d'abord rejouer un match).";
+
+  const params = `
     ${estEquipe ? renderEquipesDefisSection(activite) : ''}
+    <div class="card">
+      <h3>⚙️ Configuration</h3>
+      ${checkboxRangeHtml('defisTerrainCbGroup', act.terrainLabel+' disponibles', act.defisTerrainMin, act.defisTerrainMax, seance.defisTerrains || act.defisTerrainMin)}
+      ${demiTerrainToggle}
+      <p class="hint">${reglesHint}</p>
+      ${!started ? `<button class="btn" id="btnDemarrerDefis">▶️ Démarrer les matchs</button>` : `<p class="hint" style="margin-top:6px;">Déjà démarré — gérez les matchs dans l'onglet « Matchs et résultats ».</p>`}
+    </div>`;
+
+  const matchs = !started
+    ? `<div class="empty-state">Choisissez le nombre de ${act.terrainLabel.toLowerCase()} puis cliquez sur « Démarrer les matchs » dans l'onglet Paramètres.</div>`
+    : `
     <div class="card">
       <div class="toolbar">
         <h3>📈 Défis classement progressif</h3>
         <div style="display:flex;gap:6px;">
-          ${!started ? `<button class="btn" id="btnDemarrerDefis">▶️ Démarrer les matchs</button>` : ''}
-          ${started ? `<button class="btn secondary small" id="btnReessayerDefis" title="Un terrain libre n'a pas pu être rempli ? Réessaie maintenant, quitte à retirer une équipe de l'arbitrage pour la faire jouer.">🔄 Réessayer de remplir les terrains libres</button>` : ''}
+          <button class="btn secondary small" id="btnReessayerDefis" title="Un terrain libre n'a pas pu être rempli ? Réessaie maintenant, quitte à retirer une équipe de l'arbitrage pour la faire jouer.">🔄 Réessayer de remplir les terrains libres</button>
           ${seance.lastAction ? `<button class="btn danger small" id="btnAnnulerDernierResultat">↩️ Annuler le dernier résultat</button>` : ''}
-          ${started ? `<button class="btn secondary small" id="btnExportDefisMatchs">📊 Exporter Excel</button>` : ''}
+          <button class="btn secondary small" id="btnExportDefisMatchs">📊 Exporter Excel</button>
         </div>
       </div>
-      ${checkboxRangeHtml('defisTerrainCbGroup', act.terrainLabel+' disponibles', act.defisTerrainMin, act.defisTerrainMax, seance.defisTerrains || act.defisTerrainMin)}
-      ${demiTerrainToggle}
-      <p class="hint">${estEquipe
-        ? "Les équipes ayant le même nombre de victoires (cette séance) s'affrontent (jusqu'à ±2 victoires d'écart si personne n'est exactement à égalité). Deux équipes qui se sont déjà rencontrées ne se réaffrontent que si chacune a rejoué au moins 4 matchs depuis. Cliquez sur le nom de l'équipe vainqueur de chaque match. La rotation suivante s'organise automatiquement pour tout le monde une fois que tous les matchs de la rotation en cours sont terminés."
-        : "Les élèves ayant le même nombre de victoires s'affrontent (jusqu'à ±2 victoires d'écart si personne n'est exactement à égalité). Deux élèves qui se sont déjà rencontrés ne se réaffrontent que si chacun a rejoué au moins 4 matchs depuis. Cliquez sur le nom du vainqueur de chaque match. La rotation suivante s'organise automatiquement pour tout le monde une fois que <b>tous</b> les matchs de la rotation en cours sont terminés (pas de table qui avance plus vite qu'une autre). S'il y a plus d'élèves que de tables, les non-joueurs officient comme arbitres (jamais deux fois de suite : il faut d'abord rejouer un match)."}</p>
       ${rotationHtml}
       ${byeHtml}
-      ${started ? `
       <div class="defis-layout">
         <div class="defis-tables-grid">${tableCards.join('')}</div>
         <div class="defis-classement-live">
@@ -6127,8 +6176,9 @@ function renderDefisClassementSection(activite){
             <tbody>${historiqueHtml}</tbody>
           </table>
         </div>
-      </div>` : `<div class="empty-state">Choisissez le nombre de ${act.terrainLabel.toLowerCase()} puis cliquez sur « Démarrer les matchs ».</div>`}
+      </div>
     </div>`;
+  return { params, matchs };
 }
 
 /* ----------------------------------------------- TOURNOI À ROTATION --- */
@@ -6245,18 +6295,21 @@ function renderRotationConfigCard(activite){
       ${seance.rotationMatches.length ? '<p class="hint" style="margin-top:6px;">Régénérer efface les résultats déjà enregistrés pour cette séance.</p>' : ''}
     </div>`;
 }
+// Retourne {params, matchs} — voir renderSousOngletsTournoi : params =
+// constitution des équipes + configuration du tournoi, matchs = tours,
+// classement et historique (vide tant qu'aucun match n'est généré).
 function renderRotationSection(activite){
   const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
   const act = ACTIVITIES[activite];
   const estEquipe = act.type === 'equipe';
   if(estEquipe && !seance.teamsRotation.length){
-    return renderEquipesRotationSection(activite) + `
-      <div class="card"><p class="hint" style="margin:0;">Générez les équipes ci-dessus pour configurer le tournoi à rotation.</p></div>`;
+    return { params: renderEquipesRotationSection(activite) + `
+      <div class="card"><p class="hint" style="margin:0;">Générez les équipes ci-dessus pour configurer le tournoi à rotation.</p></div>`, matchs: '' };
   }
-  let html = estEquipe ? renderEquipesRotationSection(activite) : '';
-  html += renderRotationConfigCard(activite);
-  if(!seance.rotationMatches.length) return html;
+  let params = estEquipe ? renderEquipesRotationSection(activite) : '';
+  params += renderRotationConfigCard(activite);
+  if(!seance.rotationMatches.length) return { params, matchs: '' };
 
   const nbTours = Math.max(...seance.rotationMatches.map(m=>m.tour));
   const tourActuel = clamp(seance.rotationTourActuel || 1, 1, nbTours);
@@ -6357,7 +6410,7 @@ function renderRotationSection(activite){
       </div>`
     : '';
 
-  html += bandeauReport + `
+  const matchs = bandeauReport + `
     <div class="card">
       <div class="toolbar">
         <h3>🔁 Tournoi à rotation — Tour ${tourActuel}/${nbTours}</h3>
@@ -6396,20 +6449,23 @@ function renderRotationSection(activite){
         </table>
       </div>
     </div>`;
-  return html;
+  return { params, matchs };
 }
 
 // Tournoi multijoueurs (Volley uniquement, voir Fonctionnalites.md lignes
 // 79-85) : poules à l'échelle de l'élève, matchs à k contre k avec
 // changement de partenaire à chaque match (voir genererMultijoueursMatches),
 // joueurs non programmés = arbitres.
+// Retourne {params, matchs} — voir renderSousOngletsTournoi : params =
+// configuration + constitution des poules, matchs = matchs générés +
+// classement de la séance.
 function renderMultijoueursSection(activite){
   const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
   const taillePoule = clamp(seance.multijoueursTaillePoule || 6, 4, 12);
   const tailleEquipe = seance.multijoueursTailleEquipe || 2;
 
-  let html = `
+  let params = `
     <div class="card">
       <h3>⚙️ Configuration du tournoi multijoueurs</h3>
       <p class="hint">À l'intérieur de chaque poule, les élèves jouent des matchs à ${tailleEquipe} contre ${tailleEquipe} en changeant de partenaire à chaque match, jusqu'à avoir joué avec tous les autres joueurs de la poule. Les joueurs qui ne jouent pas un match arbitrent.</p>
@@ -6423,9 +6479,9 @@ function renderMultijoueursSection(activite){
       ${seance.multijoueursPoules.length ? '<p class="hint" style="margin-top:6px;">Régénérer efface les poules et les matchs multijoueurs déjà enregistrés pour cette séance.</p>' : ''}
     </div>`;
 
-  if(!seance.multijoueursPoules.length) return html;
+  if(!seance.multijoueursPoules.length) return { params, matchs: '' };
 
-  html += `<div class="poules-grid">` + seance.multijoueursPoules.map(p=>{
+  params += `<div class="poules-grid">` + seance.multijoueursPoules.map(p=>{
     const absentsDeLaPoule = p.members.filter(id=>seance.absents.includes(id));
     const matchesPoule = seance.multijoueursMatches.filter(m=>m.pouleId===p.id);
     const standing = computeMultijoueursPouleStanding(seance, p);
@@ -6448,31 +6504,41 @@ function renderMultijoueursSection(activite){
         </li>`).join('')}
     </ul>`;
 
-    const matchesHtml = matchesPoule.length ? matchesPoule.map((m,idx)=>{
-      const globalIdx = seance.multijoueursMatches.indexOf(m);
-      const joue = m.pointsA !== undefined && m.pointsA !== null;
-      const scoreLabel = m.abandon ? '(abandon)' : (joue ? `${m.scoreA} - ${m.scoreB}` : 'vs');
-      const arbitresLabel = m.referees.length ? m.referees.map(id=>participantLabel(activite, id)).join(', ') : 'tout le monde joue';
-      return `
-      <div class="match-row" data-open-score-multi="${globalIdx}">
-        <span class="tour-badge">Match ${idx+1}</span>
-        <span class="match-name ${m.winner==='A'?'winner':''}">${labelEquipeAdHoc(activite, m.equipeA)}</span>
-        <span class="hint" style="margin:0 4px;">${scoreLabel}</span>
-        <span class="match-name ${m.winner==='B'?'winner':''}">${labelEquipeAdHoc(activite, m.equipeB)}</span>
-        ${joue ? `<span class="hint">(${m.pointsA}/${m.pointsB} pts)</span>` : ''}
-        <div class="hint" style="width:100%;margin:2px 0 0;">🧑‍⚖️ Arbitres : ${arbitresLabel}</div>
-      </div>`;
-    }).join('') : '<p class="hint" style="margin:6px 0 0;">Pas encore de matchs générés pour cette poule.</p>';
-
     return `
     <div class="poule-card">
       <h4>${p.nom} (${p.members.length})</h4>
       ${membresHtml}
       <button class="btn secondary small" style="margin-top:8px;" data-generer-matchs-multi="${p.id}">📅 ${matchesPoule.length?'Régénérer':'Générer'} les matchs</button>
-      ${matchesPoule.length ? `<button class="btn secondary small" style="margin-top:4px;" data-export-fiche-multi="${p.id}">🖨️ Imprimer l'organisation des matchs (PDF)</button>` : ''}
-      <div style="margin-top:10px;">${matchesHtml}</div>
     </div>`;
   }).join('') + `</div>`;
+
+  const auMoinsUnMatch = seance.multijoueursMatches.length > 0;
+  let matchs = !auMoinsUnMatch
+    ? '<div class="card"><p class="hint" style="margin:0;">Pas encore de matchs générés — utilisez le bouton « Générer les matchs » d\'une poule dans l\'onglet Paramètres.</p></div>'
+    : `<div class="poules-grid">` + seance.multijoueursPoules.map(p=>{
+        const matchesPoule = seance.multijoueursMatches.filter(m=>m.pouleId===p.id);
+        const matchesHtml = matchesPoule.length ? matchesPoule.map((m,idx)=>{
+          const globalIdx = seance.multijoueursMatches.indexOf(m);
+          const joue = m.pointsA !== undefined && m.pointsA !== null;
+          const scoreLabel = m.abandon ? '(abandon)' : (joue ? `${m.scoreA} - ${m.scoreB}` : 'vs');
+          const arbitresLabel = m.referees.length ? m.referees.map(id=>participantLabel(activite, id)).join(', ') : 'tout le monde joue';
+          return `
+          <div class="match-row" data-open-score-multi="${globalIdx}">
+            <span class="tour-badge">Match ${idx+1}</span>
+            <span class="match-name ${m.winner==='A'?'winner':''}">${labelEquipeAdHoc(activite, m.equipeA)}</span>
+            <span class="hint" style="margin:0 4px;">${scoreLabel}</span>
+            <span class="match-name ${m.winner==='B'?'winner':''}">${labelEquipeAdHoc(activite, m.equipeB)}</span>
+            ${joue ? `<span class="hint">(${m.pointsA}/${m.pointsB} pts)</span>` : ''}
+            <div class="hint" style="width:100%;margin:2px 0 0;">🧑‍⚖️ Arbitres : ${arbitresLabel}</div>
+          </div>`;
+        }).join('') : '<p class="hint" style="margin:6px 0 0;">Pas encore de matchs générés pour cette poule.</p>';
+        return `
+        <div class="poule-card">
+          <h4>${p.nom} (${p.members.length})</h4>
+          ${matchesPoule.length ? `<button class="btn secondary small" style="margin-bottom:8px;" data-export-fiche-multi="${p.id}">🖨️ Imprimer l'organisation des matchs (PDF)</button>` : ''}
+          ${matchesHtml}
+        </div>`;
+      }).join('') + `</div>`;
 
   // Classement combiné de la séance : hiérarchie des poules d'abord (poule 1
   // meilleure que poule 2...), points à l'intérieur de la poule ensuite —
@@ -6495,7 +6561,7 @@ function renderMultijoueursSection(activite){
       <td>${totalParEleve[id]||0}</td>
     </tr>`).join('');
 
-  html += `
+  matchs += `
     <div class="card" style="margin-top:14px;">
       <h4 style="margin:0 0 8px;">🏅 Classement de la séance</h4>
       <p class="hint">Trié d'abord par poule (poule 1 meilleure), puis par points marqués dans la poule.</p>
@@ -6511,11 +6577,8 @@ function renderMultijoueursSection(activite){
         </table>
       </div>
     </div>`;
-  return html;
+  return { params, matchs };
 }
-// Fiche d'observation (voir image fournie par l'utilisatrice) : reflète
-// l'état courant des données (vide si pas encore joué). 2 feuilles : grille
-// arbitrage + classement, et détail des matchs.
 // Feuille d'organisation des matchs (PDF, une page) : juste de quoi mener la
 // séance — composition des 2 équipes de chaque match + arbitres — sans la
 // grille récapitulative ni le détail des scores (voir demande de

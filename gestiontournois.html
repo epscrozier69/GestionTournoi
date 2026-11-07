@@ -158,6 +158,20 @@
   .sub-tab-btn:hover{color:var(--ink);}
   .sub-tab-btn.active{background:var(--c1);color:#fff;box-shadow:0 3px 10px rgba(37,99,235,.35);}
   .sub-tab-count{opacity:.85;font-weight:700;font-size:.82rem;margin-left:4px;}
+  /* Sous-onglets Paramètres / Matchs et résultats, à l'intérieur du type de
+     tournoi sélectionné (encore un niveau plus bas que .sub-tab-btn
+     ci-dessus) : volontairement très différents des onglets de séance
+     (pilules violettes) et des sous-onglets Présence/Type de tournoi/
+     Évaluation technique (pilules bleues) — un "segmented control" compact
+     et gris, pour que les 3 niveaux d'onglets se distinguent d'un coup
+     d'œil au lieu de se ressembler tous. */
+  .inner-tab-bar{display:inline-flex;background:#e2e8f0;border-radius:9px;padding:3px;gap:2px;margin:14px 0 10px;}
+  .inner-tab-btn{
+    border:none;background:transparent;color:var(--muted);padding:6px 16px;border-radius:6px;cursor:pointer;
+    font-weight:600;font-size:.8rem;transition:.15s;
+  }
+  .inner-tab-btn:hover{color:var(--ink);}
+  .inner-tab-btn.active{background:#fff;color:var(--ink);box-shadow:0 1px 4px rgba(0,0,0,.18);}
   /* Chaque classe importée est sa propre vignette (même gabarit que les
      cartes de l'appli : coins arrondis, ombre), plutôt qu'une pastille dans
      un conteneur partagé. La classe active se distingue par sa pleine
@@ -237,6 +251,10 @@
   .poule-card.match-deja-joue{opacity:.8;background:#f0fdf4;border-color:#86efac;}
   .badge-a-faire{display:inline-block;margin:0 0 6px;padding:2px 8px;border-radius:999px;background:var(--warn);color:#fff;font-size:.72rem;font-weight:700;}
   .badge-deja-joue{display:inline-block;margin:0 0 6px;padding:2px 8px;border-radius:999px;background:var(--ok);color:#fff;font-size:.72rem;font-weight:700;}
+  /* Match de rotation annulé : un des 2 participants est devenu indisponible
+     (absent/dispensé) pour cette séance — voir rotationMatchAnnule. */
+  .poule-card.match-annule{opacity:.75;background:#f1f5f9;border-color:#94a3b8;}
+  .badge-annule{display:inline-block;margin:0 0 6px;padding:2px 8px;border-radius:999px;background:#64748b;color:#fff;font-size:.72rem;font-weight:700;}
   .match-row{
     display:flex;align-items:center;gap:4px;flex-wrap:wrap;cursor:pointer;
     padding:6px 4px;border-bottom:1px dashed var(--line);font-size:.78rem;border-radius:6px;
@@ -354,6 +372,7 @@
   .historique-table tbody tr:nth-child(odd){background:#fff;}
   .historique-table tbody tr:nth-child(even){background:#f8fafc;}
   .historique-table tbody tr.ligne-reportee{opacity:.7;}
+  .historique-table tbody tr.ligne-annulee{opacity:.6;background:#f1f5f9 !important;}
   .historique-table select{font-size:.8rem;padding:2px 4px;}
   .win-edit-input{
     width:100%;box-sizing:border-box;text-align:center;padding:3px 2px;
@@ -736,9 +755,9 @@ function renderSousOngletsTournoi(activite, parametresHtml, matchsHtml){
   // panneau vide.
   const matchsAffiches = matchsHtml || `<div class="card"><p class="hint" style="margin:0;">Configurez puis générez le tournoi dans l'onglet « Paramètres » pour voir les matchs ici.</p></div>`;
   return `
-    <div class="sub-tab-bar">
-      <button class="sub-tab-btn ${sousOnglet==='parametres'?'active':''}" data-sous-onglet-tournoi="parametres">⚙️ Paramètres</button>
-      <button class="sub-tab-btn ${sousOnglet==='matchs'?'active':''}" data-sous-onglet-tournoi="matchs">📅 Matchs et résultats</button>
+    <div class="inner-tab-bar">
+      <button class="inner-tab-btn ${sousOnglet==='parametres'?'active':''}" data-sous-onglet-tournoi="parametres">⚙️ Paramètres</button>
+      <button class="inner-tab-btn ${sousOnglet==='matchs'?'active':''}" data-sous-onglet-tournoi="matchs">📅 Matchs et résultats</button>
     </div>
     ${sousOnglet === 'matchs' ? matchsAffiches : parametresHtml}`;
 }
@@ -6298,6 +6317,26 @@ function renderRotationConfigCard(activite){
 // Retourne {params, matchs} — voir renderSousOngletsTournoi : params =
 // constitution des équipes + configuration du tournoi, matchs = tours,
 // classement et historique (vide tant qu'aucun match n'est généré).
+// Un match de rotation ne peut pas être joué si l'un des 2 participants est
+// désormais indisponible pour CETTE séance (absent/dispensé) — arrive
+// typiquement sur un match reporté d'une séance précédente (voir
+// reporterRotationSeancePrecedente) quand l'élève a changé de statut entre
+// temps. En Volley (équipe), toute l'équipe doit être absente pour que le
+// match soit annulé (un seul membre absent ne bloque pas le match si
+// l'équipe a d'autres joueurs disponibles).
+function rotationParticipantIndisponible(activite, seance, id){
+  const act = ACTIVITIES[activite];
+  if(act.type !== 'equipe') return seance.absents.includes(id);
+  const team = (seance.teamsRotation||[]).find(t=>t.id===id);
+  if(!team || !team.memberIds.length) return false;
+  return team.memberIds.every(mid=>seance.absents.includes(mid));
+}
+// Un match "annulé" (voir rotationParticipantIndisponible) n'est plus compté
+// comme un match à faire : l'équipe toujours disponible n'a personne à
+// affronter ce tour-ci et peut arbitrer un autre match à la place.
+function rotationMatchAnnule(activite, seance, m){
+  return !m.winner && (rotationParticipantIndisponible(activite, seance, m.a) || rotationParticipantIndisponible(activite, seance, m.b));
+}
 function renderRotationSection(activite){
   const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
@@ -6315,7 +6354,7 @@ function renderRotationSection(activite){
   const tourActuel = clamp(seance.rotationTourActuel || 1, 1, nbTours);
   const toursNav = Array.from({length:nbTours}, (_,i)=>i+1).map(t=>{
     const matchsTour = seance.rotationMatches.filter(m=>m.tour===t);
-    const termine = matchsTour.every(m=>m.winner!==null);
+    const termine = matchsTour.every(m=>m.winner!==null || rotationMatchAnnule(activite, seance, m));
     // Tours de la phase 2 (matchs internes, voir genererRotationMatchesInternes)
     // dans une couleur distincte des tours de la phase 1 (tournoi croisé), pour
     // repérer d'un coup d'œil où commence le 2e tournoi.
@@ -6348,6 +6387,26 @@ function renderRotationSection(activite){
     // (pas de data-set-winner-rotation : pour corriger, retourner sur la
     // séance où il a été joué) avec un badge distinct des matchs pas encore
     // joués, qui sont eux mis en évidence pour signaler le travail restant.
+    // Match annulé (voir rotationMatchAnnule) : un des 2 participants est
+    // désormais indisponible pour cette séance (absent/dispensé) — l'autre
+    // n'a personne à affronter et peut arbitrer un autre match à la place.
+    const aIndispo = rotationParticipantIndisponible(activite, seance, m.a);
+    const bIndispo = rotationParticipantIndisponible(activite, seance, m.b);
+    const annule = !m.winner && (aIndispo || bIndispo);
+    if(annule){
+      const messageDispo = (aIndispo && bIndispo)
+        ? `<p class="hint" style="margin:6px 0 0;"><b>${nomA}</b> et <b>${nomB}</b> sont absent(e)s/dispensé(e)s ce jour.</p>`
+        : `
+        <p class="hint" style="margin:6px 0 0;"><b>${aIndispo ? nomA : nomB}</b> est absent(e)/dispensé(e) ce jour.</p>
+        <p class="hint" style="margin:2px 0 0;"><b>${aIndispo ? nomB : nomA}</b> n'a personne à affronter ce tour — en attente, peut arbitrer un autre match.</p>`;
+      return `
+      <div class="poule-card match-annule">
+        <h4>${act.terrainLabel.replace(/s$/,'')} ${m.terrain}</h4>
+        ${badgePhase}
+        <span class="badge-annule">⏸️ Match annulé</span>
+        ${messageDispo}
+      </div>`;
+    }
     const carteClasse = m.reporte ? 'match-deja-joue' : (m.winner ? '' : 'match-a-faire');
     const badgeReport = m.reporte ? '<span class="badge-deja-joue">✅ Déjà joué (séance précédente)</span>'
       : (!m.winner ? '<span class="badge-a-faire">🟠 À faire</span>' : '');
@@ -6386,27 +6445,31 @@ function renderRotationSection(activite){
       const nomB = participantLabel(activite, m.b);
       const phaseLabel = m.phase === 'interne' ? (m.groupe==='fixe' ? '⚔️ Interne (fixes)' : '⚔️ Interne (tournants)') : '📍🔄 Croisé';
       const arbitre = m.referee ? participantLabel(activite, m.referee) : 'Auto-arbitrage';
-      // Reporté d'une séance précédente : lecture seule ici (voir le même
-      // choix pour les cartes de match ci-dessus).
-      const celluleA = m.reporte ? `<b>${nomA}</b>` : `<button class="btn small ${m.winner===m.a?'':'ghost'}" data-corriger-vainqueur-rotation="${m.id}::${m.a}">${nomA}</button>`;
-      const celluleB = m.reporte ? `<b>${nomB}</b>` : `<button class="btn small ${m.winner===m.b?'':'ghost'}" data-corriger-vainqueur-rotation="${m.id}::${m.b}">${nomB}</button>`;
+      const annule = rotationMatchAnnule(activite, seance, m);
+      // Reporté d'une séance précédente, ou annulé (participant devenu
+      // indisponible — voir rotationMatchAnnule) : lecture seule ici (même
+      // choix que pour les cartes de match ci-dessus).
+      const celluleA = (m.reporte || annule) ? `<b>${nomA}</b>` : `<button class="btn small ${m.winner===m.a?'':'ghost'}" data-corriger-vainqueur-rotation="${m.id}::${m.a}">${nomA}</button>`;
+      const celluleB = (m.reporte || annule) ? `<b>${nomB}</b>` : `<button class="btn small ${m.winner===m.b?'':'ghost'}" data-corriger-vainqueur-rotation="${m.id}::${m.b}">${nomB}</button>`;
       return `
-      <tr class="${m.reporte?'ligne-reportee':''}">
+      <tr class="${m.reporte?'ligne-reportee':''} ${annule?'ligne-annulee':''}">
         <td>${numero}</td>
         <td>Tour ${m.tour}</td>
         <td>${act.terrainLabel.replace(/s$/,'')} ${m.terrain}</td>
-        <td>${phaseLabel}${m.reporte?' <span class="muted">(reporté)</span>':''}</td>
+        <td>${phaseLabel}${m.reporte?' <span class="muted">(reporté)</span>':''}${annule?' <span class="muted">(⏸️ annulé)</span>':''}</td>
         <td>${celluleA}</td>
         <td>${celluleB}</td>
-        <td>${arbitre}</td>
+        <td>${annule ? '—' : arbitre}</td>
       </tr>`;
     }).join('');
 
   const students = STATE.allStudents.filter(s=>s.classe===cd.classe);
   const nbReportes = seance.rotationMatches.filter(m=>m.reporte).length;
+  const nbAnnules = seance.rotationMatches.filter(m=>!m.reporte && rotationMatchAnnule(activite, seance, m)).length;
+  const nbRestants = seance.rotationMatches.length - nbReportes - nbAnnules;
   const bandeauReport = nbReportes
     ? `<div class="card" style="margin-bottom:14px;background:#f0fdf4;border-color:#86efac;">
-        <p class="hint" style="margin:0;color:#166534;"><b>📥 Tournoi repris de la séance précédente :</b> ${nbReportes} match${nbReportes>1?'s':''} déjà joué${nbReportes>1?'s':''} (reporté${nbReportes>1?'s':''} tel${nbReportes>1?'s':''} quel${nbReportes>1?'s':''}, ci-dessous en vert), ${seance.rotationMatches.length - nbReportes} restant${seance.rotationMatches.length - nbReportes > 1?'s':''} à faire cette séance (en orange).</p>
+        <p class="hint" style="margin:0;color:#166534;"><b>📥 Tournoi repris de la séance précédente :</b> ${nbReportes} match${nbReportes>1?'s':''} déjà joué${nbReportes>1?'s':''} (reporté${nbReportes>1?'s':''} tel${nbReportes>1?'s':''} quel${nbReportes>1?'s':''}, ci-dessous en vert), ${nbRestants} restant${nbRestants>1?'s':''} à faire cette séance (en orange)${nbAnnules?`, ${nbAnnules} annulé${nbAnnules>1?'s':''} (participant absent/dispensé, en gris)`:''}.</p>
       </div>`
     : '';
 

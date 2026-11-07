@@ -55,6 +55,12 @@
   @keyframes fadeIn{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:none;}}
 
   .card{background:var(--panel);border-radius:var(--radius);box-shadow:var(--shadow);padding:14px;margin-bottom:14px;}
+  /* Hiérarchie visuelle à 3 niveaux (via des couleurs de fond) : onglets de
+     séance (violet, le plus marqué) > sous-onglets Présence/Type de
+     tournoi/Évaluation technique (bleu) > sous-onglets Paramètres/Matchs et
+     résultats (gris, voir .inner-tab-bar) — pour que les 3 niveaux
+     d'imbrication se repèrent d'un coup d'œil, du plus large au plus précis. */
+  .card-niveau-seance{background:#eef2ff;border:2px solid #c7d2fe;}
   .card h3{margin:0 0 12px;font-size:1rem;display:flex;align-items:center;gap:8px;}
   .toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px;}
   .btn{
@@ -148,7 +154,7 @@
   .seance-tab-item.active .seance-tab-date-input::-webkit-calendar-picker-indicator{filter:invert(1);}
   /* Sous-onglets Présence / Type de tournoi : un seul bloc affiché à la fois
      pour alléger la présentation (avant : deux cartes toujours empilées). */
-  .sub-tab-bar{display:flex;gap:6px;margin:14px 0 10px;flex-wrap:wrap;}
+  .sub-tab-bar{display:flex;gap:6px;margin:14px 0 10px;flex-wrap:wrap;background:#eff6ff;border:2px solid #bfdbfe;border-radius:16px;padding:8px;}
   /* Même gabarit que les onglets d'activité (nav.tabs button) tout en haut,
      juste en gras en plus — pour que ce soit cohérent visuellement. */
   .sub-tab-btn{
@@ -736,6 +742,10 @@ const PALETTE = ['#2563eb','#7c3aed','#db2777','#ea580c','#dc2626','#0891b2','#4
 // le reste des données (ni sauvegardé, ni par séance : juste pour alléger la
 // présentation en n'affichant qu'un bloc à la fois).
 const SOUS_ONGLET_SEANCE = {};
+// Recliquer sur le sous-onglet Présence/Type de tournoi/Évaluation technique
+// déjà actif masque/affiche son contenu — même principe que le clic sur
+// l'onglet de la séance déjà affichée (cd.seanceMasquee).
+const SOUS_ONGLET_SEANCE_MASQUE = {};
 // Même principe, un niveau plus bas : À L'INTÉRIEUR du tournoi actuellement
 // sélectionné (poule, défis, rotation, multijoueurs...), sous-onglets
 // "Paramètres" (constitution des équipes/poules + réglages) et "Matchs et
@@ -743,6 +753,10 @@ const SOUS_ONGLET_SEANCE = {};
 // renderSousOngletsTournoi. Un seul choix par activité (pas par type de
 // tournoi) : changer de type de tournoi garde le sous-onglet déjà choisi.
 const SOUS_ONGLET_TOURNOI = {};
+// Recliquer sur le sous-onglet Paramètres/Matchs et résultats déjà actif
+// masque/affiche son contenu — même principe que pour la séance et le
+// sous-onglet du dessus (SOUS_ONGLET_SEANCE_MASQUE).
+const SOUS_ONGLET_TOURNOI_MASQUE = {};
 // Enrobe {params, matchs} (renvoyés par renderRotationSection,
 // renderDefisHasardSection, renderDefisClassementSection,
 // renderMultijoueursSection, ou construits à la volée pour le tournoi par
@@ -754,12 +768,15 @@ function renderSousOngletsTournoi(activite, parametresHtml, matchsHtml){
   // été faite : un message renvoie vers l'onglet Paramètres plutôt qu'un
   // panneau vide.
   const matchsAffiches = matchsHtml || `<div class="card"><p class="hint" style="margin:0;">Configurez puis générez le tournoi dans l'onglet « Paramètres » pour voir les matchs ici.</p></div>`;
+  const contenu = SOUS_ONGLET_TOURNOI_MASQUE[activite]
+    ? `<div class="card"><p class="hint" style="margin:0;">👁️‍🗨️ Contenu masqué — recliquez sur le sous-onglet actif ci-dessus pour l'afficher.</p></div>`
+    : (sousOnglet === 'matchs' ? matchsAffiches : parametresHtml);
   return `
     <div class="inner-tab-bar">
       <button class="inner-tab-btn ${sousOnglet==='parametres'?'active':''}" data-sous-onglet-tournoi="parametres">⚙️ Paramètres</button>
       <button class="inner-tab-btn ${sousOnglet==='matchs'?'active':''}" data-sous-onglet-tournoi="matchs">📅 Matchs et résultats</button>
     </div>
-    ${sousOnglet === 'matchs' ? matchsAffiches : parametresHtml}`;
+    ${contenu}`;
 }
 
 /* ------------------------------------------------------------ STATE --- */
@@ -3070,7 +3087,16 @@ function onGenererPoulesMultijoueurs(activite){
     });
     seance.multijoueursPoules = groups.map((members,i)=>({ id:'poule'+(i+1), nom:'Poule '+(i+1), members: shuffleArray(members) }));
   } else {
-    seance.multijoueursPoules = generatePoules(studentIds, taillePoule, cd.multijoueursPoints, Math.max(2, taillePoule-1), taillePoule+2);
+    // Pas d'historique multijoueurs exploitable (jamais joué, ou tournoi
+    // d'un autre type lors de la dernière séance — ex. rotation) : on sème
+    // quand même depuis le classement déjà accumulé (cd.wins, qui couvre
+    // rotation/défis — déjà réparti par élève même en sport collectif, voir
+    // computeSeanceDefisWinsParEleve) plutôt que de partir sur du pur hasard,
+    // même principe que le repli de onGenererPoules pour le tournoi par
+    // poule classique. cd.multijoueursPoints reste prioritaire s'il contient
+    // déjà quelque chose (le multijoueurs a été joué par le passé).
+    const seed = Object.keys(cd.multijoueursPoints||{}).length ? cd.multijoueursPoints : cd.wins;
+    seance.multijoueursPoules = generatePoules(studentIds, taillePoule, seed, Math.max(2, taillePoule-1), taillePoule+2);
   }
   seance.multijoueursMatches = [];
   saveState();
@@ -4261,7 +4287,7 @@ function renderActivityTab(activite){
     // séparée — voir renderClassementTotalCard / renderClassementParSeancePoule.
 
     html += `
-      <div class="card">
+      <div class="card card-niveau-seance">
         <div class="toolbar" style="margin-bottom:0;">
           <div class="seance-tabs">
             ${cd.seances.length
@@ -4408,13 +4434,18 @@ function renderActivityTab(activite){
       if(!SOUS_ONGLET_SEANCE[activite]) SOUS_ONGLET_SEANCE[activite] = 'tournoi';
       let sousOnglet = SOUS_ONGLET_SEANCE[activite];
       if(sousOnglet === 'evaluation' && !aEvalTechIndependante) sousOnglet = 'tournoi';
+      const masqueSeance = !!SOUS_ONGLET_SEANCE_MASQUE[activite];
       html += `
         <div class="sub-tab-bar">
           <button class="sub-tab-btn ${sousOnglet==='presence'?'active':''}" data-sous-onglet="presence">🧍 Présence <span class="sub-tab-count">${presents}/${students.length}</span></button>
           <button class="sub-tab-btn ${sousOnglet==='tournoi'?'active':''}" data-sous-onglet="tournoi">🏆 Type de tournoi</button>
           ${aEvalTechIndependante ? `<button class="sub-tab-btn ${sousOnglet==='evaluation'?'active':''}" data-sous-onglet="evaluation">📊 Évaluation technique ${evalTechDemarre?'✅':''}</button>` : ''}
         </div>`;
-      html += sousOnglet === 'presence' ? presenceHtml : sousOnglet === 'evaluation' ? evalTechHtml : tournoiHtml;
+      // Recliquer sur le sous-onglet déjà actif masque/affiche son contenu —
+      // même principe que le clic sur l'onglet de la séance déjà affichée.
+      html += masqueSeance
+        ? `<div class="card"><p class="hint" style="margin:0;">👁️‍🗨️ Contenu masqué — recliquez sur le sous-onglet actif ci-dessus pour l'afficher.</p></div>`
+        : (sousOnglet === 'presence' ? presenceHtml : sousOnglet === 'evaluation' ? evalTechHtml : tournoiHtml);
     }
   }
 
@@ -4442,13 +4473,26 @@ function renderActivityTab(activite){
   });
   panel.querySelectorAll('[data-sous-onglet]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
-      SOUS_ONGLET_SEANCE[activite] = btn.dataset.sousOnglet;
+      // Recliquer sur le sous-onglet déjà actif masque/affiche son contenu
+      // (même principe que le clic sur l'onglet de la séance déjà affichée) ;
+      // cliquer sur un autre sous-onglet l'affiche normalement.
+      if(SOUS_ONGLET_SEANCE[activite] === btn.dataset.sousOnglet){
+        SOUS_ONGLET_SEANCE_MASQUE[activite] = !SOUS_ONGLET_SEANCE_MASQUE[activite];
+      } else {
+        SOUS_ONGLET_SEANCE[activite] = btn.dataset.sousOnglet;
+        SOUS_ONGLET_SEANCE_MASQUE[activite] = false;
+      }
       renderActivityTab(activite);
     });
   });
   panel.querySelectorAll('[data-sous-onglet-tournoi]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
-      SOUS_ONGLET_TOURNOI[activite] = btn.dataset.sousOngletTournoi;
+      if(SOUS_ONGLET_TOURNOI[activite] === btn.dataset.sousOngletTournoi){
+        SOUS_ONGLET_TOURNOI_MASQUE[activite] = !SOUS_ONGLET_TOURNOI_MASQUE[activite];
+      } else {
+        SOUS_ONGLET_TOURNOI[activite] = btn.dataset.sousOngletTournoi;
+        SOUS_ONGLET_TOURNOI_MASQUE[activite] = false;
+      }
       renderActivityTab(activite);
     });
   });
@@ -6394,11 +6438,15 @@ function renderRotationSection(activite){
     const bIndispo = rotationParticipantIndisponible(activite, seance, m.b);
     const annule = !m.winner && (aIndispo || bIndispo);
     if(annule){
+      // Noms des membres en plus du nom d'équipe (en sport collectif) :
+      // sinon "Équipe 7" seul ne dit pas qui est absent précisément.
+      const labelA = membresA ? `${nomA} (${membresA})` : nomA;
+      const labelB = membresB ? `${nomB} (${membresB})` : nomB;
       const messageDispo = (aIndispo && bIndispo)
-        ? `<p class="hint" style="margin:6px 0 0;"><b>${nomA}</b> et <b>${nomB}</b> sont absent(e)s/dispensé(e)s ce jour.</p>`
+        ? `<p class="hint" style="margin:6px 0 0;"><b>${labelA}</b> et <b>${labelB}</b> sont absent(e)s/dispensé(e)s ce jour.</p>`
         : `
-        <p class="hint" style="margin:6px 0 0;"><b>${aIndispo ? nomA : nomB}</b> est absent(e)/dispensé(e) ce jour.</p>
-        <p class="hint" style="margin:2px 0 0;"><b>${aIndispo ? nomB : nomA}</b> n'a personne à affronter ce tour — en attente, peut arbitrer un autre match.</p>`;
+        <p class="hint" style="margin:6px 0 0;"><b>${aIndispo ? labelA : labelB}</b> est absent(e)/dispensé(e) ce jour.</p>
+        <p class="hint" style="margin:2px 0 0;"><b>${aIndispo ? labelB : labelA}</b> n'a personne à affronter ce tour — en attente, peut arbitrer un autre match.</p>`;
       return `
       <div class="poule-card match-annule">
         <h4>${act.terrainLabel.replace(/s$/,'')} ${m.terrain}</h4>

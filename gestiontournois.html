@@ -61,15 +61,6 @@
      résultats (gris, voir .inner-tab-bar) — pour que les 3 niveaux
      d'imbrication se repèrent d'un coup d'œil, du plus large au plus précis. */
   .card-niveau-seance{background:#e0e7ff;border:4px solid #6366f1;}
-  /* Petites étiquettes "NIVEAU X" au-dessus de chaque barre d'onglets/sous-
-     onglets, en plus de la couleur de fond : renforce la distinction entre
-     les 3 niveaux (violet > orange > gris) pour s'y retrouver d'un coup
-     d'œil, avec un décalage à gauche croissant qui suit l'indentation des
-     barres elles-mêmes. */
-  .niveau-eyebrow{font-size:.7rem;font-weight:800;letter-spacing:.09em;text-transform:uppercase;margin:0 0 6px 2px;}
-  .niveau-eyebrow-1{color:#3730a3;}
-  .niveau-eyebrow-2{color:#c2410c;margin-left:12px;}
-  .niveau-eyebrow-3{color:#0e7490;margin-left:24px;}
   .card h3{margin:0 0 12px;font-size:1rem;display:flex;align-items:center;gap:8px;}
   .toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px;}
   .btn{
@@ -144,8 +135,8 @@
      partagent juste le même style transparent pour ressembler à un seul
      pill, comme avant. */
   .seance-tab-item{
-    border:none;background:#f1f5f9;color:var(--muted);padding:8px 18px;border-radius:999px;
-    font-weight:700;font-size:.92rem;transition:.15s;
+    border:none;background:#f1f5f9;color:var(--muted);padding:10px 22px;border-radius:999px;
+    font-weight:800;font-size:1.15rem;transition:.15s;
     display:flex;flex-direction:column;align-items:center;gap:1px;line-height:1.15;
   }
   .seance-tab-item:hover{color:var(--ink);}
@@ -153,7 +144,7 @@
   .seance-tab-item.active.masquee{background:#94a3b8;box-shadow:none;}
   .seance-tab-item button{
     border:none;background:transparent;color:inherit;padding:0;cursor:pointer;
-    font-weight:700;font-size:.92rem;
+    font-weight:800;font-size:1.15rem;text-transform:uppercase;letter-spacing:.02em;
   }
   .seance-tab-date-input{
     border:none;background:transparent;color:inherit;font-size:.68rem;font-weight:600;
@@ -786,7 +777,6 @@ function renderSousOngletsTournoi(activite, parametresHtml, matchsHtml){
     ? `<div class="card"><p class="hint" style="margin:0;">👁️‍🗨️ Contenu masqué — recliquez sur le sous-onglet actif ci-dessus pour l'afficher.</p></div>`
     : (sousOnglet === 'matchs' ? matchsAffiches : parametresHtml);
   return `
-    <div class="niveau-eyebrow niveau-eyebrow-3">⚙️ Niveau 3 — Configuration du tournoi</div>
     <div class="inner-tab-bar">
       <button class="inner-tab-btn ${sousOnglet==='parametres'?'active':''}" data-sous-onglet-tournoi="parametres">⚙️ Paramètres</button>
       <button class="inner-tab-btn ${sousOnglet==='matchs'?'active':''}" data-sous-onglet-tournoi="matchs">📅 Matchs et résultats</button>
@@ -4326,7 +4316,6 @@ function renderActivityTab(activite){
 
     html += `
       <div class="card card-niveau-seance">
-        <div class="niveau-eyebrow niveau-eyebrow-1">🗂️ Niveau 1 — Séance</div>
         <div class="toolbar" style="margin-bottom:0;">
           <div class="seance-tabs">
             ${cd.seances.length
@@ -4478,7 +4467,6 @@ function renderActivityTab(activite){
       if(SOUS_ONGLET_SEANCE_MASQUE[activite] === undefined) SOUS_ONGLET_SEANCE_MASQUE[activite] = true;
       const masqueSeance = SOUS_ONGLET_SEANCE_MASQUE[activite];
       html += `
-        <div class="niveau-eyebrow niveau-eyebrow-2">📍 Niveau 2 — Détail de la séance</div>
         <div class="sub-tab-bar">
           <button class="sub-tab-btn ${sousOnglet==='presence'?'active':''}" data-sous-onglet="presence">🧍 Présence <span class="sub-tab-count">${presents}/${students.length}</span></button>
           <button class="sub-tab-btn ${sousOnglet==='tournoi'?'active':''}" data-sous-onglet="tournoi">🏆 Type de tournoi</button>
@@ -6820,7 +6808,9 @@ function construirePageOrganisationMultijoueurs(activite, cd, seance, poule){
   }).join('');
   // Une seule colonne jusqu'à 8 matchs (lignes plus hautes, plus lisibles,
   // la page A4 est utilisée sur toute sa hauteur) ; au-delà, 2 colonnes pour
-  // ne pas déborder sur une 2e page.
+  // ne pas déborder sur une 2e page. Grille CSS (pas "columns:", qui fait
+  // se chevaucher les tableaux avec rowspan à l'impression) : les blocs
+  // s'enchaînent ligne par ligne, sans bug de répartition automatique.
   const colonnes = matchesPoule.length <= 8 ? 1 : 2;
   const dateLabel = formatDateSeance(seance.dateCreation);
 
@@ -6830,20 +6820,18 @@ function construirePageOrganisationMultijoueurs(activite, cd, seance, poule){
         <h1>🏐 ${activite} — Multijoueurs — ${poule.nom}</h1>
         <span>Séance ${seance.numero}${dateLabel ? ' — ' + dateLabel : ''} — ${cd.classe}</span>
       </div>
-      <div class="orga-haut">
-        <table class="orga-grille">
-          <thead><tr>
-            <th>Terrain</th><th>N°</th><th>Joueur</th>${enteteMatchsCols}<th>Total<br>points</th><th>Classement</th>
-          </tr></thead>
-          <tbody>${grilleRows}</tbody>
-        </table>
-        <div class="orga-regles">
-          <h3>Règles :</h3>
-          <p class="orga-regles-texte">${escapeHtml(STATE.reglesMultijoueurs || REGLES_MULTIJOUEURS_DEFAUT).replace(/\n/g,'<br>')}</p>
-        </div>
+      <div class="orga-regles-band">
+        <h3>Règles :</h3>
+        <div class="orga-regles-texte">${escapeHtml(STATE.reglesMultijoueurs || REGLES_MULTIJOUEURS_DEFAUT).replace(/\n/g,'<br>')}</div>
       </div>
+      <table class="orga-grille">
+        <thead><tr>
+          <th>Terrain</th><th>N°</th><th>Joueur</th>${enteteMatchsCols}<th>Total<br>points</th><th>Classement</th>
+        </tr></thead>
+        <tbody>${grilleRows}</tbody>
+      </table>
       <p class="orga-bareme"><b>Victoire = 4 points</b> &nbsp;&nbsp; <b>Nul = 2 points</b> &nbsp;&nbsp; <b>Défaite = 1 point</b> &nbsp;&nbsp; <b>Abandon = 0 point</b></p>
-      <div class="orga-matchs-blocs" style="columns:${colonnes};">${blocsMatchs}</div>
+      <div class="orga-matchs-blocs" style="--cols:${colonnes};">${blocsMatchs}</div>
     </div>`;
 }
 // Fiche d'organisation des matchs (PDF, dans le style de la fiche papier
@@ -6871,18 +6859,27 @@ function imprimerOrganisationMultijoueursSeance(activite){
       .orga-entete{display:flex;justify-content:space-between;align-items:baseline;border-bottom:3px solid #111;padding-bottom:6px;margin-bottom:12px;}
       .orga-entete h1{font-size:1.5rem;margin:0;}
       .orga-entete span{font-size:1.05rem;}
-      .orga-haut{display:flex;gap:16px;align-items:flex-start;margin-bottom:14px;}
-      table.orga-grille{border-collapse:collapse;font-size:1rem;flex:1 1 auto;}
+      /* Règles en bandeau pleine largeur (pas à côté du tableau) : le
+         tableau a un nombre de colonnes "Match N" variable (selon le nombre
+         de joueurs/matchs de la poule), donc une largeur fixe à côté de lui
+         déborde de la page dès que la poule a beaucoup de matchs — un
+         bandeau pleine largeur au-dessus, avec le texte sur 2 colonnes,
+         reste toujours entièrement lisible quel que soit le nombre de
+         colonnes du tableau. */
+      .orga-regles-band{border:1px solid #333;padding:8px 12px;margin-bottom:12px;}
+      .orga-regles-band h3{margin:0 0 4px;font-size:1.05rem;text-decoration:underline;}
+      .orga-regles-texte{margin:0;font-size:.95rem;line-height:1.4;columns:2;column-gap:28px;}
+      table.orga-grille{border-collapse:collapse;font-size:1rem;width:100%;margin-bottom:14px;}
       table.orga-grille th, table.orga-grille td{border:1px solid #333;padding:6px 8px;text-align:center;height:30px;}
       table.orga-grille thead th{background:#f3f4f6;font-weight:bold;}
       .orga-terrain-cell{width:24px;}
       .orga-nom-cell{text-align:left;white-space:nowrap;font-weight:600;}
-      .orga-regles{flex:0 0 280px;font-size:.95rem;border:1px solid #333;padding:8px 10px;line-height:1.45;}
-      .orga-regles h3{margin:0 0 4px;font-size:1.05rem;text-decoration:underline;}
-      .orga-regles-texte{margin:0;}
       .orga-bareme{font-size:1.1rem;margin:4px 0 14px;}
-      .orga-matchs-blocs{column-gap:20px;flex:1 1 auto;}
-      table.orga-match-table{border-collapse:collapse;width:100%;table-layout:fixed;margin-bottom:16px;break-inside:avoid;font-size:.85rem;}
+      /* Grille CSS (pas "columns:") pour les blocs de match : les tableaux
+         avec rowspan se chevauchent en impression avec columns:, alors que
+         la grille les empile simplement ligne par ligne, sans bug. */
+      .orga-matchs-blocs{display:grid;grid-template-columns:repeat(var(--cols,1), 1fr);gap:10px 20px;align-content:start;}
+      table.orga-match-table{border-collapse:collapse;width:100%;table-layout:fixed;break-inside:avoid;font-size:.85rem;}
       table.orga-match-table th, table.orga-match-table td{border:1px solid #333;text-align:center;padding:0;height:30px;}
       table.orga-match-table th{background:#f3f4f6;font-size:.8rem;}
       .orga-match-label{width:58px;font-weight:bold;color:#1d4ed8;background:#eef2ff;font-size:.78rem;line-height:1.3;}

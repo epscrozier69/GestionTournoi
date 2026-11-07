@@ -60,7 +60,7 @@
      tournoi/Évaluation technique (bleu) > sous-onglets Paramètres/Matchs et
      résultats (gris, voir .inner-tab-bar) — pour que les 3 niveaux
      d'imbrication se repèrent d'un coup d'œil, du plus large au plus précis. */
-  .card-niveau-seance{background:#eef2ff;border:2px solid #c7d2fe;}
+  .card-niveau-seance{background:#e0e7ff;border:3px solid #a5b4fc;}
   .card h3{margin:0 0 12px;font-size:1rem;display:flex;align-items:center;gap:8px;}
   .toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px;}
   .btn{
@@ -154,7 +154,7 @@
   .seance-tab-item.active .seance-tab-date-input::-webkit-calendar-picker-indicator{filter:invert(1);}
   /* Sous-onglets Présence / Type de tournoi : un seul bloc affiché à la fois
      pour alléger la présentation (avant : deux cartes toujours empilées). */
-  .sub-tab-bar{display:flex;gap:6px;margin:14px 0 10px;flex-wrap:wrap;background:#eff6ff;border:2px solid #bfdbfe;border-radius:16px;padding:8px;}
+  .sub-tab-bar{display:flex;gap:6px;margin:14px 0 10px 12px;flex-wrap:wrap;background:#eff6ff;border:2px solid #bfdbfe;border-radius:16px;padding:8px;}
   /* Même gabarit que les onglets d'activité (nav.tabs button) tout en haut,
      juste en gras en plus — pour que ce soit cohérent visuellement. */
   .sub-tab-btn{
@@ -171,7 +171,7 @@
      Évaluation technique (pilules bleues) — un "segmented control" compact
      et gris, pour que les 3 niveaux d'onglets se distinguent d'un coup
      d'œil au lieu de se ressembler tous. */
-  .inner-tab-bar{display:inline-flex;background:#e2e8f0;border-radius:9px;padding:3px;gap:2px;margin:14px 0 10px;}
+  .inner-tab-bar{display:inline-flex;background:#e2e8f0;border-radius:9px;padding:3px;gap:2px;margin:14px 0 10px 24px;}
   .inner-tab-btn{
     border:none;background:transparent;color:var(--muted);padding:6px 16px;border-radius:6px;cursor:pointer;
     font-weight:600;font-size:.8rem;transition:.15s;
@@ -764,6 +764,8 @@ const SOUS_ONGLET_TOURNOI_MASQUE = {};
 function renderSousOngletsTournoi(activite, parametresHtml, matchsHtml){
   if(!SOUS_ONGLET_TOURNOI[activite]) SOUS_ONGLET_TOURNOI[activite] = 'parametres';
   const sousOnglet = SOUS_ONGLET_TOURNOI[activite];
+  // Masqué par défaut, comme SOUS_ONGLET_SEANCE_MASQUE ci-dessus.
+  if(SOUS_ONGLET_TOURNOI_MASQUE[activite] === undefined) SOUS_ONGLET_TOURNOI_MASQUE[activite] = true;
   // Rien à montrer tant que la configuration (équipes/poules/tournoi) n'a pas
   // été faite : un message renvoie vers l'onglet Paramètres plutôt qu'un
   // panneau vide.
@@ -4434,7 +4436,10 @@ function renderActivityTab(activite){
       if(!SOUS_ONGLET_SEANCE[activite]) SOUS_ONGLET_SEANCE[activite] = 'tournoi';
       let sousOnglet = SOUS_ONGLET_SEANCE[activite];
       if(sousOnglet === 'evaluation' && !aEvalTechIndependante) sousOnglet = 'tournoi';
-      const masqueSeance = !!SOUS_ONGLET_SEANCE_MASQUE[activite];
+      // Masqué par défaut (moins de contenu affiché d'un coup, plus lisible) :
+      // non initialisé = masqué, un clic sur le sous-onglet actif l'affiche.
+      if(SOUS_ONGLET_SEANCE_MASQUE[activite] === undefined) SOUS_ONGLET_SEANCE_MASQUE[activite] = true;
+      const masqueSeance = SOUS_ONGLET_SEANCE_MASQUE[activite];
       html += `
         <div class="sub-tab-bar">
           <button class="sub-tab-btn ${sousOnglet==='presence'?'active':''}" data-sous-onglet="presence">🧍 Présence <span class="sub-tab-count">${presents}/${students.length}</span></button>
@@ -4901,9 +4906,8 @@ function renderActivityTab(activite){
   panel.querySelectorAll('[data-open-score-multi]').forEach(row=>{
     row.addEventListener('click', ()=> openScoreModalMultijoueurs(activite, parseInt(row.dataset.openScoreMulti, 10)));
   });
-  panel.querySelectorAll('[data-export-fiche-multi]').forEach(btn=>{
-    btn.addEventListener('click', ()=>imprimerOrganisationMultijoueurs(activite, btn.dataset.exportFicheMulti));
-  });
+  const btnImprimerOrganisationMulti = q('#btnImprimerOrganisationMulti');
+  if(btnImprimerOrganisationMulti) btnImprimerOrganisationMulti.addEventListener('click', ()=>imprimerOrganisationMultijoueursSeance(activite));
 }
 
 // Chaque motif d'exclusion a le même effet (l'élève ne joue pas) mais un
@@ -6626,7 +6630,11 @@ function renderMultijoueursSection(activite){
   const auMoinsUnMatch = seance.multijoueursMatches.length > 0;
   let matchs = !auMoinsUnMatch
     ? '<div class="card"><p class="hint" style="margin:0;">Pas encore de matchs générés — utilisez le bouton « Générer les matchs » d\'une poule dans l\'onglet Paramètres.</p></div>'
-    : `<div class="poules-grid">` + seance.multijoueursPoules.map(p=>{
+    : `<div class="card" style="margin-bottom:14px;">
+         <button class="btn secondary" id="btnImprimerOrganisationMulti">🖨️ Imprimer l'organisation des matchs — toutes les poules (PDF)</button>
+         <p class="hint" style="margin-top:6px;">Une page par poule, dans la même fenêtre d'impression — choisissez « Enregistrer en PDF » dans la boîte d'impression du navigateur.</p>
+       </div>
+       <div class="poules-grid">` + seance.multijoueursPoules.map(p=>{
         const matchesPoule = seance.multijoueursMatches.filter(m=>m.pouleId===p.id);
         const matchesHtml = matchesPoule.length ? matchesPoule.map((m,idx)=>{
           const globalIdx = seance.multijoueursMatches.indexOf(m);
@@ -6646,7 +6654,6 @@ function renderMultijoueursSection(activite){
         return `
         <div class="poule-card">
           <h4>${p.nom} (${p.members.length})</h4>
-          ${matchesPoule.length ? `<button class="btn secondary small" style="margin-bottom:8px;" data-export-fiche-multi="${p.id}">🖨️ Imprimer l'organisation des matchs (PDF)</button>` : ''}
           ${matchesHtml}
         </div>`;
       }).join('') + `</div>`;
@@ -6690,59 +6697,143 @@ function renderMultijoueursSection(activite){
     </div>`;
   return { params, matchs };
 }
-// Feuille d'organisation des matchs (PDF, une page) : juste de quoi mener la
-// séance — composition des 2 équipes de chaque match + arbitres — sans la
-// grille récapitulative ni le détail des scores (voir demande de
-// l'utilisatrice). Même principe que exportFeuillesMatchsPDF (fenêtre
-// d'impression du navigateur, "Enregistrer en PDF") : pas de bibliothèque PDF
-// à charger. Disposition en colonnes CSS pour rester sur une seule page même
-// avec beaucoup de matchs (poule de 12 en 2c2 par exemple).
-function imprimerOrganisationMultijoueurs(activite, pouleId){
-  const cd = currentClasseData(activite);
-  const seance = currentSeance(activite);
-  const poule = seance.multijoueursPoules.find(p=>p.id===pouleId);
-  if(!cd || !poule) return;
-  const matchesPoule = seance.multijoueursMatches.filter(m=>m.pouleId===pouleId);
-  if(!matchesPoule.length){ alert("Générez d'abord les matchs de cette poule."); return; }
-  const tailleEquipe = seance.multijoueursTailleEquipe || 2;
-  const colonnes = matchesPoule.length <= 8 ? 1 : (matchesPoule.length <= 20 ? 2 : 3);
+// Numérote les membres d'une poule 1..N dans l'ORDRE DE LA POULE (pas de
+// classement, qui changerait au fil des résultats et rendrait les numéros
+// instables entre la grille et les libellés "1+2" des blocs de match) — même
+// ordre que celui utilisé par genererMultijoueursMatches pour former les
+// équipes, donc cohérent d'un bout à l'autre de la fiche.
+function legendeNumerosMultijoueurs(activite, poule){
+  return poule.members.map((id,i)=>({ id, numero:i+1, nom:participantLabel(activite, id) }));
+}
+// Construit la page "organisation des matchs" d'UNE poule (grille
+// joueur×match avec arbitrages + règles + barème + un bloc par match avec
+// piste de score à cocher 1-21 et score final), dans le style de la fiche
+// papier fournie par l'utilisatrice. Chaîne vide si la poule n'a pas encore
+// de matchs générés (elle est alors simplement absente de l'export).
+const MULTIJOUEURS_SCORE_MAX_FICHE = 21;
+function construirePageOrganisationMultijoueurs(activite, cd, seance, poule){
+  const matchesPoule = seance.multijoueursMatches.filter(m=>m.pouleId===poule.id);
+  if(!matchesPoule.length) return '';
+  const legende = legendeNumerosMultijoueurs(activite, poule);
+  const numeroParId = {};
+  legende.forEach(l=>{ numeroParId[l.id] = l.numero; });
+  const totals = computeMultijoueursPoulePoints(seance, poule);
+  const rang = {};
+  computeMultijoueursPouleStanding(seance, poule).forEach((id,i)=>{ rang[id] = i+1; });
 
-  const matchsHtml = matchesPoule.map((m,i)=>{
-    const arbitresLabel = m.referees.length ? m.referees.map(id=>participantLabel(activite, id)).join(', ') : 'tout le monde joue';
-    return `
-      <div class="orga-match">
-        <div class="orga-match-num">Match ${i+1}</div>
-        <div class="orga-equipe">${labelEquipeAdHoc(activite, m.equipeA)}</div>
-        <div class="orga-contre">contre</div>
-        <div class="orga-equipe">${labelEquipeAdHoc(activite, m.equipeB)}</div>
-        <div class="orga-arbitres">🧑‍⚖️ Arbitres : ${arbitresLabel}</div>
-      </div>`;
+  const enteteMatchsCols = matchesPoule.map((m,i)=>`<th>Match ${i+1}</th>`).join('');
+  const grilleRows = legende.map((l,i)=>{
+    const cellsMatchs = matchesPoule.map(m=>`<td>${m.referees.includes(l.id)?'ARB':''}</td>`).join('');
+    return `<tr>
+      ${i===0 ? `<td class="orga-terrain-cell" rowspan="${legende.length}"></td>` : ''}
+      <td class="orga-num-cell">${l.numero}</td>
+      <td class="orga-nom-cell">${l.nom}</td>
+      ${cellsMatchs}
+      <td>${totals[l.id]||0}</td>
+      <td>${rang[l.id]||''}</td>
+    </tr>`;
   }).join('');
 
+  const blocsMatchs = matchesPoule.map((m,i)=>{
+    const labelA = m.equipeA.map(id=>numeroParId[id]).join('+');
+    const labelB = m.equipeB.map(id=>numeroParId[id]).join('+');
+    const joue = m.scoreA !== null && m.scoreA !== undefined;
+    const ligneScore = (score)=> Array.from({length:MULTIJOUEURS_SCORE_MAX_FICHE},(_,k)=>k+1)
+      .map(n=>`<td class="${score===n?'orga-score-atteint':''}">${n}</td>`).join('');
+    const scoreFinal = m.abandon ? 'Abandon' : (joue ? `${m.scoreA} - ${m.scoreB}` : '');
+    return `
+    <table class="orga-match-table">
+      <tr><th colspan="2">Joueurs</th><th colspan="${MULTIJOUEURS_SCORE_MAX_FICHE}"></th><th>SCORE<br>FINAL</th></tr>
+      <tr>
+        <td class="orga-match-label" rowspan="2">Match ${i+1}<div class="orga-contre-chip">CONTRE</div></td>
+        <td class="orga-equipe-cell">${labelA}</td>
+        ${ligneScore(m.scoreA)}
+        <td class="orga-score-final" rowspan="2">${scoreFinal}</td>
+      </tr>
+      <tr>
+        <td class="orga-equipe-cell">${labelB}</td>
+        ${ligneScore(m.scoreB)}
+      </tr>
+    </table>`;
+  }).join('');
+  const colonnes = matchesPoule.length <= 4 ? 1 : (matchesPoule.length <= 10 ? 2 : 3);
   const dateLabel = formatDateSeance(seance.dateCreation);
-  const w = window.open('', '_blank');
-  if(!w){ alert("Le navigateur a bloqué l'ouverture de la fenêtre d'impression. Autorisez les pop-ups pour ce site."); return; }
-  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Organisation des matchs — ${poule.nom}</title>
-    <style>
-      @page{ size: portrait; margin: 10mm; }
-      body{font-family:Arial, Helvetica, sans-serif;color:#111;margin:0;}
-      .orga-entete{display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid #111;padding-bottom:4px;margin-bottom:10px;}
-      .orga-entete h1{font-size:1.1rem;margin:0;}
-      .orga-entete span{font-size:.85rem;}
-      .orga-matchs{columns:${colonnes};column-gap:18px;}
-      .orga-match{break-inside:avoid;margin-bottom:8px;padding-bottom:6px;border-bottom:1px dashed #999;font-size:.78rem;}
-      .orga-match-num{font-weight:bold;color:#1d4ed8;margin-bottom:2px;}
-      .orga-equipe{font-weight:bold;}
-      .orga-contre{color:#666;font-size:.7rem;margin:1px 0;}
-      .orga-arbitres{color:#b91c1c;font-size:.7rem;margin-top:2px;}
-    </style>
-    </head><body>
+
+  return `
+    <div class="feuille-page">
       <div class="orga-entete">
-        <h1>🏐 Tournoi multijoueurs — ${poule.nom} (${tailleEquipe} contre ${tailleEquipe})</h1>
+        <h1>🏐 ${activite} — Multijoueurs — ${poule.nom}</h1>
         <span>Séance ${seance.numero}${dateLabel ? ' — ' + dateLabel : ''} — ${cd.classe}</span>
       </div>
-      <div class="orga-matchs">${matchsHtml}</div>
-    </body></html>`);
+      <div class="orga-haut">
+        <table class="orga-grille">
+          <thead><tr>
+            <th>Terrain</th><th>N°</th><th>Joueur</th>${enteteMatchsCols}<th>Total<br>points</th><th>Classement</th>
+          </tr></thead>
+          <tbody>${grilleRows}</tbody>
+        </table>
+        <div class="orga-regles">
+          <h3>Règles :</h3>
+          <ul>
+            <li>Service cuillière derrière la ligne fond de court</li>
+            <li>1 touche par personne</li>
+            <li>3 passes autorisées</li>
+            <li>2 services chacun</li>
+            <li>Rotation à chaque fois que l'on récupère le service</li>
+            <li>La première équipe arrivée à 15 gagne le match</li>
+            <li>1 seul blocage par échange</li>
+          </ul>
+          <p class="orga-points-gagnants"><b>Points gagnants :</b> renvoi 1 touche = 1 pt, renvoi avec blocage = 2 pts, renvoi en 2/3 touches = 3 pts.</p>
+        </div>
+      </div>
+      <p class="orga-bareme"><b>Victoire = 4 points</b> &nbsp;&nbsp; <b>Nul = 2 points</b> &nbsp;&nbsp; <b>Défaite = 1 point</b> &nbsp;&nbsp; <b>Abandon = 0 point</b></p>
+      <div class="orga-matchs-blocs" style="columns:${colonnes};">${blocsMatchs}</div>
+    </div>`;
+}
+// Fiche d'organisation des matchs (PDF, dans le style de la fiche papier
+// fournie par l'utilisatrice), pour TOUTES les poules de la séance en une
+// seule fenêtre d'impression — une page par poule (page-break-after), un
+// seul bouton. Même principe que exportFeuillesMatchsPDF (fenêtre
+// d'impression du navigateur, "Enregistrer en PDF") : pas de bibliothèque PDF
+// à charger.
+function imprimerOrganisationMultijoueursSeance(activite){
+  const cd = currentClasseData(activite);
+  const seance = currentSeance(activite);
+  if(!cd || !seance || !seance.multijoueursPoules.length){ alert("Générez d'abord les poules et les matchs."); return; }
+  const pages = seance.multijoueursPoules.map(p=>construirePageOrganisationMultijoueurs(activite, cd, seance, p)).filter(Boolean);
+  if(!pages.length){ alert("Générez d'abord les matchs d'au moins une poule."); return; }
+  const w = window.open('', '_blank');
+  if(!w){ alert("Le navigateur a bloqué l'ouverture de la fenêtre d'impression. Autorisez les pop-ups pour ce site."); return; }
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Organisation des matchs multijoueurs — ${cd.classe}</title>
+    <style>
+      @page{ size: portrait; margin: 8mm; }
+      body{font-family:Arial, Helvetica, sans-serif;color:#111;margin:0;}
+      .feuille-page{page-break-after:always;padding:4px;}
+      .orga-entete{display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid #111;padding-bottom:4px;margin-bottom:6px;}
+      .orga-entete h1{font-size:1rem;margin:0;}
+      .orga-entete span{font-size:.75rem;}
+      .orga-haut{display:flex;gap:10px;align-items:flex-start;margin-bottom:6px;}
+      table.orga-grille{border-collapse:collapse;font-size:.6rem;flex:1 1 auto;}
+      table.orga-grille th, table.orga-grille td{border:1px solid #333;padding:1px 3px;text-align:center;}
+      table.orga-grille thead th{background:#f3f4f6;font-weight:bold;}
+      .orga-terrain-cell{width:14px;}
+      .orga-nom-cell{text-align:left;white-space:nowrap;font-weight:600;}
+      .orga-regles{flex:0 0 220px;font-size:.6rem;border:1px solid #333;padding:4px 6px;}
+      .orga-regles h3{margin:0 0 2px;font-size:.68rem;text-decoration:underline;}
+      .orga-regles ul{margin:0 0 4px;padding-left:14px;}
+      .orga-points-gagnants{margin:0;}
+      .orga-bareme{font-size:.68rem;margin:2px 0 6px;}
+      .orga-matchs-blocs{column-gap:10px;}
+      table.orga-match-table{border-collapse:collapse;width:100%;table-layout:fixed;margin-bottom:6px;break-inside:avoid;font-size:.52rem;}
+      table.orga-match-table th, table.orga-match-table td{border:1px solid #333;text-align:center;padding:0;height:11px;}
+      table.orga-match-table th{background:#f3f4f6;font-size:.55rem;}
+      .orga-match-label{width:38px;font-weight:bold;color:#1d4ed8;background:#eef2ff;font-size:.5rem;}
+      .orga-contre-chip{font-size:.42rem;color:#666;border:1px solid #999;border-radius:3px;margin-top:1px;}
+      .orga-equipe-cell{font-weight:bold;width:26px;}
+      .orga-score-final{width:46px;font-weight:bold;}
+      .orga-score-atteint{background:#1d4ed8;color:#fff;font-weight:bold;}
+    </style>
+    </head><body>${pages.join('')}</body></html>`);
   w.document.close();
   w.focus();
   setTimeout(()=>{ w.print(); }, 300);

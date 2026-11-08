@@ -295,6 +295,13 @@
   .match-multi-equipe.equipe-a{text-align:right;}
   .match-multi-equipe.equipe-b{text-align:left;}
   .match-multi-equipe.winner{color:var(--ok);text-decoration:underline;background:#f0fdf4;}
+  /* Équité du classement (voir computeMultijoueursExclusions) : un élève qui
+     a déjà joué plus de matchs que le minimum de sa poule voit son moins bon
+     résultat en trop affiché ainsi — gris/barré, pour qu'on comprenne d'un
+     coup d'œil qu'il ne compte pas dans son total, sans toucher au résultat
+     réel du match. */
+  .nom-exclu{color:#94a3b8;text-decoration:line-through;font-weight:500;}
+  .nom-exclu .muted{text-decoration:none;}
   .match-row-multi.reporte .match-multi-equipe{cursor:default;}
   .match-row-multi.reporte .match-multi-equipe:hover{background:transparent;}
   .chrono-bar .chrono-start-multi{background:var(--bad);border-color:var(--bad);color:#fff;}
@@ -3046,24 +3053,60 @@ function computeMonteeDescente(previousSeance){
 // ad hoc (seance.multijoueursMatches[].equipeA/equipeB, de simples tableaux
 // d'ids), donc pas de passage par un id d'équipe pour cumuler les points —
 // on additionne directement sur les ids des 2 équipes du match.
+// Équité du classement : comme le planning déterministe (voir
+// calculerPlanningMultijoueurs) ne tombe pas forcément juste, certains
+// élèves d'une poule jouent un match de plus que d'autres — injuste pour le
+// classement si on compte tous les matchs joués. On ne compte donc, pour
+// chaque élève, que ses T meilleurs résultats dans la poule, où T = le
+// nombre de matchs déjà joués par l'élève qui en a joué le MOINS (même
+// nombre de matchs compté pour tout le monde). Renvoie l'ensemble des
+// "matchId::studentId" à exclure du total de CET élève (un même match peut
+// très bien compter pour un partenaire et pas pour l'autre, si l'un des
+// deux a déjà joué plus de matchs que l'autre dans la poule).
+function computeMultijoueursExclusions(seance, poule){
+  const matchesPoule = (seance.multijoueursMatches||[]).filter(m=>m.pouleId === poule.id && m.pointsA !== undefined && m.pointsA !== null);
+  const parEleve = {};
+  matchesPoule.forEach(m=>{
+    m.equipeA.forEach(id=>{ (parEleve[id] = parEleve[id] || []).push({ matchId:m.id, points:m.pointsA, tour:m.tour }); });
+    m.equipeB.forEach(id=>{ (parEleve[id] = parEleve[id] || []).push({ matchId:m.id, points:m.pointsB, tour:m.tour }); });
+  });
+  const actifs = poule.members.filter(id=>!seance.absents.includes(id));
+  const comptes = actifs.map(id=>(parEleve[id]||[]).length).filter(n=>n>0);
+  const exclusions = new Set();
+  if(!comptes.length) return exclusions;
+  const T = Math.min(...comptes);
+  actifs.forEach(id=>{
+    const liste = parEleve[id] || [];
+    if(liste.length <= T) return;
+    // Garde les T meilleurs résultats (points décroissants, les matchs les
+    // plus anciens départagent une égalité) ; le reste ne compte pas.
+    const triee = liste.slice().sort((a,b)=> b.points - a.points || a.tour - b.tour);
+    triee.slice(T).forEach(entry=>{ exclusions.add(entry.matchId + '::' + id); });
+  });
+  return exclusions;
+}
 function computeMultijoueursPoulePoints(seance, poule){
   const totals = {};
+  const exclusions = computeMultijoueursExclusions(seance, poule);
   (seance.multijoueursMatches||[]).forEach(m=>{
     if(m.pouleId !== poule.id || m.pointsA === undefined || m.pointsA === null) return;
-    m.equipeA.forEach(id=>{ totals[id] = (totals[id]||0) + m.pointsA; });
-    m.equipeB.forEach(id=>{ totals[id] = (totals[id]||0) + m.pointsB; });
+    m.equipeA.forEach(id=>{ if(!exclusions.has(m.id+'::'+id)) totals[id] = (totals[id]||0) + m.pointsA; });
+    m.equipeB.forEach(id=>{ if(!exclusions.has(m.id+'::'+id)) totals[id] = (totals[id]||0) + m.pointsB; });
   });
   return totals;
 }
 // Comme computeMultijoueursPoulePoints mais toutes poules confondues de la
 // séance — utilisé pour le classement combiné de la séance et pour le cumul
 // inter-séances (cd.multijoueursPoints, voir recomputeCumulativeTotals).
+// Délègue à computeMultijoueursPoulePoints poule par poule pour que
+// l'équité (voir computeMultijoueursExclusions) s'applique de la même façon
+// partout, poule par poule (le nombre "juste" de matchs n'a de sens qu'à
+// l'intérieur d'une même poule, pas entre poules de tailles différentes).
 function computeSeanceMultijoueursPointsParEleve(seance){
   const totals = {};
-  (seance.multijoueursMatches||[]).forEach(m=>{
-    if(m.pointsA === undefined || m.pointsA === null) return;
-    m.equipeA.forEach(id=>{ totals[id] = (totals[id]||0) + m.pointsA; });
-    m.equipeB.forEach(id=>{ totals[id] = (totals[id]||0) + m.pointsB; });
+  (seance.multijoueursPoules||[]).forEach(poule=>{
+    const poulePoints = computeMultijoueursPoulePoints(seance, poule);
+    Object.keys(poulePoints).forEach(id=>{ totals[id] = (totals[id]||0) + poulePoints[id]; });
   });
   return totals;
 }
@@ -3074,13 +3117,19 @@ function computeSeanceMultijoueursPointsParEleve(seance){
 // points. La version ci-dessus, utilisée pour les affichages à l'écran
 // (classement de la séance en cours, classement par poule), reste
 // volontairement inclusive : un tournoi repris d'une séance précédente doit
-// continuer d'afficher son classement complet, reportés compris.
+// continuer d'afficher son classement complet, reportés compris. L'équité
+// (computeMultijoueursExclusions) est calculée sur la vue complète de la
+// poule (reportés + nouveaux) puis seuls les matchs non-reportés et non
+// exclus sont additionnés ici.
 function computeSeanceMultijoueursPointsParEleveSansReportes(seance){
   const totals = {};
-  (seance.multijoueursMatches||[]).forEach(m=>{
-    if(m.reporte || m.pointsA === undefined || m.pointsA === null) return;
-    m.equipeA.forEach(id=>{ totals[id] = (totals[id]||0) + m.pointsA; });
-    m.equipeB.forEach(id=>{ totals[id] = (totals[id]||0) + m.pointsB; });
+  (seance.multijoueursPoules||[]).forEach(poule=>{
+    const exclusions = computeMultijoueursExclusions(seance, poule);
+    (seance.multijoueursMatches||[]).forEach(m=>{
+      if(m.pouleId !== poule.id || m.reporte || m.pointsA === undefined || m.pointsA === null) return;
+      m.equipeA.forEach(id=>{ if(!exclusions.has(m.id+'::'+id)) totals[id] = (totals[id]||0) + m.pointsA; });
+      m.equipeB.forEach(id=>{ if(!exclusions.has(m.id+'::'+id)) totals[id] = (totals[id]||0) + m.pointsB; });
+    });
   });
   return totals;
 }
@@ -6862,10 +6911,13 @@ function renderMultijoueursSection(activite){
         </li>`).join('')}
     </ul>`;
 
+    const nbExclusionsPoule = computeMultijoueursExclusions(seance, p).size;
+
     return `
     <div class="poule-card">
       <h4>${p.nom} (${p.members.length})</h4>
       ${membresHtml}
+      ${nbExclusionsPoule ? `<p class="hint" style="margin-top:8px;">⚖️ Certains élèves ont joué un match de plus que les autres dans cette poule : leur moins bon résultat en trop ne compte pas dans le total ci-dessus (affiché barré dans « Matchs et résultats »), pour que tout le monde ait le même nombre de matchs comptés.</p>` : ''}
     </div>`;
   }).join('') + `</div>`;
 
@@ -6910,12 +6962,21 @@ function renderMultijoueursSection(activite){
        </div>
        <div class="poules-grid">` + seance.multijoueursPoules.map(p=>{
         const matchesPoule = seance.multijoueursMatches.filter(m=>m.pouleId===p.id);
+        const exclusionsPoule = computeMultijoueursExclusions(seance, p);
         const matchesHtml = matchesPoule.length ? matchesPoule.map((m,idx)=>{
           const globalIdx = seance.multijoueursMatches.indexOf(m);
           const joue = m.pointsA !== undefined && m.pointsA !== null;
           const vsLabel = m.winner ? (m.winner==='A' ? '◀ vainqueur' : 'vainqueur ▶') : 'vs';
           const arbitresLabel = m.referees.length ? m.referees.map(id=>participantLabel(activite, id)).join(', ') : 'tout le monde joue';
-          const nomsEquipe = (ids)=>ids.map(id=>`<div>${participantLabelCourt(activite, id)}</div>`).join('');
+          // Équité du classement (voir computeMultijoueursExclusions) : un
+          // élève qui a déjà joué plus de matchs que le minimum de la poule
+          // voit son moins bon résultat en trop affiché en gris, barré —
+          // visible pour lui seul, même si son partenaire (moins de matchs
+          // joués) voit ce même match compter normalement de son côté.
+          const nomsEquipe = (ids)=>ids.map(id=>{
+            const exclu = exclusionsPoule.has(m.id+'::'+id);
+            return `<div class="${exclu?'nom-exclu':''}" ${exclu?'title="Ne compte pas dans le classement (déjà assez de matchs comptés pour cet élève)"':''}>${participantLabelCourt(activite, id)}${exclu?' <span class="muted">(hors classement)</span>':''}</div>`;
+          }).join('');
           // m.reporte : match déjà joué lors de la séance précédente, repris
           // tel quel (voir reporterMultijoueursSeancePrecedente) — affiché en
           // lecture seule (vert), pas cliquable (corriger le résultat se

@@ -625,6 +625,9 @@
   </div>
   <div class="sync-zone">
     <button class="btn-force-sync" id="btnForcerSync" title="Enregistrer immédiatement en ligne, sans attendre">💾 Enregistrer maintenant</button>
+    <button class="btn secondary small" id="btnExportBackupHeader" title="Télécharger un fichier .json de sauvegarde de toutes les données">⬇️ Sauvegarder .json</button>
+    <button class="btn ghost small" id="btnImportBackupHeaderTrigger" title="Restaurer les données depuis un fichier .json de sauvegarde">⬆️ Restaurer .json</button>
+    <input type="file" id="inputImportBackupHeader" accept="application/json" hidden>
     <div class="sync-status" id="syncStatus" title="Statut de la synchronisation en ligne"></div>
   </div>
 </header>
@@ -6944,10 +6947,10 @@ function renderMultijoueursSection(activite){
     : '';
   const modeMatch = seance.multijoueursModeMatch || 'points';
   const dureeMatch = seance.multijoueursDureeMatch || 120;
-  const presetsDuree = [60, 90, 120, 180, 300];
+  const presetsDuree = [60, 90, 120, 180, 240, 300];
   const chronoHtml = modeMatch === 'temps' ? `
-    <div class="config-grid" style="max-width:420px;margin:10px 0;">
-      ${presetsDuree.map(d=>`<button class="btn small ${dureeMatch===d?'':'ghost'}" data-duree-match-multi="${d}">${d<60 ? d+' sec' : (d%60===0 ? (d/60)+' min' : Math.floor(d/60)+' min '+ (d%60) +' sec')}</button>`).join('')}
+    <div class="toolbar" style="flex-wrap:nowrap;overflow-x:auto;margin:10px 0;gap:8px;">
+      ${presetsDuree.map(d=>`<button class="btn small ${dureeMatch===d?'':'ghost'}" style="flex:0 0 auto;white-space:nowrap;" data-duree-match-multi="${d}">${d<60 ? d+' sec' : (d%60===0 ? (d/60)+' min' : Math.floor(d/60)+' min '+ (d%60) +' sec')}</button>`).join('')}
     </div>
     <div class="toolbar" style="max-width:420px;align-items:flex-end;gap:8px;margin-bottom:10px;">
       <div class="field" style="flex:0 0 80px;">
@@ -7247,6 +7250,13 @@ document.addEventListener('DOMContentLoaded', async ()=>{
     if(e.target.id === 'conflictModal') document.getElementById('btnGarderLocal').click();
   });
   document.getElementById('btnForcerSync').addEventListener('click', forcerSyncMaintenant);
+  document.getElementById('btnExportBackupHeader').addEventListener('click', exportBackupJSON);
+  const inputImportBackupHeader = document.getElementById('inputImportBackupHeader');
+  document.getElementById('btnImportBackupHeaderTrigger').addEventListener('click', ()=>inputImportBackupHeader.click());
+  inputImportBackupHeader.addEventListener('change', ()=>{
+    if(inputImportBackupHeader.files[0]) importBackupJSON(inputImportBackupHeader.files[0]);
+    inputImportBackupHeader.value = '';
+  });
 });
 </script>
 </body>

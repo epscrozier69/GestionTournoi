@@ -625,9 +625,6 @@
   </div>
   <div class="sync-zone">
     <button class="btn-force-sync" id="btnForcerSync" title="Enregistrer immédiatement en ligne, sans attendre">💾 Enregistrer maintenant</button>
-    <button class="btn secondary small" id="btnExportBackupHeader" title="Télécharger un fichier .json de sauvegarde de toutes les données">⬇️ Sauvegarder .json</button>
-    <button class="btn ghost small" id="btnImportBackupHeaderTrigger" title="Restaurer les données depuis un fichier .json de sauvegarde">⬆️ Restaurer .json</button>
-    <input type="file" id="inputImportBackupHeader" accept="application/json" hidden>
     <div class="sync-status" id="syncStatus" title="Statut de la synchronisation en ligne"></div>
   </div>
 </header>
@@ -7250,13 +7247,6 @@ document.addEventListener('DOMContentLoaded', async ()=>{
     if(e.target.id === 'conflictModal') document.getElementById('btnGarderLocal').click();
   });
   document.getElementById('btnForcerSync').addEventListener('click', forcerSyncMaintenant);
-  document.getElementById('btnExportBackupHeader').addEventListener('click', exportBackupJSON);
-  const inputImportBackupHeader = document.getElementById('inputImportBackupHeader');
-  document.getElementById('btnImportBackupHeaderTrigger').addEventListener('click', ()=>inputImportBackupHeader.click());
-  inputImportBackupHeader.addEventListener('change', ()=>{
-    if(inputImportBackupHeader.files[0]) importBackupJSON(inputImportBackupHeader.files[0]);
-    inputImportBackupHeader.value = '';
-  });
 });
 </script>
 </body>

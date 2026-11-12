@@ -890,6 +890,7 @@ function defaultSeance(numero, activite){
     multijoueursMatches:[], // [{id, pouleId, tour, equipeA:[ids], equipeB:[ids], referees:[ids], scoreA, scoreB, pointsA, pointsB, winner:'A'|'B'|null, abandon:'A'|'B'|null, reporte?:boolean}]
     multijoueursModeMatch:'points', // 'points' (match au score) ou 'temps' (match chronométré, affiche un chrono)
     multijoueursDureeMatch:120, // secondes, utilisé seulement si multijoueursModeMatch==='temps'
+    multijoueursReglesParPoule:{}, // {pouleId: texte spécifique à cette poule}, en complément du texte commun STATE.reglesMultijoueurs
   };
 }
 function defaultClasseData(classe, activite){
@@ -982,6 +983,7 @@ function ensureActivityData(){
         if(!s.multijoueursMatches) s.multijoueursMatches = [];
         if(!s.multijoueursModeMatch) s.multijoueursModeMatch = 'points';
         if(!s.multijoueursDureeMatch) s.multijoueursDureeMatch = 120;
+        if(!s.multijoueursReglesParPoule) s.multijoueursReglesParPoule = {};
         if(ACTIVITIES[a].evaluationTechniqueAllowed){
           // Rattrapage pour les séances créées avant l'ajout du double mode :
           // on retrouve le choix déjà fait via l'ancien tournamentType exclusif.
@@ -1663,6 +1665,24 @@ function exportPoulesExcel(activite){
   for(let i=0; i<maxSize; i++){
     const row = {};
     seance.poules.forEach(p=>{
+      const id = p.members[i];
+      row[p.nom] = id ? participantLabel(activite, id) : '';
+    });
+    rows.push(row);
+  }
+  exportRowsToExcel(rows, `poules_${slug(activite)}_seance${seance.numero}.xlsx`, 'Poules');
+}
+// Export Excel des poules du tournoi multijoueurs (Volley) — même
+// configuration que exportPoulesExcel : une colonne par poule, autant de
+// lignes que la poule la plus grande.
+function exportMultijoueursPoulesExcel(activite){
+  const seance = currentSeance(activite);
+  if(!seance || !seance.multijoueursPoules.length) return;
+  const maxSize = Math.max(...seance.multijoueursPoules.map(p=>p.members.length));
+  const rows = [];
+  for(let i=0; i<maxSize; i++){
+    const row = {};
+    seance.multijoueursPoules.forEach(p=>{
       const id = p.members[i];
       row[p.nom] = id ? participantLabel(activite, id) : '';
     });
@@ -5126,6 +5146,8 @@ function renderActivityTab(activite){
 
   const btnGenererPoulesMulti = q('#btnGenererPoulesMulti');
   if(btnGenererPoulesMulti) btnGenererPoulesMulti.addEventListener('click', ()=>onGenererPoulesMultijoueurs(activite));
+  const btnExportPoulesMulti = q('#btnExportPoulesMulti');
+  if(btnExportPoulesMulti) btnExportPoulesMulti.addEventListener('click', ()=>exportMultijoueursPoulesExcel(activite));
   const txtReglesMultijoueurs = q('#txtReglesMultijoueurs');
   if(txtReglesMultijoueurs) txtReglesMultijoueurs.addEventListener('change', ()=>{
     STATE.reglesMultijoueurs = txtReglesMultijoueurs.value;
@@ -5151,6 +5173,14 @@ function renderActivityTab(activite){
   });
   panel.querySelectorAll('[data-move-participant-multi]').forEach(sel=>{
     sel.addEventListener('change', ()=>moveParticipantMultijoueurs(activite, sel.dataset.moveParticipantMulti, sel.value));
+  });
+  panel.querySelectorAll('[data-regles-poule-multi]').forEach(txt=>{
+    txt.addEventListener('change', ()=>{
+      const s = currentSeance(activite);
+      if(!s.multijoueursReglesParPoule) s.multijoueursReglesParPoule = {};
+      s.multijoueursReglesParPoule[txt.dataset.reglesPouleMulti] = txt.value;
+      saveState();
+    });
   });
   const btnGenererMatchsMulti = q('#btnGenererMatchsMulti');
   if(btnGenererMatchsMulti) btnGenererMatchsMulti.addEventListener('click', ()=>{
@@ -6890,14 +6920,21 @@ function renderMultijoueursSection(activite){
     </div>
     <div class="card">
       <h3>📋 Règles affichées sur la fiche imprimée</h3>
-      <p class="hint">Ce texte apparaît dans l'encadré « Règles » de la fiche d'organisation des matchs (commun à toutes les classes, pas besoin de le ressaisir à chaque séance).</p>
+      <p class="hint">Texte commun à toutes les classes et toutes les poules (pas besoin de le ressaisir à chaque séance). Des consignes propres à une poule peuvent être ajoutées en plus, directement sur sa carte ci-dessous.</p>
       <textarea id="txtReglesMultijoueurs" rows="9" style="width:100%;font-family:inherit;font-size:.85rem;padding:8px;border:1px solid var(--line);border-radius:8px;">${escapeHtml(STATE.reglesMultijoueurs || REGLES_MULTIJOUEURS_DEFAUT)}</textarea>
       <button class="btn secondary small" id="btnReinitReglesMultijoueurs" style="margin-top:6px;">↩️ Réinitialiser le texte par défaut</button>
     </div>`;
 
   if(!seance.multijoueursPoules.length) return { params, matchs: '' };
 
-  params += `<div class="poules-grid">` + seance.multijoueursPoules.map(p=>{
+  const reglesParPoule = seance.multijoueursReglesParPoule || {};
+
+  params += `
+    <div class="toolbar" style="margin-bottom:10px;">
+      <h3 style="margin:0;">🏆 Poules</h3>
+      <button class="btn secondary small" id="btnExportPoulesMulti">📊 Exporter Excel</button>
+    </div>
+    <div class="poules-grid">` + seance.multijoueursPoules.map(p=>{
     const absentsDeLaPoule = p.members.filter(id=>seance.absents.includes(id));
     const matchesPoule = seance.multijoueursMatches.filter(m=>m.pouleId===p.id);
     const standing = computeMultijoueursPouleStanding(seance, p);
@@ -6927,6 +6964,10 @@ function renderMultijoueursSection(activite){
       <h4>${p.nom} (${p.members.length})</h4>
       ${membresHtml}
       ${nbExclusionsPoule ? `<p class="hint" style="margin-top:8px;">⚖️ Certains élèves ont joué un match de plus que les autres dans cette poule : leur moins bon résultat en trop ne compte pas dans le total ci-dessus (affiché barré dans « Matchs et résultats »), pour que tout le monde ait le même nombre de matchs comptés.</p>` : ''}
+      <div style="margin-top:10px;">
+        <label style="font-size:.8rem;font-weight:600;display:block;margin-bottom:4px;">📋 Consignes propres à cette poule (en plus du texte commun)</label>
+        <textarea data-regles-poule-multi="${p.id}" rows="3" placeholder="Ex. règle adaptée au niveau de cette poule…" style="width:100%;font-family:inherit;font-size:.8rem;padding:6px;border:1px solid var(--line);border-radius:8px;">${escapeHtml(reglesParPoule[p.id] || '')}</textarea>
+      </div>
     </div>`;
   }).join('') + `</div>`;
 
@@ -7135,6 +7176,8 @@ function construirePageOrganisationMultijoueurs(activite, cd, seance, poule){
   // organisation, quelle que soit la poule.
   const colonnes = 1;
   const dateLabel = formatDateSeance(seance.dateCreation);
+  const texteSpecifiquePoule = ((seance.multijoueursReglesParPoule||{})[poule.id] || '').trim();
+  const texteRegles = (STATE.reglesMultijoueurs || REGLES_MULTIJOUEURS_DEFAUT) + (texteSpecifiquePoule ? '\n\n' + texteSpecifiquePoule : '');
 
   return `
     <div class="feuille-page">
@@ -7144,7 +7187,7 @@ function construirePageOrganisationMultijoueurs(activite, cd, seance, poule){
       </div>
       <div class="orga-regles-band">
         <h3>Règles :</h3>
-        <div class="orga-regles-texte">${escapeHtml(STATE.reglesMultijoueurs || REGLES_MULTIJOUEURS_DEFAUT).replace(/\n/g,'<br>')}</div>
+        <div class="orga-regles-texte">${escapeHtml(texteRegles).replace(/\n/g,'<br>')}</div>
       </div>
       <table class="orga-grille">
         <thead><tr>

@@ -1612,6 +1612,28 @@ function exportRowsToExcel(rows, filename, sheetName){
   XLSX.utils.book_append_sheet(wb, ws, sheetName || 'Export');
   XLSX.writeFile(wb, filename);
 }
+// Copie le contenu d'un tableau HTML dans le presse-papiers au format texte
+// tabulé (TSV), pour un collage direct dans Excel/Google Sheets en gardant
+// les colonnes — utilisé par les boutons "📋 Copier" (ex. classement de la
+// séance multijoueurs).
+function copierTableauClipboard(tableEl, btn){
+  if(!tableEl) return;
+  const texte = Array.from(tableEl.querySelectorAll('tr'))
+    .map(tr=>Array.from(tr.children).map(cell=>cell.textContent.trim()).join('\t'))
+    .join('\n');
+  const feedback = ()=>{
+    if(!btn) return;
+    const original = btn.textContent;
+    btn.textContent = '✅ Copié';
+    setTimeout(()=>{ btn.textContent = original; }, 1500);
+  };
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(texte).then(feedback)
+      .catch(()=>alert("Impossible de copier automatiquement. Sélectionnez le tableau manuellement."));
+  }else{
+    alert("Le copier-coller automatique n'est pas disponible sur ce navigateur. Sélectionnez le tableau manuellement.");
+  }
+}
 function exportGeneralExcel(){
   const rows = getActiveStudents().map(s=>{
     const a = getStudentAssignment(s);
@@ -2405,10 +2427,16 @@ function participantLabel(activite, id){
 // officielles, qui gardent "Nom Prénom" complet.
 function participantLabelCourt(activite, id){
   const label = participantLabel(activite, id);
-  const espace = label.indexOf(' ');
-  if(espace < 0) return label;
-  const nom = label.slice(0, espace).split('-')[0];
-  return label.slice(espace+1) + ' ' + nom;
+  const mots = label.split(' ');
+  if(mots.length < 2) return label;
+  // Le nom de famille (en MAJUSCULES, éventuellement sur plusieurs mots,
+  // ex. "BEN AMOR") précède toujours le prénom : on prend tous les mots en
+  // tête qui sont intégralement en majuscules.
+  let i = 0;
+  while(i < mots.length - 1 && mots[i] === mots[i].toUpperCase()) i++;
+  const nom = mots.slice(0, i).join(' ').split('-')[0];
+  const prenom = mots.slice(i).join(' ');
+  return prenom + ' ' + nom;
 }
 // Liste des noms des élèves d'une équipe (défis ou poule), pour affichage en
 // plus du nom de l'équipe — '' si l'id ne correspond à aucune équipe (élève
@@ -3160,6 +3188,28 @@ function computeMultijoueursPouleStanding(seance, poule){
   const actifs = poule.members.filter(id=>!seance.absents.includes(id));
   return actifs.slice().sort((a,b)=> (totals[b]||0) - (totals[a]||0));
 }
+// Classement combiné de la séance, toutes poules confondues : hiérarchie des
+// poules d'abord (poule 1 meilleure que poule 2...), points marqués dans la
+// poule ensuite — utilisé à la fois par l'affichage à l'écran
+// (renderMultijoueursSection) et par les exports/impressions du classement
+// (exportMultijoueursClassementExcel, imprimerClassementMultijoueursSeance).
+function computeClassementSeanceMultijoueurs(activite, seance){
+  const pouleIndexParEleve = {};
+  seance.multijoueursPoules.forEach((p,pi)=>{ p.members.forEach(id=>{ pouleIndexParEleve[id]=pi; }); });
+  const totalParEleve = computeSeanceMultijoueursPointsParEleve(seance);
+  const tousLesMembres = seance.multijoueursPoules.flatMap(p=>p.members).filter(id=>!seance.absents.includes(id));
+  return tousLesMembres.slice().sort((a,b)=>{
+    const pa = pouleIndexParEleve[a], pb = pouleIndexParEleve[b];
+    if(pa !== pb) return pa - pb;
+    return (totalParEleve[b]||0) - (totalParEleve[a]||0);
+  }).map((id,i)=>({
+    id,
+    rang: i+1,
+    nom: participantLabel(activite, id),
+    poule: seance.multijoueursPoules[pouleIndexParEleve[id]].nom,
+    points: totalParEleve[id]||0,
+  }));
+}
 // Montée-descente pour le tournoi multijoueurs — copie conforme de
 // computeMonteeDescente (même règle : 1er monte, dernier descend, le milieu
 // reste), appliquée à seance.multijoueursPoules/computeMultijoueursPouleStanding
@@ -3210,6 +3260,20 @@ function onGenererPoulesMultijoueurs(activite){
       : "Cela régénère les poules et efface les matchs multijoueurs actuels de cette séance. Continuer ?";
     if(!confirm(message)) return;
   }
+  genererPoulesMultijoueursDepuisClassement(activite);
+}
+// Cœur de la génération des poules multijoueurs (sans confirmation — voir
+// onGenererPoulesMultijoueurs pour la version câblée au bouton, qui demande
+// confirmation si des poules/matchs existent déjà). Réutilisé aussi quand on
+// démarre un NOUVEAU tournoi multijoueurs sur une séance dont la précédente
+// n'est pas terminée (voir le choix proposé dans le câblage de
+// data-tournament-type) : les poules sont alors recalculées tout de suite,
+// en tenant compte du classement de la séance précédente, comme à chaque
+// fois (montée-descente si le tournoi précédent a des résultats, sinon
+// repli sur cd.multijoueursPoints/cd.wins).
+function genererPoulesMultijoueursDepuisClassement(activite){
+  const cd = currentClasseData(activite);
+  const seance = currentSeance(activite);
   const taillePoule = clamp(seance.multijoueursTaillePoule || 6, 4, 12);
   const studentIds = STATE.allStudents.filter(s=>s.classe===cd.classe && !seance.absents.includes(s.id)).map(s=>s.id);
   const seanceIdx = cd.seances.indexOf(seance);
@@ -4871,7 +4935,26 @@ function renderActivityTab(activite){
         // n'était pas terminé, plutôt que d'en tirer un nouveau à vide (voir
         // reporterRotationSeancePrecedente).
         if(btn.dataset.tournamentType === 'rotation') reporterRotationSeancePrecedente(activite);
-        if(btn.dataset.tournamentType === 'multijoueurs') reporterMultijoueursSeancePrecedente(activite);
+        // Multijoueurs : si la séance précédente a un tournoi non terminé,
+        // laisser le choix plutôt que de reprendre automatiquement — voir
+        // demande utilisatrice : pouvoir soit continuer ces matchs, soit
+        // repartir sur un nouveau tournoi (poules recalculées tout de suite
+        // depuis le classement de la séance précédente, comme d'habitude).
+        if(btn.dataset.tournamentType === 'multijoueurs'){
+          const cdMulti = currentClasseData(activite);
+          const idx = cdMulti.seances.indexOf(s);
+          const precedente = idx > 0 ? cdMulti.seances[idx - 1] : null;
+          const precedenteNonTerminee = precedente && precedente.tournamentType === 'multijoueurs'
+            && precedente.multijoueursMatches.length
+            && precedente.multijoueursMatches.some(m=>!m.winner && !m.abandon);
+          if(precedenteNonTerminee){
+            const continuer = confirm("La séance précédente a un tournoi multijoueurs non terminé.\n\nOK = continuer ces matchs (reprend les poules et les résultats déjà saisis).\nAnnuler = démarrer un nouveau tournoi (nouvelles poules, en tenant compte du classement de la séance précédente).");
+            if(continuer) reporterMultijoueursSeancePrecedente(activite);
+            else genererPoulesMultijoueursDepuisClassement(activite);
+          } else {
+            reporterMultijoueursSeancePrecedente(activite);
+          }
+        }
       }
       saveState();
       renderActivityTab(activite);
@@ -5195,6 +5278,16 @@ function renderActivityTab(activite){
   });
   const btnImprimerOrganisationMulti = q('#btnImprimerOrganisationMulti');
   if(btnImprimerOrganisationMulti) btnImprimerOrganisationMulti.addEventListener('click', ()=>imprimerOrganisationMultijoueursSeance(activite));
+  const btnExportMatchsMultiExcel = q('#btnExportMatchsMultiExcel');
+  if(btnExportMatchsMultiExcel) btnExportMatchsMultiExcel.addEventListener('click', ()=>exportMultijoueursMatchsExcel(activite));
+  const btnImprimerMatchsMulti = q('#btnImprimerMatchsMulti');
+  if(btnImprimerMatchsMulti) btnImprimerMatchsMulti.addEventListener('click', ()=>imprimerMatchsMultijoueursSeance(activite));
+  const btnExportClassementMultiExcel = q('#btnExportClassementMultiExcel');
+  if(btnExportClassementMultiExcel) btnExportClassementMultiExcel.addEventListener('click', ()=>exportMultijoueursClassementExcel(activite));
+  const btnImprimerClassementMulti = q('#btnImprimerClassementMulti');
+  if(btnImprimerClassementMulti) btnImprimerClassementMulti.addEventListener('click', ()=>imprimerClassementMultijoueursSeance(activite));
+  const btnCopierClassementMulti = q('#btnCopierClassementMulti');
+  if(btnCopierClassementMulti) btnCopierClassementMulti.addEventListener('click', ()=>copierTableauClipboard(q('#tableClassementMulti'), btnCopierClassementMulti));
 }
 
 // Chaque motif d'exclusion a le même effet (l'élève ne joue pas) mais un
@@ -7018,8 +7111,12 @@ function renderMultijoueursSection(activite){
   let matchs = !auMoinsUnMatch
     ? '<div class="card"><p class="hint" style="margin:0;">Pas encore de matchs générés — utilisez le bouton « Générer les matchs — toutes les poules » dans l\'onglet Paramètres.</p></div>'
     : `${bandeauRepriseMulti}${modeMatchHtml}<div class="card" style="margin-bottom:14px;">
-         <button class="btn secondary" id="btnImprimerOrganisationMulti">🖨️ Imprimer l'organisation des matchs — toutes les poules (PDF)</button>
-         <p class="hint" style="margin-top:6px;">Une page par poule, dans la même fenêtre d'impression — choisissez « Enregistrer en PDF » dans la boîte d'impression du navigateur.</p>
+         <div class="toolbar" style="flex-wrap:wrap;gap:8px;">
+           <button class="btn secondary" id="btnImprimerOrganisationMulti">🖨️ Imprimer l'organisation des matchs — toutes les poules (PDF)</button>
+           <button class="btn secondary" id="btnExportMatchsMultiExcel">📊 Exporter les matchs (Excel)</button>
+           <button class="btn secondary" id="btnImprimerMatchsMulti">🖨️ Imprimer les matchs joués (PDF)</button>
+         </div>
+         <p class="hint" style="margin-top:6px;">« Organisation » : grille vierge à remplir à la main pendant la séance. « Matchs joués » : les résultats déjà saisis ci-dessous, une page par poule.</p>
        </div>
        <div class="poules-grid">` + seance.multijoueursPoules.map(p=>{
         const matchesPoule = seance.multijoueursMatches.filter(m=>m.pouleId===p.id);
@@ -7070,31 +7167,30 @@ function renderMultijoueursSection(activite){
 
   // Classement combiné de la séance : hiérarchie des poules d'abord (poule 1
   // meilleure que poule 2...), points à l'intérieur de la poule ensuite —
-  // même logique que computeClassementPouleGeneral mais pour cette seule
-  // séance (le cumul inter-séances reste porté par cd.multijoueursPoints en
-  // coulisse, pour la continuité).
-  const pouleIndexParEleve = {};
-  seance.multijoueursPoules.forEach((p,pi)=>{ p.members.forEach(id=>{ pouleIndexParEleve[id]=pi; }); });
-  const totalParEleve = computeSeanceMultijoueursPointsParEleve(seance);
-  const tousLesMembres = seance.multijoueursPoules.flatMap(p=>p.members).filter(id=>!seance.absents.includes(id));
-  const classementRows = tousLesMembres.slice().sort((a,b)=>{
-    const pa = pouleIndexParEleve[a], pb = pouleIndexParEleve[b];
-    if(pa !== pb) return pa - pb;
-    return (totalParEleve[b]||0) - (totalParEleve[a]||0);
-  }).map((id,i)=>`
+  // voir computeClassementSeanceMultijoueurs (le cumul inter-séances reste
+  // porté par cd.multijoueursPoints en coulisse, pour la continuité).
+  const classement = computeClassementSeanceMultijoueurs(activite, seance);
+  const classementRows = classement.map(r=>`
     <tr>
-      <td><b>${i+1}</b></td>
-      <td>${participantLabel(activite, id)}</td>
-      <td>${seance.multijoueursPoules[pouleIndexParEleve[id]].nom}</td>
-      <td>${totalParEleve[id]||0}</td>
+      <td><b>${r.rang}</b></td>
+      <td>${r.nom}</td>
+      <td>${r.poule}</td>
+      <td>${r.points}</td>
     </tr>`).join('');
 
   matchs += `
     <div class="card" style="margin-top:14px;">
-      <h4 style="margin:0 0 8px;">🏅 Classement de la séance</h4>
+      <div class="toolbar" style="margin-bottom:4px;flex-wrap:wrap;gap:6px;">
+        <h4 style="margin:0;">🏅 Classement de la séance</h4>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          <button class="btn secondary small" id="btnExportClassementMultiExcel">📊 Excel</button>
+          <button class="btn secondary small" id="btnImprimerClassementMulti">🖨️ PDF</button>
+          <button class="btn secondary small" id="btnCopierClassementMulti">📋 Copier</button>
+        </div>
+      </div>
       <p class="hint">Trié d'abord par poule (poule 1 meilleure), puis par points marqués dans la poule.</p>
       <div class="table-wrap">
-        <table class="classement-table">
+        <table class="classement-table" id="tableClassementMulti">
           <thead><tr>
             <th style="background:${PALETTE[0]}">Rang</th>
             <th style="background:${PALETTE[1]}">Nom Prénom</th>
@@ -7254,6 +7350,131 @@ function imprimerOrganisationMultijoueursSeance(activite){
       .orga-score-atteint{background:#1d4ed8;color:#fff;font-weight:bold;}
     </style>
     </head><body>${pages.join('')}</body></html>`);
+  w.document.close();
+  w.focus();
+  setTimeout(()=>{ w.print(); }, 300);
+}
+// Export Excel des matchs multijoueurs (Volley), toutes poules confondues —
+// un match par ligne, dans l'ordre d'affichage à l'écran (voir
+// exportMatchesExcel, même principe pour le tournoi par poule classique).
+function exportMultijoueursMatchsExcel(activite){
+  const seance = currentSeance(activite);
+  if(!seance || !seance.multijoueursMatches.length) return;
+  const rows = [];
+  seance.multijoueursPoules.forEach(p=>{
+    seance.multijoueursMatches.filter(m=>m.pouleId===p.id).forEach((m,idx)=>{
+      const joue = m.pointsA !== undefined && m.pointsA !== null;
+      const resultat = m.abandon ? `Abandon équipe ${m.abandon}` : (m.winner ? `Victoire équipe ${m.winner}` : (joue ? 'Nul' : 'À jouer'));
+      rows.push({
+        'Poule': p.nom,
+        'Match': idx+1,
+        'Équipe A': m.equipeA.map(id=>participantLabel(activite, id)).join(' + '),
+        'Équipe B': m.equipeB.map(id=>participantLabel(activite, id)).join(' + '),
+        'Résultat': resultat,
+        'Points A': m.pointsA ?? '',
+        'Points B': m.pointsB ?? '',
+        'Arbitres': m.referees.map(id=>participantLabel(activite, id)).join(', '),
+      });
+    });
+  });
+  exportRowsToExcel(rows, `matchs_multijoueurs_${slug(activite)}_seance${seance.numero}.xlsx`, 'Matchs');
+}
+// Page imprimable "matchs joués" d'une poule (résultats déjà saisis), pour
+// en garder une trace papier/PDF — par opposition à
+// construirePageOrganisationMultijoueurs qui fournit une grille VIERGE à
+// remplir pendant la séance. Chaîne vide si la poule n'a pas encore de
+// matchs générés.
+function construirePageMatchsMultijoueurs(activite, cd, seance, poule){
+  const matchesPoule = seance.multijoueursMatches.filter(m=>m.pouleId===poule.id);
+  if(!matchesPoule.length) return '';
+  const dateLabel = formatDateSeance(seance.dateCreation);
+  const lignes = matchesPoule.map((m,idx)=>{
+    const joue = m.pointsA !== undefined && m.pointsA !== null;
+    const resultat = m.abandon ? `Abandon équipe ${m.abandon}` : (m.winner ? `Victoire équipe ${m.winner}` : (joue ? 'Nul' : 'À jouer'));
+    const arbitres = m.referees.length ? m.referees.map(id=>participantLabel(activite, id)).join(', ') : 'tout le monde joue';
+    return `
+      <tr>
+        <td>${idx+1}</td>
+        <td class="${m.winner==='A'?'mm-vainqueur':''}">${m.equipeA.map(id=>participantLabel(activite, id)).join(' + ')}</td>
+        <td class="${m.winner==='B'?'mm-vainqueur':''}">${m.equipeB.map(id=>participantLabel(activite, id)).join(' + ')}</td>
+        <td>${resultat}</td>
+        <td>${arbitres}</td>
+      </tr>`;
+  }).join('');
+  return `
+    <div class="mm-page">
+      <div class="mm-entete">
+        <h1>🏐 ${activite} — Multijoueurs — ${poule.nom} — Matchs joués</h1>
+        <span>Séance ${seance.numero}${dateLabel ? ' — ' + dateLabel : ''} — ${cd.classe}</span>
+      </div>
+      <table class="mm-table">
+        <thead><tr><th>Match</th><th>Équipe A</th><th>Équipe B</th><th>Résultat</th><th>Arbitres</th></tr></thead>
+        <tbody>${lignes}</tbody>
+      </table>
+    </div>`;
+}
+// Impression (PDF) des matchs joués de toutes les poules de la séance, une
+// page par poule, même principe que imprimerOrganisationMultijoueursSeance
+// (fenêtre d'impression du navigateur, "Enregistrer en PDF").
+function imprimerMatchsMultijoueursSeance(activite){
+  const cd = currentClasseData(activite);
+  const seance = currentSeance(activite);
+  if(!cd || !seance || !seance.multijoueursMatches.length){ alert("Générez d'abord les matchs."); return; }
+  const pages = seance.multijoueursPoules.map(p=>construirePageMatchsMultijoueurs(activite, cd, seance, p)).filter(Boolean);
+  if(!pages.length) return;
+  const w = window.open('', '_blank');
+  if(!w){ alert("Le navigateur a bloqué l'ouverture de la fenêtre d'impression. Autorisez les pop-ups pour ce site."); return; }
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Matchs multijoueurs — ${cd.classe}</title>
+    <style>
+      @page{ size: portrait; margin: 10mm; }
+      body{font-family:Arial, Helvetica, sans-serif;color:#111;margin:0;}
+      .mm-page{page-break-after:always;padding:6px;}
+      .mm-entete{display:flex;justify-content:space-between;align-items:baseline;border-bottom:3px solid #111;padding-bottom:6px;margin-bottom:12px;}
+      .mm-entete h1{font-size:1.3rem;margin:0;}
+      .mm-entete span{font-size:1rem;}
+      table.mm-table{border-collapse:collapse;width:100%;font-size:.95rem;}
+      table.mm-table th, table.mm-table td{border:1px solid #333;padding:6px 10px;text-align:left;}
+      table.mm-table thead th{background:#f3f4f6;font-weight:bold;}
+      .mm-vainqueur{font-weight:bold;color:#15803d;}
+    </style>
+    </head><body>${pages.join('')}</body></html>`);
+  w.document.close();
+  w.focus();
+  setTimeout(()=>{ w.print(); }, 300);
+}
+// Export Excel du classement combiné de la séance multijoueurs (voir
+// computeClassementSeanceMultijoueurs).
+function exportMultijoueursClassementExcel(activite){
+  const seance = currentSeance(activite);
+  if(!seance || !seance.multijoueursPoules.length) return;
+  const rows = computeClassementSeanceMultijoueurs(activite, seance).map(r=>({
+    'Rang': r.rang, 'Nom Prénom': r.nom, 'Poule': r.poule, 'Points': r.points,
+  }));
+  exportRowsToExcel(rows, `classement_multijoueurs_${slug(activite)}_seance${seance.numero}.xlsx`, 'Classement');
+}
+// Impression (PDF) du classement combiné de la séance multijoueurs.
+function imprimerClassementMultijoueursSeance(activite){
+  const cd = currentClasseData(activite);
+  const seance = currentSeance(activite);
+  if(!cd || !seance || !seance.multijoueursPoules.length){ alert("Générez d'abord les poules."); return; }
+  const dateLabel = formatDateSeance(seance.dateCreation);
+  const lignes = computeClassementSeanceMultijoueurs(activite, seance).map(r=>`
+    <tr><td>${r.rang}</td><td>${r.nom}</td><td>${r.poule}</td><td>${r.points}</td></tr>`).join('');
+  const w = window.open('', '_blank');
+  if(!w){ alert("Le navigateur a bloqué l'ouverture de la fenêtre d'impression. Autorisez les pop-ups pour ce site."); return; }
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Classement multijoueurs — ${cd.classe}</title>
+    <style>
+      @page{ size: portrait; margin: 10mm; }
+      body{font-family:Arial, Helvetica, sans-serif;color:#111;margin:0;padding:6px;}
+      h1{font-size:1.3rem;border-bottom:3px solid #111;padding-bottom:6px;margin:0 0 12px;}
+      table{border-collapse:collapse;width:100%;font-size:1rem;}
+      th, td{border:1px solid #333;padding:6px 10px;text-align:left;}
+      thead th{background:#f3f4f6;font-weight:bold;}
+    </style>
+    </head><body>
+      <h1>🏅 Classement de la séance — 🏐 ${activite} — ${cd.classe}${dateLabel ? ' — ' + dateLabel : ''} (Séance ${seance.numero})</h1>
+      <table><thead><tr><th>Rang</th><th>Nom Prénom</th><th>Poule</th><th>Points</th></tr></thead><tbody>${lignes}</tbody></table>
+    </body></html>`);
   w.document.close();
   w.focus();
   setTimeout(()=>{ w.print(); }, 300);

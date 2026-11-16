@@ -1634,6 +1634,60 @@ function copierTableauClipboard(tableEl, btn){
     alert("Le copier-coller automatique n'est pas disponible sur ce navigateur. Sélectionnez le tableau manuellement.");
   }
 }
+// Copie générique un tableau de lignes (mêmes objets qu'un export Excel,
+// voir exportRowsToExcel) dans le presse-papiers au format TSV — alternative
+// à copierTableauClipboard quand les données ne sont pas déjà affichées sous
+// forme de <table> à l'écran (ex. "matchs" ou "classement cumulé" partagés
+// par plusieurs types de tournoi).
+function copierLignesClipboard(rows, btn){
+  if(!rows || !rows.length) return;
+  const cols = Object.keys(rows[0]);
+  const ligne = (vals)=>vals.map(v=>v===undefined||v===null?'':v).join('\t');
+  const texte = [ligne(cols)].concat(rows.map(r=>ligne(cols.map(c=>r[c])))).join('\n');
+  const feedback = ()=>{
+    if(!btn) return;
+    const original = btn.textContent;
+    btn.textContent = '✅ Copié';
+    setTimeout(()=>{ btn.textContent = original; }, 1500);
+  };
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(texte).then(feedback)
+      .catch(()=>alert("Impossible de copier automatiquement. Sélectionnez le tableau manuellement."));
+  }else{
+    alert("Le copier-coller automatique n'est pas disponible sur ce navigateur. Sélectionnez le tableau manuellement.");
+  }
+}
+// Impression (PDF) générique d'un tableau de lignes (mêmes objets qu'un
+// export Excel) — une seule page, fenêtre d'impression du navigateur
+// ("Enregistrer en PDF"). Réutilisé par les exports "matchs" et "classement
+// cumulé" de tous les types de tournoi (voir copierLignesClipboard) plutôt
+// que de dupliquer une fenêtre d'impression par type.
+function imprimerLignesPDF(titre, sousTitre, rows){
+  if(!rows || !rows.length) return;
+  const cols = Object.keys(rows[0]);
+  const theadHtml = cols.map(c=>`<th>${escapeHtml(String(c))}</th>`).join('');
+  const tbodyHtml = rows.map(r=>`<tr>${cols.map(c=>`<td>${escapeHtml(r[c]===undefined||r[c]===null?'':String(r[c]))}</td>`).join('')}</tr>`).join('');
+  const w = window.open('', '_blank');
+  if(!w){ alert("Le navigateur a bloqué l'ouverture de la fenêtre d'impression. Autorisez les pop-ups pour ce site."); return; }
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(titre)}</title>
+    <style>
+      @page{ size: portrait; margin: 10mm; }
+      body{font-family:Arial, Helvetica, sans-serif;color:#111;margin:0;padding:6px;}
+      h1{font-size:1.3rem;border-bottom:3px solid #111;padding-bottom:6px;margin:0 0 4px;}
+      .pdf-sous-titre{font-size:1rem;margin:0 0 12px;color:#444;}
+      table{border-collapse:collapse;width:100%;font-size:.95rem;}
+      th, td{border:1px solid #333;padding:6px 10px;text-align:left;}
+      thead th{background:#f3f4f6;font-weight:bold;}
+    </style>
+    </head><body>
+      <h1>${escapeHtml(titre)}</h1>
+      ${sousTitre ? `<p class="pdf-sous-titre">${escapeHtml(sousTitre)}</p>` : ''}
+      <table><thead><tr>${theadHtml}</tr></thead><tbody>${tbodyHtml}</tbody></table>
+    </body></html>`);
+  w.document.close();
+  w.focus();
+  setTimeout(()=>{ w.print(); }, 300);
+}
 function exportGeneralExcel(){
   const rows = getActiveStudents().map(s=>{
     const a = getStudentAssignment(s);
@@ -1641,16 +1695,42 @@ function exportGeneralExcel(){
   });
   exportRowsToExcel(rows, 'general_tournois.xlsx', 'Général');
 }
-function exportMatchesExcel(activite){
+// Lignes des matchs du tournoi par poule de la séance en cours, triées comme
+// à l'écran — réutilisées par l'export Excel, l'impression PDF et le copier
+// (voir exportMatchesExcel/imprimerMatchesPoulePDF/copierMatchesPoule).
+function buildPouleMatchesRows(activite){
   const seance = currentSeance(activite);
-  if(!seance || !seance.matches.length) return;
+  if(!seance || !seance.matches.length) return null;
   const act = ACTIVITIES[activite];
   const sorted = seance.matches.slice().sort((a,b)=> a.tour-b.tour || a.vague-b.vague || a.table-b.table);
-  const rows = sorted.map(m=>({
-    'Tour':m.tour, 'Vague':m.vague, [act.terrainLabel]:m.table, 'Poule':m.poule,
-    'Participant A':participantLabel(activite, m.a), 'Participant B':participantLabel(activite, m.b),
-  }));
+  return sorted.map(m=>{
+    const joue = m.pointsA !== undefined && m.pointsA !== null;
+    const resultat = m.abandon ? `Abandon ${participantLabel(activite, m.abandon)}` : (joue ? (m.winner ? `Victoire ${participantLabel(activite, m.winner)}` : 'Nul') : '');
+    return {
+      'Tour':m.tour, 'Vague':m.vague, [act.terrainLabel]:m.table, 'Poule':m.poule,
+      'Participant A':participantLabel(activite, m.a), 'Participant B':participantLabel(activite, m.b),
+      'Score A': (m.scoreA !== undefined && m.scoreA !== null) ? m.scoreA : '',
+      'Score B': (m.scoreB !== undefined && m.scoreB !== null) ? m.scoreB : '',
+      'Résultat': resultat,
+    };
+  });
+}
+function exportMatchesExcel(activite){
+  const seance = currentSeance(activite);
+  const rows = buildPouleMatchesRows(activite);
+  if(!rows) return;
   exportRowsToExcel(rows, `matchs_${slug(activite)}_seance${seance.numero}.xlsx`, 'Matchs');
+}
+function imprimerMatchesPoulePDF(activite){
+  const cd = currentClasseData(activite);
+  const seance = currentSeance(activite);
+  const rows = buildPouleMatchesRows(activite);
+  if(!rows) return;
+  const dateLabel = formatDateSeance(seance.dateCreation);
+  imprimerLignesPDF(`Matchs — ${activite}`, `${cd.classe} — Séance ${seance.numero}${dateLabel?' — '+dateLabel:''}`, rows);
+}
+function copierMatchesPoule(activite, btn){
+  copierLignesClipboard(buildPouleMatchesRows(activite), btn);
 }
 // Export Excel de la composition des équipes (un élève par ligne : son
 // équipe, la poule de cette équipe, et son niveau s'il en a un — Ultimate).
@@ -1900,27 +1980,46 @@ function exportFeuillesMatchsPDF(activite){
   w.focus();
   setTimeout(()=>{ w.print(); }, 300);
 }
-// Export Excel de l'historique des matchs de défis classement progressif de
-// la séance en cours (un match par ligne, dans l'ordre où ils ont été joués).
-function exportDefisMatchesExcel(activite){
-  const cd = currentClasseData(activite);
+// Lignes des matchs de défis classement progressif de la séance en cours —
+// réutilisées par l'export Excel, l'impression PDF et le copier.
+function buildDefisMatchesRows(activite){
   const seance = currentSeance(activite);
-  if(!cd || !seance || !seance.defisMatches || !seance.defisMatches.length) return;
-  const rows = seance.defisMatches.map(m=>({
+  if(!seance || !seance.defisMatches || !seance.defisMatches.length) return null;
+  return seance.defisMatches.map(m=>({
     'Table': m.table,
     'Joueur A': participantLabel(activite, m.a),
     'Joueur B': participantLabel(activite, m.b),
     'Vainqueur': m.winner ? participantLabel(activite, m.winner) : '',
     'Arbitre': m.referee ? participantLabel(activite, m.referee) : 'Auto-arbitrage',
   }));
-  exportRowsToExcel(rows, `defis_classement_${slug(activite)}_${slug(cd.classe)}_seance${seance.numero}.xlsx`, 'Matchs');
 }
-function exportRotationMatchesExcel(activite){
+// Export Excel de l'historique des matchs de défis classement progressif de
+// la séance en cours (un match par ligne, dans l'ordre où ils ont été joués).
+function exportDefisMatchesExcel(activite){
   const cd = currentClasseData(activite);
   const seance = currentSeance(activite);
-  if(!cd || !seance || !seance.rotationMatches || !seance.rotationMatches.length) return;
+  const rows = buildDefisMatchesRows(activite);
+  if(!cd || !seance || !rows) return;
+  exportRowsToExcel(rows, `defis_classement_${slug(activite)}_${slug(cd.classe)}_seance${seance.numero}.xlsx`, 'Matchs');
+}
+function imprimerDefisMatchesPDF(activite){
+  const cd = currentClasseData(activite);
+  const seance = currentSeance(activite);
+  const rows = buildDefisMatchesRows(activite);
+  if(!cd || !seance || !rows) return;
+  const dateLabel = formatDateSeance(seance.dateCreation);
+  imprimerLignesPDF(`Matchs — ${activite}`, `${cd.classe} — Séance ${seance.numero}${dateLabel?' — '+dateLabel:''}`, rows);
+}
+function copierDefisMatches(activite, btn){
+  copierLignesClipboard(buildDefisMatchesRows(activite), btn);
+}
+// Lignes des matchs du tournoi à rotation de la séance en cours — réutilisées
+// par l'export Excel, l'impression PDF et le copier.
+function buildRotationMatchesRows(activite){
+  const seance = currentSeance(activite);
+  if(!seance || !seance.rotationMatches || !seance.rotationMatches.length) return null;
   const phaseLabel = (m)=> m.phase==='croise' ? 'Croisé (fixe/tournant)' : (m.groupe==='fixe' ? 'Interne (fixes)' : 'Interne (tournants)');
-  const rows = seance.rotationMatches.map(m=>({
+  return seance.rotationMatches.map(m=>({
     'Tour': m.tour,
     'Terrain': m.terrain,
     'Phase': phaseLabel(m),
@@ -1930,7 +2029,24 @@ function exportRotationMatchesExcel(activite){
     'Arbitre': m.referee ? participantLabel(activite, m.referee) : 'Auto-arbitrage',
     'Reporté de la séance précédente': m.reporte ? 'Oui' : '',
   }));
+}
+function exportRotationMatchesExcel(activite){
+  const cd = currentClasseData(activite);
+  const seance = currentSeance(activite);
+  const rows = buildRotationMatchesRows(activite);
+  if(!cd || !seance || !rows) return;
   exportRowsToExcel(rows, `tournoi_rotation_${slug(activite)}_${slug(cd.classe)}_seance${seance.numero}.xlsx`, 'Matchs');
+}
+function imprimerRotationMatchesPDF(activite){
+  const cd = currentClasseData(activite);
+  const seance = currentSeance(activite);
+  const rows = buildRotationMatchesRows(activite);
+  if(!cd || !seance || !rows) return;
+  const dateLabel = formatDateSeance(seance.dateCreation);
+  imprimerLignesPDF(`Matchs — ${activite}`, `${cd.classe} — Séance ${seance.numero}${dateLabel?' — '+dateLabel:''}`, rows);
+}
+function copierRotationMatches(activite, btn){
+  copierLignesClipboard(buildRotationMatchesRows(activite), btn);
 }
 // Classement général du tournoi par poule, partagé par l'affichage à l'écran
 // (renderClassementParSeancePoule) et l'export Excel (exportClassementExcel) :
@@ -2046,6 +2162,21 @@ function exportClassementExcel(activite){
   if(!cd) return;
   const rows = buildClassementRows(activite);
   exportRowsToExcel(rows, `classement_cumule_${slug(activite)}_${slug(cd.classe)}.xlsx`, 'Classement');
+}
+// Impression (PDF) et copier du classement cumulé — mêmes données que
+// exportClassementExcel (buildClassementRows), partagées par tous les types
+// de tournoi (bouton "Classement total"/"Classement" affiché dans
+// renderClassementTotalCard, renderDefisHasardSection, etc.).
+function imprimerClassementPDF(activite){
+  const cd = currentClasseData(activite);
+  if(!cd) return;
+  const rows = buildClassementRows(activite);
+  imprimerLignesPDF(`Classement cumulé — ${activite}`, cd.classe, rows);
+}
+function copierClassement(activite, btn){
+  const cd = currentClasseData(activite);
+  if(!cd) return;
+  copierLignesClipboard(buildClassementRows(activite), btn);
 }
 // Export complet de TOUTES les séances d'une classe en un seul classeur
 // Excel : une feuille "Classement" (cumul, voir buildClassementRows) puis une
@@ -5080,6 +5211,18 @@ function renderActivityTab(activite){
   if(btnMatchs) btnMatchs.addEventListener('click', ()=>onGenererMatchs(activite));
   const btnExportMatchs = q('#btnExportMatchs');
   if(btnExportMatchs) btnExportMatchs.addEventListener('click', ()=>exportMatchesExcel(activite));
+  const btnImprimerMatchesPoule = q('#btnImprimerMatchesPoule');
+  if(btnImprimerMatchesPoule) btnImprimerMatchesPoule.addEventListener('click', ()=>imprimerMatchesPoulePDF(activite));
+  const btnCopierMatchesPoule = q('#btnCopierMatchesPoule');
+  if(btnCopierMatchesPoule) btnCopierMatchesPoule.addEventListener('click', ()=>copierMatchesPoule(activite, btnCopierMatchesPoule));
+  const btnImprimerDefisMatchs = q('#btnImprimerDefisMatchs');
+  if(btnImprimerDefisMatchs) btnImprimerDefisMatchs.addEventListener('click', ()=>imprimerDefisMatchesPDF(activite));
+  const btnCopierDefisMatches = q('#btnCopierDefisMatches');
+  if(btnCopierDefisMatches) btnCopierDefisMatches.addEventListener('click', ()=>copierDefisMatches(activite, btnCopierDefisMatches));
+  const btnImprimerRotationMatchs = q('#btnImprimerRotationMatchs');
+  if(btnImprimerRotationMatchs) btnImprimerRotationMatchs.addEventListener('click', ()=>imprimerRotationMatchesPDF(activite));
+  const btnCopierRotationMatches = q('#btnCopierRotationMatches');
+  if(btnCopierRotationMatches) btnCopierRotationMatches.addEventListener('click', ()=>copierRotationMatches(activite, btnCopierRotationMatches));
   const btnExportEquipes = q('#btnExportEquipes');
   if(btnExportEquipes) btnExportEquipes.addEventListener('click', ()=>exportTeamsExcel(activite));
   const btnExportPoules = q('#btnExportPoules');
@@ -5096,6 +5239,10 @@ function renderActivityTab(activite){
   if(btnExportFeuilles) btnExportFeuilles.addEventListener('click', ()=>exportFeuillesMatchsPDF(activite));
   const btnExportClassement = q('#btnExportClassement');
   if(btnExportClassement) btnExportClassement.addEventListener('click', ()=>exportClassementExcel(activite));
+  const btnImprimerClassement = q('#btnImprimerClassement');
+  if(btnImprimerClassement) btnImprimerClassement.addEventListener('click', ()=>imprimerClassementPDF(activite));
+  const btnCopierClassement = q('#btnCopierClassement');
+  if(btnCopierClassement) btnCopierClassement.addEventListener('click', ()=>copierClassement(activite, btnCopierClassement));
   const btnToggleClassementTotal = q('#btnToggleClassementTotal');
   if(btnToggleClassementTotal) btnToggleClassementTotal.addEventListener('click', ()=>{
     cd.showClassementTotal = !cd.showClassementTotal;
@@ -5537,9 +5684,11 @@ function renderMatchesSection(activite){
     <div class="card">
       <div class="toolbar">
         <h3>📅 Ordre des matchs</h3>
-        <div style="display:flex;gap:6px;">
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
           ${pdfBtn}
           <button class="btn secondary small" id="btnExportMatchs">📊 Exporter Excel</button>
+          <button class="btn secondary small" id="btnImprimerMatchesPoule">🖨️ PDF</button>
+          <button class="btn secondary small" id="btnCopierMatchesPoule">📋 Copier</button>
         </div>
       </div>
       <p class="hint">Cliquez sur un match pour saisir le score — les points marqués (selon l'écart) et le classement total (ci-dessous) se mettent à jour automatiquement.</p>
@@ -5563,7 +5712,7 @@ function renderClassementTotalCard(activite){
       <div class="toolbar">
         <h3>📊 Classement total — points depuis le début du cycle</h3>
         <div style="display:flex;gap:6px;">
-          ${showTotal ? '<button class="btn secondary small" id="btnExportClassement">📊 Exporter Excel</button>' : ''}
+          ${showTotal ? '<button class="btn secondary small" id="btnExportClassement">📊 Exporter Excel</button><button class="btn secondary small" id="btnImprimerClassement">🖨️ PDF</button><button class="btn secondary small" id="btnCopierClassement">📋 Copier</button>' : ''}
           <button class="btn ghost small" id="btnToggleClassementTotal">${showTotal ? '🙈 Masquer' : '👁️ Afficher'}</button>
         </div>
       </div>
@@ -6497,7 +6646,11 @@ function renderDefisHasardSection(activite){
         <div class="defis-classement-live">
           <div class="toolbar">
             <h4 style="margin:0;">🏅 Classement — victoires séance par séance</h4>
-            <button class="btn secondary small" id="btnExportClassement">📊 Exporter Excel</button>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+              <button class="btn secondary small" id="btnExportClassement">📊 Exporter Excel</button>
+              <button class="btn secondary small" id="btnImprimerClassement">🖨️ PDF</button>
+              <button class="btn secondary small" id="btnCopierClassement">📋 Copier</button>
+            </div>
           </div>
           <p class="hint">Se met à jour à chaque victoire ajoutée. La séance la plus récente est la colonne juste après le nom. Cliquez sur "Nom Prénom" ou "Total" pour trier (recliquez pour inverser le sens).</p>
           ${renderClassementParSeance(cd, students, true, activite)}
@@ -6626,10 +6779,12 @@ function renderDefisClassementSection(activite){
     <div class="card">
       <div class="toolbar">
         <h3>📈 Défis classement progressif</h3>
-        <div style="display:flex;gap:6px;">
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
           <button class="btn secondary small" id="btnReessayerDefis" title="Un terrain libre n'a pas pu être rempli ? Réessaie maintenant, quitte à retirer une équipe de l'arbitrage pour la faire jouer.">🔄 Réessayer de remplir les terrains libres</button>
           ${seance.lastAction ? `<button class="btn danger small" id="btnAnnulerDernierResultat">↩️ Annuler le dernier résultat</button>` : ''}
           <button class="btn secondary small" id="btnExportDefisMatchs">📊 Exporter Excel</button>
+          <button class="btn secondary small" id="btnImprimerDefisMatchs">🖨️ PDF</button>
+          <button class="btn secondary small" id="btnCopierDefisMatches">📋 Copier</button>
         </div>
       </div>
       ${rotationHtml}
@@ -6639,7 +6794,11 @@ function renderDefisClassementSection(activite){
         <div class="defis-classement-live">
           <div class="toolbar">
             <h4 style="margin:0;">🏅 Classement — victoires séance par séance</h4>
-            <button class="btn secondary small" id="btnExportClassement">📊 Exporter Excel</button>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+              <button class="btn secondary small" id="btnExportClassement">📊 Exporter Excel</button>
+              <button class="btn secondary small" id="btnImprimerClassement">🖨️ PDF</button>
+              <button class="btn secondary small" id="btnCopierClassement">📋 Copier</button>
+            </div>
           </div>
           <p class="hint">Se met à jour à chaque résultat enregistré. La séance la plus récente est la colonne juste après le nom. Cliquez sur "Nom Prénom" ou "Total" pour trier (recliquez pour inverser le sens).</p>
           ${renderClassementParSeance(cd, students, true, activite)}
@@ -6947,9 +7106,11 @@ function renderRotationSection(activite){
     <div class="card">
       <div class="toolbar">
         <h3>🔁 Tournoi à rotation — Tour ${tourActuel}/${nbTours}</h3>
-        <div style="display:flex;gap:6px;">
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
           <button class="btn secondary small" id="btnGenererRotationInternes" title="Fait s'affronter entre elles les équipes qui étaient fixes, et séparément celles qui étaient tournantes, pour que tout le monde ait affronté tout le monde.">⚔️ ${aDesMatchsInternes?'Régénérer':'Lancer'} les matchs internes</button>
           <button class="btn secondary small" id="btnExportRotation">📊 Exporter Excel</button>
+          <button class="btn secondary small" id="btnImprimerRotationMatchs">🖨️ PDF</button>
+          <button class="btn secondary small" id="btnCopierRotationMatches">📋 Copier</button>
         </div>
       </div>
       <p class="hint">Les participants "📍 Fixe" restent sur leur terrain toute la séance ; les "🔄 Tournant" changent de terrain à chaque tour. Cliquez sur le nom du vainqueur de chaque match. Une fois ce 1er tournoi joué, lancez "⚔️ Les matchs internes" pour faire s'affronter les fixes entre eux et les tournants entre eux : tout le monde aura alors joué contre tout le monde. S'il n'y a pas assez de ${act.terrainLabel.toLowerCase()} pour faire jouer tout le monde en même temps, les participants en attente de leur tour arbitrent un match (jamais deux fois d'affilée si une autre option existe).</p>
@@ -6959,7 +7120,11 @@ function renderRotationSection(activite){
     <div class="card" style="margin-top:14px;">
       <div class="toolbar">
         <h4 style="margin:0;">🏅 Classement — victoires séance par séance</h4>
-        <button class="btn secondary small" id="btnExportClassement">📊 Exporter Excel</button>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          <button class="btn secondary small" id="btnExportClassement">📊 Exporter Excel</button>
+          <button class="btn secondary small" id="btnImprimerClassement">🖨️ PDF</button>
+          <button class="btn secondary small" id="btnCopierClassement">📋 Copier</button>
+        </div>
       </div>
       <p class="hint">Se met à jour à chaque résultat enregistré. La séance la plus récente est la colonne juste après le nom. Cliquez sur "Nom Prénom" ou "Total" pour trier (recliquez pour inverser le sens).</p>
       ${renderClassementParSeance(cd, students, true, activite)}

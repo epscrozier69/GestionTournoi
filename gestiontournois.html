@@ -2133,7 +2133,10 @@ function buildClassementRows(activite){
     const sorted = students.slice().sort((a,b)=>(totaux[b.id]||0)-(totaux[a.id]||0));
     return sorted.map((s,i)=>{
       const row = { 'Rang':i+1, 'Nom Prénom':s.nomPrenom };
-      seancesDefis.forEach((sc,idx)=>{ row['Séance '+sc.numero] = perSeance[idx][s.id]||0; });
+      seancesDefis.forEach((sc,idx)=>{
+        const absLabel = libelleAbsenceSeance(sc, s.id);
+        row['Séance '+sc.numero] = absLabel !== null ? absLabel : (perSeance[idx][s.id]||0);
+      });
       row['Total'] = totaux[s.id]||0;
       return row;
     });
@@ -2152,7 +2155,10 @@ function buildClassementRows(activite){
   const sorted = students.slice().sort(comparateur);
   return sorted.map((s,i)=>{
     const row = { 'Rang':i+1, 'Nom Prénom':s.nomPrenom };
-    seancesPoule.forEach((sc,si)=>{ row['Séance '+sc.numero] = sc.absents.includes(s.id) ? '' : (rangParSeance[si][s.id]||''); });
+    seancesPoule.forEach((sc,si)=>{
+      const absLabel = libelleAbsenceSeance(sc, s.id);
+      row['Séance '+sc.numero] = absLabel !== null ? absLabel : (rangParSeance[si][s.id]||'');
+    });
     row['Total (somme des classements)'] = sommeRangParEleve[s.id];
     return row;
   });
@@ -3324,12 +3330,17 @@ function computeMultijoueursPouleStanding(seance, poule){
 // poule ensuite — utilisé à la fois par l'affichage à l'écran
 // (renderMultijoueursSection) et par les exports/impressions du classement
 // (exportMultijoueursClassementExcel, imprimerClassementMultijoueursSeance).
+// Les absents/dispensés ne sont pas classés (ils n'ont pas joué) mais sont
+// quand même renvoyés, à la suite, avec rang/points à null et leur motif
+// dans `absence` — notés plutôt que simplement omis.
 function computeClassementSeanceMultijoueurs(activite, seance){
   const pouleIndexParEleve = {};
   seance.multijoueursPoules.forEach((p,pi)=>{ p.members.forEach(id=>{ pouleIndexParEleve[id]=pi; }); });
   const totalParEleve = computeSeanceMultijoueursPointsParEleve(seance);
-  const tousLesMembres = seance.multijoueursPoules.flatMap(p=>p.members).filter(id=>!seance.absents.includes(id));
-  return tousLesMembres.slice().sort((a,b)=>{
+  const tousLesMembres = seance.multijoueursPoules.flatMap(p=>p.members);
+  const presents = tousLesMembres.filter(id=>!seance.absents.includes(id));
+  const absents = tousLesMembres.filter(id=>seance.absents.includes(id));
+  const classes = presents.slice().sort((a,b)=>{
     const pa = pouleIndexParEleve[a], pb = pouleIndexParEleve[b];
     if(pa !== pb) return pa - pb;
     return (totalParEleve[b]||0) - (totalParEleve[a]||0);
@@ -3339,7 +3350,17 @@ function computeClassementSeanceMultijoueurs(activite, seance){
     nom: participantLabel(activite, id),
     poule: seance.multijoueursPoules[pouleIndexParEleve[id]].nom,
     points: totalParEleve[id]||0,
+    absence: null,
   }));
+  const absentsRows = absents.map(id=>({
+    id,
+    rang: null,
+    nom: participantLabel(activite, id),
+    poule: seance.multijoueursPoules[pouleIndexParEleve[id]].nom,
+    points: null,
+    absence: libelleAbsenceSeance(seance, id),
+  }));
+  return classes.concat(absentsRows);
 }
 // Montée-descente pour le tournoi multijoueurs — copie conforme de
 // computeMonteeDescente (même règle : 1er monte, dernier descend, le milieu
@@ -5444,6 +5465,17 @@ const PRESENCE_STATUTS = {
   materiel: { icon:'🎽', label:'MAT', cls:'materiel' },
   dispense: { icon:'📄', label:'DISP', cls:'dispense' },
 };
+// Libellé d'absence d'un élève pour une séance donnée ("ABS"/"MAT"/"DISP",
+// ou "—" si absent sans motif enregistré), ou null s'il était présent —
+// utilisé partout où un classement doit noter "absent/dispensé ce jour-là"
+// plutôt que d'afficher un 0 trompeur ou de simplement l'omettre (voir
+// renderClassementParSeancePoule pour le même principe déjà en place à
+// l'écran pour le tournoi par poule).
+function libelleAbsenceSeance(seance, studentId){
+  if(!seance.absents.includes(studentId)) return null;
+  const statut = seance.absentReasons && seance.absentReasons[studentId] && PRESENCE_STATUTS[seance.absentReasons[studentId]];
+  return statut ? statut.label : '—';
+}
 function renderPresenceCard(activite, students, seance){
   const presents = students.filter(s=>!seance.absents.includes(s.id)).length;
   const reasons = seance.absentReasons || {};
@@ -5988,6 +6020,10 @@ function renderClassementParSeance(cd, students, recentFirst, activite){
   // match concerné.
   const rows = sorted.map((stu,i)=>{
     const cells = seancesDefis.map((se,si)=>{
+      // Absent/dispensé ce jour-là : on note le motif plutôt que d'afficher
+      // un 0 trompeur (ou de laisser une case éditable sans match derrière).
+      const absLabel = libelleAbsenceSeance(se, stu.id);
+      if(absLabel !== null) return `<td class="muted">${absLabel}</td>`;
       const val = perSeance[si][stu.id]||0;
       return editable
         ? `<td><input type="number" min="0" class="win-edit-input" value="${val}" data-edit-seance-win="${se.numero}::${stu.id}"></td>`
@@ -7336,11 +7372,11 @@ function renderMultijoueursSection(activite){
   // porté par cd.multijoueursPoints en coulisse, pour la continuité).
   const classement = computeClassementSeanceMultijoueurs(activite, seance);
   const classementRows = classement.map(r=>`
-    <tr>
-      <td><b>${r.rang}</b></td>
+    <tr${r.absence ? ' class="muted"' : ''}>
+      <td><b>${r.rang !== null ? r.rang : '—'}</b></td>
       <td>${r.nom}</td>
       <td>${r.poule}</td>
-      <td>${r.points}</td>
+      <td>${r.absence ? r.absence : r.points}</td>
     </tr>`).join('');
 
   matchs += `
@@ -7613,7 +7649,7 @@ function exportMultijoueursClassementExcel(activite){
   const seance = currentSeance(activite);
   if(!seance || !seance.multijoueursPoules.length) return;
   const rows = computeClassementSeanceMultijoueurs(activite, seance).map(r=>({
-    'Rang': r.rang, 'Nom Prénom': r.nom, 'Poule': r.poule, 'Points': r.points,
+    'Rang': r.rang !== null ? r.rang : '', 'Nom Prénom': r.nom, 'Poule': r.poule, 'Points': r.absence ? r.absence : r.points,
   }));
   exportRowsToExcel(rows, `classement_multijoueurs_${slug(activite)}_seance${seance.numero}.xlsx`, 'Classement');
 }
@@ -7624,7 +7660,7 @@ function imprimerClassementMultijoueursSeance(activite){
   if(!cd || !seance || !seance.multijoueursPoules.length){ alert("Générez d'abord les poules."); return; }
   const dateLabel = formatDateSeance(seance.dateCreation);
   const lignes = computeClassementSeanceMultijoueurs(activite, seance).map(r=>`
-    <tr><td>${r.rang}</td><td>${r.nom}</td><td>${r.poule}</td><td>${r.points}</td></tr>`).join('');
+    <tr><td>${r.rang !== null ? r.rang : '—'}</td><td>${r.nom}</td><td>${r.poule}</td><td>${r.absence ? r.absence : r.points}</td></tr>`).join('');
   const w = window.open('', '_blank');
   if(!w){ alert("Le navigateur a bloqué l'ouverture de la fenêtre d'impression. Autorisez les pop-ups pour ce site."); return; }
   w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Classement multijoueurs — ${cd.classe}</title>

@@ -3493,6 +3493,30 @@ function moveParticipantMultijoueurs(activite, studentId, targetPouleId){
   renderActivityTab(activite);
   renderGeneral();
 }
+// Monte/descend un élève d'un cran au sein de sa poule (flèches ▲/▼ sur sa
+// carte, voir renderMultijoueursSection), sans changer sa poule. L'échange
+// porte sur l'ordre affiché (les actifs uniquement — les absents gardent
+// leur emplacement dans poule.members) : c'est cet ordre qui détermine le
+// classement affiché tant qu'aucun match n'a encore été joué (égalité à
+// 0pts, voir computeMultijoueursPouleStanding) et qui sert de base
+// positionnelle à la génération des matchs (voir genererMultijoueursMatches),
+// donc les matchs déjà générés pour cette poule sont effacés, comme pour un
+// changement de poule (moveParticipantMultijoueurs).
+function deplacerMembrePouleMultijoueurs(activite, pouleId, studentId, direction){
+  const seance = currentSeance(activite);
+  const poule = seance.multijoueursPoules.find(p=>p.id===pouleId);
+  if(!poule) return;
+  const actifs = poule.members.filter(id=>!seance.absents.includes(id));
+  const idx = actifs.indexOf(studentId);
+  const cible = idx + direction;
+  if(idx === -1 || cible < 0 || cible >= actifs.length) return;
+  [actifs[idx], actifs[cible]] = [actifs[cible], actifs[idx]];
+  let i = 0;
+  poule.members = poule.members.map(id=> seance.absents.includes(id) ? id : actifs[i++]);
+  seance.multijoueursMatches = seance.multijoueursMatches.filter(m=>m.pouleId !== pouleId);
+  saveState();
+  renderActivityTab(activite);
+}
 function trouverMatchMultijoueurs(activite, matchIndex){
   const seance = currentSeance(activite);
   return (seance.multijoueursMatches||[])[matchIndex];
@@ -5444,6 +5468,12 @@ function renderActivityTab(activite){
   panel.querySelectorAll('[data-move-participant-multi]').forEach(sel=>{
     sel.addEventListener('change', ()=>moveParticipantMultijoueurs(activite, sel.dataset.moveParticipantMulti, sel.value));
   });
+  panel.querySelectorAll('[data-deplacer-membre-multi]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const [studentId, pouleId, sens] = btn.dataset.deplacerMembreMulti.split('::');
+      deplacerMembrePouleMultijoueurs(activite, pouleId, studentId, sens === 'up' ? -1 : 1);
+    });
+  });
   panel.querySelectorAll('[data-regles-poule-multi]').forEach(txt=>{
     txt.addEventListener('change', ()=>{
       const s = currentSeance(activite);
@@ -7256,7 +7286,11 @@ function renderMultijoueursSection(activite){
     const membresHtml = `<ul>
       ${standing.map((mid,rank)=>{
         const pts = totals[mid]||0;
+        const peutMonter = rank > 0;
+        const peutDescendre = rank < standing.length - 1;
         return `<li>${rank+1}. ${participantLabel(activite, mid)} <span class="muted">(${pts}pts)</span>
+          <button class="btn ghost small" style="padding:1px 6px;" ${peutMonter?`data-deplacer-membre-multi="${mid}::${p.id}::up"`:'disabled'} title="Monter d'un rang dans la poule">▲</button>
+          <button class="btn ghost small" style="padding:1px 6px;" ${peutDescendre?`data-deplacer-membre-multi="${mid}::${p.id}::down"`:'disabled'} title="Descendre d'un rang dans la poule">▼</button>
           <select data-move-participant-multi="${mid}">
             ${seance.multijoueursPoules.map(p2=>`<option value="${p2.id}" ${p2.id===p.id?'selected':''}>${p2.nom}</option>`).join('')}
           </select>

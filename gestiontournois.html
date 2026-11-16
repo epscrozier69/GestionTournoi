@@ -3366,32 +3366,44 @@ function computeClassementSeanceMultijoueurs(activite, seance){
 // computeMonteeDescente (même règle : 1er monte, dernier descend, le milieu
 // reste), appliquée à seance.multijoueursPoules/computeMultijoueursPouleStanding
 // au lieu de seance.poules/computePouleStanding.
+// Retourne, pour chaque élève, {idx, sortKey} : idx = index de sa nouvelle
+// poule (montée-descente habituelle : 1er monte, dernier descend, le milieu
+// reste) ; sortKey = position à l'intérieur de CETTE nouvelle poule, pour que
+// le classement de la séance précédente reste visible dans l'ordre affiché
+// (voir genererPoulesMultijoueursDepuisClassement) : un relégué depuis la
+// poule du dessus est toujours placé en tête, un élève qui reste garde son
+// rang d'avant, un promu depuis la poule du dessous est toujours placé en
+// dernier — demande explicite de l'utilisatrice.
 function computeMonteeDescenteMultijoueurs(previousSeance){
   const poules = previousSeance.multijoueursPoules;
   const n = poules.length;
+  const ARRIVEE_DESSUS = -1; // relégué depuis la poule du dessus : en tête
+  const ARRIVEE_DESSOUS = 9999; // promu depuis la poule du dessous : en dernier
   const assignment = {};
   poules.forEach((p, idx)=>{
     const standing = computeMultijoueursPouleStanding(previousSeance, p);
     if(!standing.length) return;
-    if(standing.length === 1){
-      assignment[standing[0]] = idx;
+    if(standing.length === 1 || n === 1){
+      // Rien à faire monter/descendre : l'ordre reste simplement celui du
+      // classement précédent.
+      standing.forEach((id,i)=>{ assignment[id] = { idx, sortKey: i+1 }; });
       return;
     }
     const premier = standing[0];
     const dernier = standing[standing.length-1];
     const milieu = standing.slice(1, -1);
     if(idx === 0){
-      assignment[premier] = idx;
-      milieu.forEach(id=>{ assignment[id] = idx; });
-      assignment[dernier] = Math.min(idx+1, n-1);
+      assignment[premier] = { idx, sortKey: 1 };
+      milieu.forEach((id,i)=>{ assignment[id] = { idx, sortKey: i+2 }; });
+      assignment[dernier] = { idx: idx+1, sortKey: ARRIVEE_DESSUS };
     } else if(idx === n-1){
-      assignment[premier] = Math.max(idx-1, 0);
-      milieu.forEach(id=>{ assignment[id] = idx; });
-      assignment[dernier] = idx;
+      assignment[premier] = { idx: idx-1, sortKey: ARRIVEE_DESSOUS };
+      milieu.forEach((id,i)=>{ assignment[id] = { idx, sortKey: i+2 }; });
+      assignment[dernier] = { idx, sortKey: ARRIVEE_DESSOUS };
     } else {
-      assignment[premier] = idx-1;
-      milieu.forEach(id=>{ assignment[id] = idx; });
-      assignment[dernier] = idx+1;
+      assignment[premier] = { idx: idx-1, sortKey: ARRIVEE_DESSOUS };
+      milieu.forEach((id,i)=>{ assignment[id] = { idx, sortKey: i+2 }; });
+      assignment[dernier] = { idx: idx+1, sortKey: ARRIVEE_DESSUS };
     }
   });
   return assignment;
@@ -3438,15 +3450,22 @@ function genererPoulesMultijoueursDepuisClassement(activite){
     const groups = Array.from({length:nbPoules}, ()=>[]);
     const unassigned = [];
     studentIds.forEach(id=>{
-      if(assignment[id] !== undefined) groups[assignment[id]].push(id);
+      const a = assignment[id];
+      if(a !== undefined) groups[a.idx].push({ id, sortKey: a.sortKey });
       else unassigned.push(id); // nouvel élève, ou absent la séance précédente
     });
+    // Les nouveaux élèves (ou absents la séance précédente, sans classement à
+    // reprendre) sont répartis dans la poule la moins remplie, à la suite des
+    // élèves déjà classés (sortKey le plus grand, donc toujours en dernier).
     unassigned.forEach(id=>{
       let target = 0, min = Infinity;
       groups.forEach((g,i)=>{ if(g.length < min){ min = g.length; target = i; } });
-      groups[target].push(id);
+      groups[target].push({ id, sortKey: Infinity });
     });
-    seance.multijoueursPoules = groups.map((members,i)=>({ id:'poule'+(i+1), nom:'Poule '+(i+1), members: shuffleArray(members) }));
+    seance.multijoueursPoules = groups.map((members,i)=>({
+      id:'poule'+(i+1), nom:'Poule '+(i+1),
+      members: members.slice().sort((a,b)=>a.sortKey-b.sortKey).map(m=>m.id),
+    }));
   } else {
     // Pas d'historique multijoueurs exploitable (jamais joué, ou tournoi
     // d'un autre type lors de la dernière séance — ex. rotation) : on sème
